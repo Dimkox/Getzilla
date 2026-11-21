@@ -25,6 +25,160 @@ NOW = datetime(2026, 11, 3, tzinfo=timezone.utc)
 IMAGE = 'postgres@sha256:' + 'a' * 64
 
 
+from tests.test_security_oci_layout import OwnedOciCase
+
+
+class NewOciExecutionPortTests(OwnedOciCase):
+    def test_network_selection_requires_exact_registry_component(self):
+        for reference in ('docker.io', 'ghcr.io/', 'foreign.example/docker.io/pkg',
+                          'docker.io.foreign.example/pkg', None):
+            with self.subTest(reference=reference), self.assertRaises(SecurityDataError):
+                security_tools.image_network_selection({'images': [{'reference': reference}]}, {})
+
+    def test_two_record_contract_uses_one_selected_storage_ledger(self):
+        from getzilla import security_oci_transport as transport
+        from tests.test_security_oci_layout import owned_binding, owned_image, selected_profile, owned_network
+        from tests.test_security_oci_transport import port_for
+        from types import SimpleNamespace
+        objects, reference = owned_image()
+        subjects = [{'reference': reference, 'manifest': 'owned/compose.yaml', 'line': line,
+                     'source_sha256': 'd' * 64, 'platform': 'linux/amd64'} for line in [1, 3]]
+        profile = selected_profile(reference, max_storage_bytes=54000, max_layers=20)
+        root = self.root / 'oci'
+        root.mkdir(mode=0o700)
+        binding = owned_binding()
+        transport.acquire_images(subjects, profile, root, network_selection=owned_network(), binding=binding,
+                                 open_url=port_for(objects, reference, []), now=NOW)
+        calls = []
+        def process(command, *args, **kwargs):
+            calls.append(command)
+            from getzilla import security_oci_layout as layout
+            validated = layout.validate_layout(objects, reference, 'linux/amd64')
+            report = {'SchemaVersion': 2, 'ArtifactType': 'container_image',
+                'ArtifactName': command[command.index('--input') + 1], 'Trivy': {'Version': '0.74.0'},
+                'Metadata': {'ImageID': validated['config_digest'], 'DiffIDs': validated['diff_ids'], 'ImageConfig': validated['config']},
+                'Results': [{'Class': 'os-pkgs', 'Packages': [{'Name': 'owned', 'Version': '1'}]}]}
+            Path(command[command.index('--output') + 1]).write_text(json.dumps(report))
+            return SimpleNamespace(returncode=0, terminal_state='completed', cleanup_error=None, stdout='', stderr='')
+        tool = self.root / 'not-executed'
+        tool.write_bytes(b'NEW controlled port; not a scanner')
+        with (mock.patch.object(security_tools, 'MAX_REPORT', 2048),
+              mock.patch.object(security_tools, 'pinned_tool', return_value=tool),
+              mock.patch.object(security_tools, 'trivy_database_source', return_value={'owned': 'fixture-only'})):
+            result = security_tools.scan_layouts({'images': subjects}, self.root, binding=binding, now=NOW, process=process, profile=profile, network_selection=owned_network())
+        self.assertEqual(result['outcome'], 'blocked')
+        self.assertEqual(len(calls), 1, 'first must run; second must exceed the one action logical storage ledger')
+
+    def test_refresh_facade_carries_validated_selection_and_retained_layout(self):
+        from tests.test_security_oci_layout import owned_binding, owned_image, selected_profile, owned_network
+        from tests.test_security_oci_transport import port_for
+        from types import SimpleNamespace
+        objects, reference = owned_image()
+        subject = {'reference': reference, 'manifest': 'owned/compose.yaml', 'line': 1,
+                   'source_sha256': 'd' * 64, 'platform': 'linux/amd64'}
+        binding = owned_binding()
+        profile = selected_profile(reference)
+        with (mock.patch.object(security_tools, 'pinned_tool', return_value=self.root / 'not-executed'),
+              mock.patch.object(security_tools, '_process', return_value=SimpleNamespace(returncode=0)) as process,
+              mock.patch.object(security_tools, 'trivy_database_source', return_value={'fixture': 'not a DB qualification'})):
+            result = security_tools.refresh_images({'images': [subject]}, self.root, now=NOW, profile=profile,
+                        binding=binding, network_selection=owned_network(), image_opener=port_for(objects, reference, []))
+        self.assertEqual(result[0]['kind'], 'oci-image-acquisition')
+        self.assertEqual(result[0]['qualification'], 'UNVERIFIED')
+        self.assertEqual(result[0]['profile'], profile)
+        self.assertEqual(result[0]['binding'], binding)
+        self.assertEqual(len(result[0]['records']), 1)
+        self.assertEqual(len(process.call_args_list), 1)
+        self.assertIn('--download-db-only', process.call_args.args[0])
+
+    def test_controlled_layout_execution_stays_unverified_and_reacquires_input_db(self):
+        from getzilla import security_oci_layout as layout, security_oci_transport as transport
+        from tests.test_security_oci_layout import owned_image, selected_profile, owned_binding, owned_network
+        from tests.test_security_oci_transport import port_for
+        from types import SimpleNamespace
+        objects, reference = owned_image()
+        subject = {'reference': reference, 'manifest': 'owned/compose.yaml', 'line': 1,
+                   'source_sha256': 'd' * 64, 'platform': 'linux/amd64'}
+        inv = {'images': [subject], 'digest': 'a' * 64}
+        binding = owned_binding()
+        root = self.root / 'oci'
+        root.mkdir(mode=0o700)
+        profile = selected_profile(reference, max_storage_bytes=128 * 1024 * 1024, max_layers=20)
+        acquired = transport.acquire_images(inv['images'], profile, root, network_selection=owned_network(),
+            binding=binding, open_url=port_for(objects, reference, []), now=NOW)
+        validated = layout.validate_layout(objects, reference, 'linux/amd64')
+        tool = self.root / 'pinned-tool-placeholder'
+        tool.write_bytes(b'NEW test port only; never executed')
+        source = {'source_id': 'trivy-db', 'content_sha256': 'e' * 64}
+        for variant in ['valid', 'database', 'wrong-image', 'input-inode']:
+            calls = []
+            db = dict(source)
+            def process(command, cwd, scratch, **kwargs):
+                calls.append(command)
+                self.assertIn('--input', command)
+                self.assertNotIn('--image-src', command)
+                report = {'SchemaVersion': 2, 'ArtifactType': 'container_image',
+                    'ArtifactName': command[command.index('--input') + 1], 'Trivy': {'Version': '0.74.0'},
+                    'Metadata': {'ImageID': validated['config_digest'], 'DiffIDs': validated['diff_ids'],
+                                 'ImageConfig': validated['config']},
+                    'Results': [{'Class': 'os-pkgs', 'Target': 'owned', 'Packages': [{'Name': 'owned', 'Version': '1'}]}]}
+                if variant == 'wrong-image':
+                    report['Metadata']['ImageID'] = 'sha256:' + '0' * 64
+                Path(command[command.index('--output') + 1]).write_text(json.dumps(report))
+                if variant == 'input-inode':
+                    target = root / acquired['records'][0]['layout'] / 'index.json'
+                    raw = target.read_bytes()
+                    target.unlink()
+                    target.write_bytes(raw)
+                if variant == 'database':
+                    db['content_sha256'] = 'f' * 64
+                return SimpleNamespace(returncode=0, terminal_state='completed', cleanup_error=None,
+                                       stdout='', stderr='')
+            with (self.subTest(variant=variant), mock.patch.object(security_tools, 'pinned_tool', return_value=tool),
+                  mock.patch.object(security_tools, 'trivy_database_source', side_effect=lambda *args, **kwargs: dict(db))):
+                result = security_tools.scan_layouts(inv, self.root, binding=binding, now=NOW, process=process, profile=profile, network_selection=owned_network())
+            self.assertEqual(result['outcome'], 'blocked')
+            self.assertEqual(result['qualification'], 'UNVERIFIED')
+            self.assertEqual(result['execution'], 'UNEXECUTED')
+            self.assertEqual(result['images'], [])
+            self.assertEqual(result['data_sources'], [])
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(result['contract_observations']), 1 if variant == 'valid' else 0, result)
+        with mock.patch.object(security_tools, 'pinned_tool', side_effect=AssertionError('unqualified default must not select tool')):
+            unavailable = security_tools.scan_layouts(inv, self.root, binding=binding, now=NOW)
+        self.assertEqual(unavailable['outcome'], 'blocked')
+        self.assertEqual(unavailable['images'], [])
+        self.assertEqual(unavailable['contract_observations'], [])
+
+
+class NewOciArchiveConsumerTests(unittest.TestCase):
+    """NEW pure report contracts, not an executed scanner or old setup."""
+    def test_layout_report_uses_config_diffids_and_exact_input_without_repodigests(self):
+        from tests.test_security_oci_layout import owned_image
+        from getzilla import security_oci_layout as layout
+        objects, reference = owned_image()
+        validated = layout.validate_layout(objects, reference, 'linux/amd64')
+        method = getattr(security_tools, 'image_layout_report', None)
+        self.assertIsNotNone(method, 'missing qualified native OCI layout report adapter')
+        name = '/new-owned/layout@' + validated['manifest_digest']
+        report = {'SchemaVersion': 2, 'ArtifactType': 'container_image', 'ArtifactName': name,
+                  'Trivy': {'Version': '0.74.0'},
+                  'Metadata': {'ImageID': validated['config_digest'], 'DiffIDs': validated['diff_ids'],
+                               'ImageConfig': validated['config']},
+                  'Results': [{'Class': 'os-pkgs', 'Target': 'new-owned',
+                               'Packages': [{'Name': 'owned', 'Version': '1'}]}]}
+        result = method(report, validated, input_name=name)
+        self.assertEqual(result['package_count'], 1)
+        self.assertEqual(result['image_id'], validated['config_digest'])
+        for field, value in [('ImageID', validated['manifest_digest']), ('DiffIDs', []), ('ImageConfig', {})]:
+            bad = copy.deepcopy(report)
+            bad['Metadata'][field] = value
+            with self.subTest(field=field), self.assertRaises(SecurityDataError):
+                method(bad, validated, input_name=name)
+        with self.assertRaises(SecurityDataError):
+            security_tools.image_report(report, reference)
+
+
 class SecurityToolTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix='security-tools-')
@@ -188,7 +342,7 @@ class SecurityToolTests(unittest.TestCase):
             trivy_database_source(self.root, now=NOW)
 
     def test_sast_requires_actual_nonzero_coverage_without_parse_errors(self):
-        good = {'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
+        good = {'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
         self.assertEqual(validate_tool_report('opengrep', good, ['src/app.py'])['outcome'], 'pass')
         for report in ({}, {**good, 'paths': {'scanned': []}},
                        {**good, 'errors': [{'level': 'error', 'type': 'ParseError'}]},
@@ -204,6 +358,52 @@ class SecurityToolTests(unittest.TestCase):
         uncovered['metrics'].pop('src/app.py')
         with self.assertRaises(SecurityDataError):
             validate_tool_report('bandit', uncovered, ['src/app.py'])
+
+    def test_public_opengrep_report_helper_reuses_closed_version_and_roster_contract(self):
+        good = {'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
+        for change, expected in (({'version': 'unknown'}, ['src/app.py']),
+                                 ({}, ['src/app.py', 'src/app.py']),
+                                 ({'paths': {'scanned': ['src/app.py', 'extra.py']}}, ['src/app.py'])):
+            with self.subTest(change=change, expected=expected), self.assertRaises(SecurityDataError):
+                validate_tool_report('opengrep', {**good, **change}, expected)
+
+    def test_real_expanded_consumer_delegates_original_source_and_rejects_inventory_gaps(self):
+        from getzilla import security_opengrep
+        (self.root / 'app.js').write_text('console.log("inert");\n')
+
+        def legacy_report(command, _source, _scratch, **_options):
+            Path(command[command.index('--output') + 1]).write_text(json.dumps({
+                'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['app.js']}}))
+            return ProcessResult(command, 0)
+
+        observed = {'outcome': 'pass', 'summary': 'one complete source target', 'findings': [],
+                    'finding_count': 0, 'coverage': {'expected': ['app.js'], 'observed': ['app.js']}}
+        for inventory_files in ([], ['app.js', 'app.js']):
+            with self.subTest(inventory=inventory_files), \
+                 mock.patch.object(security_opengrep, 'scan_source', return_value=observed) as adapter, \
+                 mock.patch.object(security_tools, 'pinned_tool', return_value=self.root / 'public-tool'), \
+                 mock.patch.object(security_tools, '_process', side_effect=legacy_report):
+                reports = security_tools.scan_source(self.root, {'files': inventory_files})
+            result = next(row for row in reports if row['name'] == 'opengrep')
+            self.assertEqual(result['outcome'], 'blocked')
+            if inventory_files == []:
+                self.assertEqual(adapter.call_args.args[0], self.root)
+                self.assertEqual(adapter.call_args.kwargs['profile'], 'expanded')
+
+    def test_expanded_consumer_keeps_adapter_partial_even_when_legacy_report_is_clean(self):
+        from getzilla import security_opengrep
+        (self.root / 'app.js').write_text('console.log("inert");\n')
+        partial = {'outcome': 'blocked', 'summary': 'OpenGrep 1.30.1 incomplete: syntax_incomplete',
+                   'findings': [], 'finding_count': None, 'coverage': None}
+        with mock.patch.object(security_opengrep, 'scan_source', return_value=partial), \
+             mock.patch.object(security_tools, 'pinned_tool', return_value=self.root / 'public-tool'), \
+             mock.patch.object(security_tools, '_process_report', return_value={
+                 'results': [], 'errors': [], 'paths': {'scanned': ['app.js']}}), \
+             mock.patch.object(security_tools, '_process', return_value=ProcessResult([], 0)):
+            result = next(row for row in security_tools.scan_source(self.root, {'files': ['app.js']})
+                          if row['name'] == 'opengrep')
+        self.assertEqual(result['outcome'], 'blocked')
+        self.assertIn('syntax_incomplete', result['summary'])
 
     def test_misconfiguration_requires_target_coverage_and_nonfailure_results(self):
         report = {'SchemaVersion': 2, 'Results': [{'Target': 'Dockerfile', 'Class': 'config',
@@ -245,6 +445,71 @@ class SecurityToolTests(unittest.TestCase):
                 self.assertEqual([item['rule'] for item in result['findings']], ['generic-secret'])
                 self.assertNotIn(sentinel, json.dumps(result))
                 self.assertEqual(result['binary_inputs'], [])
+
+    def test_normal_gate_secret_consumer_detects_supported_non_utf8_without_disclosing_value(self):
+        from getzilla.verification import _secret_scan
+        sentinel = 'public-source-fixture-value'
+        assignment = 'api_key = ' + repr(sentinel) + '\n'
+        for name, raw in (
+            ('app.py', ('# coding: latin-1\n# café\n' + assignment).encode('latin-1')),
+            ('config.ps1', codecs.BOM_UTF16_LE + assignment.encode('utf-16-le')),
+            ('config.ps1', codecs.BOM_UTF16_BE + assignment.encode('utf-16-be')),
+            ('config.txt', codecs.BOM_UTF32_LE + assignment.encode('utf-32-le')),
+        ):
+            with self.subTest(name=name, digest=hashlib.sha256(raw).hexdigest()):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, 'fail')
+                findings = [item for item in result.details if item.get('code') == 'generic-secret']
+                self.assertEqual(len(findings), 1)
+                self.assertEqual(findings[0]['file_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertNotIn(sentinel, json.dumps(result.to_dict()))
+
+    def test_normal_gate_secret_consumer_distinguishes_valid_text_assets_and_unknown_binary(self):
+        from getzilla.verification import _secret_scan
+        valid = b'# coding: latin-1\n# caf\xe9\nprint(1)\n'
+        pixel = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+mGz8AAAAASUVORK5CYII=')
+        for name, raw, outcome in (('app.py', valid, 'pass'), ('pixel.png', pixel, 'pass'),
+                                   ('impostor.py', pixel, 'fail'), ('unknown.bin', b'\0\xffdata', 'fail')):
+            with self.subTest(name=name):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, outcome)
+                if name == 'pixel.png':
+                    self.assertTrue(any(item.get('code') == 'secret-binary-input' for item in result.details))
+
+    def test_normal_gate_secret_consumer_retains_visible_ascii_in_wide_and_binary_inputs(self):
+        from getzilla.verification import _secret_scan
+        assignment = b'api_key = "public-binary-fixture-value"\n'
+        for name, raw in (('wide.ps1', codecs.BOM_UTF16_LE + '# text\n'.encode('utf-16-le') + assignment),
+                          ('pixel.gif', b'GIF89a\0\xff' + assignment)):
+            with self.subTest(name=name):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, 'fail')
+                self.assertTrue(any(item.get('code') == 'generic-secret' and 'byte_offset' in item
+                                    for item in result.details))
+                self.assertNotIn('public-binary-fixture-value', json.dumps(result.to_dict()))
+
+    def test_normal_gate_secret_consumer_refuses_over_cap_instead_of_silent_skip(self):
+        from getzilla.verification import _secret_scan
+        (self.root / 'large.txt').write_bytes(b'x' * 2_000_001)
+        result = _secret_scan(self.root, ['large.txt'])
+        self.assertEqual(result.status, 'fail')
+        self.assertTrue(any(item.get('code') == 'secret-input-unavailable' for item in result.details))
+
+    def test_native_benchmark_exception_is_bound_to_content_and_path(self):
+        from getzilla.verification import _secret_scan
+        relative = security_tools._REVIEWED_BENCHMARK_PATH
+        source = (Path(__file__).resolve().parents[1] / relative).read_bytes()
+        destination = self.root / relative
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(source)
+        self.assertEqual(_secret_scan(self.root, [relative]).status, 'pass')
+        destination.write_bytes(source[:-1] + b'!')
+        self.assertEqual(_secret_scan(self.root, [relative]).status, 'fail')
+        (self.root / 'other.json').write_bytes(source)
+        self.assertEqual(_secret_scan(self.root, ['other.json']).status, 'fail')
 
     def test_unknown_or_corrupt_source_blocks_without_requesting_a_custom_codec(self):
         requested = []

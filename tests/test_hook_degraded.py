@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
@@ -27,6 +30,149 @@ def write_event(root: Path, ts: str, hook: str = 'pre_tool_use') -> None:
 
 
 class HookDegradedTests(unittest.TestCase):
+    def test_degraded_protection_survives_external_root_target_aliases(self):
+        with project_copy() as root:
+            external = root.parent / 'external-owned-fixture'
+            external.mkdir()
+            (root / '.getzilla/getzilla/fsx.py').write_text('raise ImportError("owned degraded fixture")\n')
+            for name in ('AGENTS.md', 'README.md', 'VERSION', 'agents.MD'):
+                for inputs in ({'file_path': str(external / name)},
+                               {'file_path': name, 'workdir': str(external)}):
+                    with self.subTest(inputs=inputs):
+                        code, result, error = run_hook(root, 'pre_tool_use.py',
+                            {'cwd': str(root), 'tool_name': 'Write', 'tool_input': inputs})
+                        self.assertEqual(result.get('decision'), 'deny', result)
+                        self.assertEqual(code, 2, error)
+                        self.assertFalse((external / name).exists())
+            # A source hook can serve another project. Retain ordinary edits
+            # there rather than treating its own install root as write authority.
+            for inputs in ({'file_path': str(external / 'ordinary.py')},
+                           {'file_path': 'ordinary.py', 'workdir': str(external)}):
+                code, result, error = run_hook(root, 'pre_tool_use.py',
+                    {'cwd': str(root), 'tool_name': 'Write', 'tool_input': inputs})
+                self.assertEqual(result.get('decision'), 'allow', result)
+                self.assertEqual(code, 0, error)
+            self.assertEqual(list(external.iterdir()), [])
+
+    def test_degraded_writes_cover_current_protected_classes_and_aliases(self):
+        with project_copy() as root:
+            config = json.loads((root / '.getzilla/config/policy.json').read_text())
+            (root / '.getzilla/getzilla/fsx.py').write_text('raise ImportError("owned degraded fixture")\n')
+            targets = {pattern.replace('**/', '').replace('**', 'owned').replace('*', 'owned')
+                       for key in ('control_plane_paths', 'protected_paths') for pattern in config[key]}
+            targets.update({'.github/workflows/synthetic.yml', '.agents/skills/owned/SKILL.md', '.git/config',
+                            '.cursor/rules/owned.mdc', '.GETZILLA/config/policy.json', 'AGENTS.MD',
+                            './src/../.github/workflows/owned.yml', '.GITHUB\\workflows\\owned.yml'})
+            for target in sorted(targets):
+                for spelling in (target, str(root / target)):
+                    with self.subTest(path=spelling):
+                        code, result, error = run_hook(root, 'pre_tool_use.py',
+                            {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {'file_path': spelling}})
+                        self.assertEqual(code, 2, error)
+                        self.assertEqual(result.get('decision'), 'deny', result)
+
+    def test_degraded_write_targets_are_bounded_and_resolve_cwd_and_symlinks(self):
+        with project_copy() as root:
+            (root / '.getzilla/getzilla/fsx.py').write_text('raise ImportError("owned degraded fixture")\n')
+            (root / 'src').mkdir()
+            (root / 'src/ordinary.py').write_text('owned = 1\n')
+            (root / 'control-alias').symlink_to(root / '.getzilla', target_is_directory=True)
+            (root / 'control-hardlink').hardlink_to(root / '.getzilla/config/policy.json')
+            cases = [
+                ('Write', {'file_path': 'control-alias/config/policy.json'}, 'deny'),
+                ('Write', {'file_path': 'control-hardlink'}, 'deny'),
+                ('Write', {'file_path': '../.github/owned.yml', 'workdir': str(root / 'src')}, 'deny'),
+                ('Write', {'file_path': 'C:\\owned\\.GIT\\config'}, 'deny'),
+                ('Write', {'file_path': '\\.GITHUB\\workflows\\owned.yml'}, 'deny'),
+                ('Write', {'file_path': '.github./owned.yml'}, 'deny'),
+                ('Write', {'file_path': '.github/owned.yml\x00'}, 'deny'),
+                ('Write', {'file_path': []}, 'deny'), ('Write', {}, 'deny'),
+                ('MultiEdit', {'edits': [{'file_path': 'src/ordinary.py'}, {'file_path': '.git/config'}]}, 'deny'),
+                ('apply_patch', {'input': '*** Begin Patch\n*** Update File: .github/owned.yml\n@@\n-a\n+b\n*** End Patch'}, 'deny'),
+                ('apply_patch', {'input': '*** Begin Patch\n*** Update File: src/ordinary.py\n*** Move to: .git/config\n@@\n-a\n+b\n*** End Patch'}, 'deny'),
+                ('apply_patch', {'input': 'unparseable patch'}, 'deny'),
+                ('Write', {'file_path': 'src/ordinary.py', 'content': '.git/config'}, 'allow'),
+                ('Write', {'file_path': 'src/.github-lookalike.py'}, 'allow'),
+                ('Write', {'file_path': str(root / 'src/ordinary.py')}, 'allow'),
+                ('apply_patch', {'input': '*** Begin Patch\n*** Add File: src/ordinary.py\n+.git/config\n*** End Patch'}, 'allow'),
+                ('functions.apply_patch', {'input': '*** Begin Patch\n*** Update File: .git/config\n@@\n-a\n+b\n*** End Patch'}, 'deny'),
+            ]
+            for tool, inputs, expected in cases:
+                with self.subTest(tool=tool, inputs=inputs):
+                    code, result, error = run_hook(root, 'pre_tool_use.py',
+                        {'cwd': str(root), 'tool_name': tool, 'tool_input': inputs})
+                    self.assertEqual(code, 2 if expected == 'deny' else 0, error)
+                    self.assertEqual(result.get('decision'), expected, result)
+
+    def test_degraded_writes_retain_loaded_policy_identity_and_fail_closed_on_bad_config(self):
+        with project_copy() as root:
+            path = root / '.getzilla/config/policy.json'
+            config = json.loads(path.read_text())
+            config['protected_paths'].append('owned-control/**')
+            path.write_text(json.dumps(config))
+            (root / '.getzilla/getzilla/fsx.py').write_text('raise ImportError("owned degraded fixture")\n')
+            for target in ('owned-control/entry.py', 'OWNED-CONTROL/entry.py'):
+                _, result, _ = run_hook(root, 'pre_tool_use.py',
+                    {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {'file_path': target}})
+                self.assertEqual(result.get('decision'), 'deny', result)
+            path.write_text('{"protected_paths": "malformed"}')
+            _, result, _ = run_hook(root, 'pre_tool_use.py',
+                {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {'file_path': 'src/ordinary.py'}})
+            self.assertEqual(result.get('decision'), 'deny', result)
+
+    def test_degraded_missing_policy_keeps_shipped_control_protection(self):
+        with project_copy() as root:
+            (root / '.getzilla/config/policy.json').unlink()
+            (root / '.getzilla/getzilla/fsx.py').write_text('raise ImportError("owned degraded fixture")\n')
+            for target in ('.git/config', '.github/owned.yml', '.agents/skills/owned/SKILL.md',
+                           'README.md', 'packages/owned.zip', 'tests/test_owned.py', 'trust-ci/owned.py',
+                           'scripts/getzilla_owned.py', 'src/ordinary.py'):
+                with self.subTest(path=target):
+                    _, result, _ = run_hook(root, 'pre_tool_use.py',
+                        {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {'file_path': target}})
+                    self.assertEqual(result.get('decision'), 'allow' if target == 'src/ordinary.py' else 'deny', result)
+
+    def test_invalid_request_emits_one_denial_when_telemetry_fails(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            'invalid_request_hook_fixture', ROOT / '.getzilla/hooks/pre_tool_use.py')
+        owner = importlib.util.module_from_spec(spec)
+        with patch.object(sys, 'path', [str(ROOT / '.getzilla/hooks'), *sys.path]):
+            spec.loader.exec_module(owner)
+        self.assertTrue(owner._BOOTSTRAP_READY)
+        for error in (None, OSError('private telemetry diagnostic')):
+            emitted = []
+            with self.subTest(telemetry_failed=error is not None), \
+                    patch.object(owner, '_read_tool_payload', side_effect=ValueError('private input')), \
+                    patch.object(owner, 'record_degraded', side_effect=error) as record, \
+                    patch.object(owner, 'emit', side_effect=emitted.append):
+                self.assertIsNone(owner.main())
+            self.assertEqual(emitted, [owner.permission_output(False, owner._INVALID_TOOL_REQUEST)])
+            record.assert_called_once_with('pre_tool_use', 'invalid-tool-request')
+
+    def test_own_stack_precedes_foreign_pythonpath_when_local_imports_break(self) -> None:
+        for module in ('policy', 'fsx'):
+            with self.subTest(module=module), project_copy() as root:
+                marker = f'local {module} import failed'
+                (root / f'.getzilla/getzilla/{module}.py').write_text(
+                    f'raise ImportError({marker!r})\n', encoding='utf-8')
+                competing_path = os.pathsep.join((str(ROOT / '.getzilla'), str(root / '.getzilla')))
+                with patch.dict(os.environ, {'PYTHONPATH': competing_path}):
+                    cases = (
+                        ('Read', {'file_path': 'AGENTS.md'}, 'allow'),
+                        ('Bash', {'command': 'rm -rf build'}, 'deny'),
+                    )
+                    for index, (tool, tool_input, expected) in enumerate(cases, start=1):
+                        with self.subTest(module=module, tool=tool):
+                            code, data, error = run_hook(root, 'pre_tool_use.py', {
+                                'cwd': str(root), 'tool_name': tool, 'tool_input': tool_input,
+                            })
+                            self.assertEqual(code, 2 if module == 'fsx' and expected == 'deny' else 0, error)
+                            actual = data.get('decision') or data.get('hookSpecificOutput', {}).get('permissionDecision')
+                            self.assertEqual(actual, expected, data)
+                            events = degraded_events(root)
+                            self.assertEqual(len(events), index)
+                            self.assertTrue(all(marker in event['error'] for event in events))
+
     def test_policy_import_failure_allows_and_records(self) -> None:
         with project_copy() as root:
             (root / '.getzilla/getzilla/policy.py').write_text('raise ImportError("broken on purpose")\n', encoding='utf-8')

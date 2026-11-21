@@ -1,6 +1,20 @@
 # Landing submission with ordered provider failover
 
-`getzilla-landing-submit` submits landing text or safe DOCX through independent Unix-socket backends and retains one selected artifact. Configure the command once, then use the same logical job ID for submission, status, and recovery. Direct requests to an individual backend socket remain single-provider requests.
+`getzilla-landing-submit` supports an opt-in, finite shared-authority control protocol. Legacy schema-1 independent-host clients refuse every POST with `paid_shared_authority_required`. Their capability GET does not grant paid authority. Five hosts with five independent authority databases do not implement shared failover.
+
+Use caller config schema 2 with an explicit `shared_task_id` to select `SharedAuthorityUnixBackend`. Keep the same logical job ID and exact config for submit, status and resume. All configured profiles must use one current-access token file. Socket aliases may differ, but every enabled endpoint must belong to the same `OwnedLandingRuntime` process and SQLite writer. The process holds the lifetime writer lock; clients never open that database.
+
+The server owner explicitly composes profiles with `compose_owned_shared_profile`, installs finite `SharedLandingTask` records, then calls `install_shared_control_api`. `build_landing_app(..., factory_service=..., configure_shared_control=...)` exposes the same explicit configuration port. The stock server CLI does not install paid authority or this control API. Leaving that callback unset keeps the protocol disabled. This is a configuration API, not an automatic deployment step.
+
+Each installed record binds the current actor, logical control task, profile, actual paid account/task and exact owner-installed `LandingInputV1`, including child ID and intake timestamps. It also pins the SHA-256 of the owner-selected provider credential. `BoundSharedCredentialLoader` checks every credential read against that private server-installed digest; a rotated value requires a new explicit configuration. No key or credential digest comes from the request. Each permitted failover child needs its own preapproved exact input and genuine admission. Requests cannot install tasks, credentials, prices or budgets. Current source access, account expiry/disable state, exact SHA/tree, paid task, credential reference and source preflight are checked before acceptance and again at dispatch. The existing executor alone reserves spend and persists dispatch before I/O. Input is limited to 524288 decoded bytes; the closed control body is limited to 800000 bytes.
+
+The control routes are `GET /v1/shared-landing-control/capability`, `POST /v1/shared-landing-control/jobs/{child}` and `GET /v1/shared-landing-control/jobs/{child}`. The versioned body schema is `shared-landing-control-request.v1.schema.json`. Send current bearer authorization, repository ID, shared task ID and expected profile digest. The capability response proves compatibility only. Job, submit command and typed binding commit atomically in SQLite schema 4. Changed bindings conflict. Migration validates each historical schema before expansion; roll back application code only with a forward-compatible database reader.
+
+After ambiguous POST delivery, issue only GET for that child. An absent child is UNKNOWN. Do not repost, select another profile or create a fresh logical ID to recover. Restarted accepted/interrupted children remain `needs_human`; existing reservations retain their upper charge. A durable clock highwater rejects rollback across restarts.
+
+The bounded process test uses real current-access checks, one SQLite authority, the actual HTTP executor, real disposable PostgreSQL Factory stop checks, an exact local Git fixture and the real artifact pipeline. Its provider transport executes one fixed synthetic subprocess. It makes no paid call and proves no native provider, production deployment or Claw acceptance. Generic remote credential-owning executors remain outside this protocol.
+
+The schema-1 configuration and independent-host instructions below describe historical topology only. They do not authorize POST through the shared protocol.
 
 ## Provider order and bounds
 

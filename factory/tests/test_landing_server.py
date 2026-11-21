@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from factory.tests.paid_fixture import configure_test_authority
 from getzilla_factory import landing_server, landing_sqlite_store, server
 from getzilla_factory.models import Actor
 from getzilla_factory.settings import FactorySettings, SettingsError
@@ -47,7 +48,7 @@ class LandingServerOwnershipTests(unittest.TestCase):
     def compose(self, settings=None):
         owned = landing_server.compose_server_landing(
             settings or self.settings, repository_root=self.control,
-            qwen_env_file=self.root / "absent-key",
+            qwen_env_file=self.root / "absent-key", configure_paid_authority=configure_test_authority,
         )
         self.addCleanup(owned.close)
         return owned
@@ -102,6 +103,8 @@ class LandingServerOwnershipTests(unittest.TestCase):
         blobs.assert_not_called()
 
     def test_live_source_precedes_credential_and_credential_requires_ownership(self):
+        from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
+        mock_transport_factory_boundary(self)
         events = []
 
         def credential(*, env_file):
@@ -113,14 +116,19 @@ class LandingServerOwnershipTests(unittest.TestCase):
         with (
             patch.object(landing_server, "_trusted_source"),
             patch("getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=lambda: events.append("source")),
-            patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=credential),
-            self.assertRaisesRegex(RuntimeError, "stop before HTTP"),
+            patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=credential) as key,
         ):
-            self.compose(replace(self.settings, landing_live_enabled=True, landing_provider="qwen-intl"))
-        self.assertEqual(events, ["source", "credential"])
+            owned = self.compose(replace(self.settings, landing_live_enabled=True, landing_provider="qwen-intl"))
+        key.assert_not_called()  # Credential lookup now waits for genuine runtime admission.
+        self.assertTrue(events)
+        self.assertEqual(set(events), {'source'})
+        self.assert_writer_active()
+        owned.close()
         self.open_store()
 
     def test_competing_writer_prevents_live_credential_access(self):
+        from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
+        mock_transport_factory_boundary(self)
         self.open_store()
         with (
             patch.object(landing_server, "_trusted_source"),
@@ -133,6 +141,8 @@ class LandingServerOwnershipTests(unittest.TestCase):
         credential.assert_not_called()
 
     def test_invalid_source_or_other_provider_never_reads_qwen_file(self):
+        from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
+        mock_transport_factory_boundary(self)
         with patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("Qwen read")) as credential:
             with (
                 patch.object(landing_server, "_trusted_source"),
@@ -145,7 +155,7 @@ class LandingServerOwnershipTests(unittest.TestCase):
                 patch("getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source"),
                 patch("getzilla_factory.landing_live_executors.api_key_from_environ", return_value="synthetic-test-key"),
                 patch("getzilla_factory.landing_live_executors.compose_landing_live_grok", side_effect=RuntimeError("grok selected")),
-                self.assertRaisesRegex(RuntimeError, "grok selected"),
+                self.assertRaisesRegex(SettingsError, "scoped provider credential"),
             ):
                 self.compose(replace(self.settings, landing_live_enabled=True, landing_provider="grok-vision"))
         credential.assert_not_called()

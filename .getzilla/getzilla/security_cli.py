@@ -7,28 +7,49 @@ candidate only as source data, never imports it, and keeps all eleven outcomes.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import contextmanager
 
 from .expanded_security import CHECK_FAMILIES, _policy_digest, known_vulnerability_check, run_checks, security_obligations
 from .python_test_runner import execute
-from .verification_journal import retain_stop, stop_details, updated_stop
+from .verification_actions import stop_details
 from .security_acquisition import _atomic, provision_tools, refresh_feeds
 from .security_data import MAX_AGE_SECONDS, SOURCE_URLS, SecurityDataError, _coverage, _acquisition, _json
 from .security_inventory import collect_inventory, declared_inventory, read_image_selection, canonical_digest
 from .security_license_acquisition import acquire_pypi
-from .security_licenses import ALLOWED, _select_expression, _repository_identity, evaluate_artifacts, load_policy
-from .security_artifacts import MAX_INDEX_BYTES, read_file
-from .security_osv_snapshot import VulnerabilityError, _source_git_root
-from .security_oci import source_bindings
-from .public_security_context import current_context, bind_context, validate_context
+from .security_licenses import evaluate_artifacts
+from .security_license_contracts import ALLOWED, _select_expression, load_policy
+from .security_artifacts import MAX_INDEX_BYTES, read_file, ArtifactError as ArtifactError
+from .security_osv_snapshot import VulnerabilityError as VulnerabilityError
+from .security_oci import source_bindings, bound_fault, _bound_detail
+from .public_security_context import current_context as current_context, bind_context, validate_context
+from .public_security_context import (  # noqa: F401 compatibility exports for source declarations
+    _PREPARATION_SEAL,
+    _PREPARATION_STAGES,
+    _PREPARATION_KINDS,
+    _PREPARATION_CODES,
+    _preparation_detail,
+    _preparation_fault,
+    _preparation_step,
+    _clock,
+    _digest,
+    _git,
+    _image_refusal,
+    _profile_declaration,
+    ci_run_context,
+    input_profile,
+    source_binding,
+    validate_input_profile,
+    validate_selection_authority,
+)
 from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, refresh_image_database, scan_source
 
 REQUIRED_CHECKS = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
@@ -36,116 +57,25 @@ REQUIRED_CHECKS = ('security-inventory', 'known-vulnerabilities', 'security-kev'
                    'opengrep', 'secret-scan', 'bandit', 'trivy-config')
 _INPUT_BOOTSTRAP = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
                     'from getzilla.security_cli import main;raise SystemExit(main())')
+def _input_fault(error):
+    detail = bound_fault(error)
+    preparation = _preparation_fault(error)
+    if preparation:
+        detail['preparation'] = preparation
+    return detail
 
 
-def _image_refusal(code: str, message: str) -> SecurityDataError:
-    error = SecurityDataError(message)
-    error.image_input_refusal = code
-    return error
+def _input_fault_detail(value):
+    if type(value) is not dict or 'preparation' not in value:
+        return _bound_detail(value)
+    preparation = _preparation_detail(value['preparation'])
+    if not preparation:
+        return {}
+    rest = {key: item for key, item in value.items() if key != 'preparation'}
+    detail = _bound_detail(rest) if rest else {}
+    detail['preparation'] = preparation
+    return detail
 
-
-def validate_selection_authority(source: dict, run: dict, selection=None, *, now=None) -> None:
-    """Shared CLI/native independently observed source/checker/run contract."""
-    keys = {'head_sha', 'tree_sha', 'checker_sha', 'checker_tree_sha', 'candidate_clean', 'checker_clean', 'same_project'}
-    if (not isinstance(source, dict) or set(source) != keys or source['candidate_clean'] is not True
-            or source['checker_clean'] is not True or type(source['same_project']) is not bool
-            or any(not isinstance(source[key], str) or not re.fullmatch('[0-9a-f]{40}', source[key])
-                   for key in ('head_sha', 'tree_sha', 'checker_sha', 'checker_tree_sha'))):
-        raise SecurityDataError('input profile requires clean exact source and checker identities')
-    public = current_context()
-    expected_run = validate_context(public, source) if public is not None else None
-    if (not isinstance(run, dict) or set(run) != {'provider', 'repository', 'run_id', 'run_attempt', 'head_sha'}
-            or run['provider'] != 'github-actions' or (run != expected_run if expected_run is not None else run['head_sha'] != source['head_sha'])
-            or not isinstance(run['repository'], str) or not re.fullmatch('[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', run['repository'])
-            or any(not isinstance(run[key], str) or not re.fullmatch('[1-9][0-9]{0,19}', run[key]) for key in ('run_id', 'run_attempt'))):
-        raise SecurityDataError('input profile needs the actual exact CI run and attempt')
-    if selection is not None:
-        from .security_data import _timestamp
-        if (type(selection) is not dict or set(selection) != {'schema_version', 'source', 'run', 'created_at', 'uses'}
-                or type(selection['schema_version']) is not int or selection['schema_version'] != 1
-                or not isinstance(selection['uses'], list) or not 1 <= len(selection['uses']) <= 512):
-            raise SecurityDataError('image selection document is malformed')
-        if selection['source'] != source or selection['run'] != run:
-            raise _image_refusal('image-selection-source-mismatch',
-                                 'image selection differs from independently observed source/checker/run/attempt')
-        age = (_clock(now) - _timestamp(selection.get('created_at'))).total_seconds()
-        if not 0 <= age <= MAX_AGE_SECONDS:
-            raise _image_refusal('image-selection-stale', 'image selection is future or stale at consumption')
-
-
-def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None) -> dict:
-    """A finite declaration for one source/run; never scan or attestation credit."""
-    validate_selection_authority(source, run, image_selection, now=now)
-    if (not isinstance(inventory, dict) or inventory.get('complete') is not True or inventory.get('gaps') != []
-            or not _digest(inventory.get('digest')) or not _digest(policy)):
-        raise SecurityDataError('input profile needs complete source declarations and policy identity')
-    counts = {}
-    for family in ('dependencies', 'tools', 'images'):
-        values = inventory.get(family)
-        if not isinstance(values, list) or len(values) > 512 or not all(isinstance(item, dict) for item in values):
-            raise SecurityDataError('input profile source family is malformed or exceeds its finite bound')
-        counts[family] = len(values)
-    if (not isinstance(roots, dict) or set(roots) != {'database', 'artifacts', 'tools'}
-            or not all(isinstance(value, str) and Path(value).is_absolute() and '..' not in Path(value).parts for value in roots.values())):
-        raise SecurityDataError('input profile requires three explicit absolute owned roots')
-    paths = list(map(Path, roots.values()))
-    if any(a.is_relative_to(b) for i, a in enumerate(paths) for j, b in enumerate(paths) if i != j):
-        raise SecurityDataError('input roots must be separate and nonoverlapping')
-    body = {'schema_version': 1, 'kind': 'public-security-input-profile', 'source': source, 'run': run,
-            'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'roots': roots,
-            'created_at': _clock(now).isoformat(), 'observed_counts': counts,
-            'limits': {'dependencies': 512, 'tools': 512, 'images': 512, 'catalog_bytes': 512 * 1024 * 1024,
-                       'deadline_seconds': 600, 'cleanup_seconds': 5},
-            'assurance': 'declaration-only-not-evidence-or-authority'}
-    osv = sorted({f'osv:{item.get("ecosystem")}' for item in inventory['dependencies']})
-    images = ['trivy-db'] if counts['images'] else []
-    body['required_sources'] = {
-        'security-inventory': [], 'known-vulnerabilities': osv,
-        'security-kev': ['kev', *osv, *images] if counts['dependencies'] or counts['images'] else [],
-        'security-epss': ['epss', *osv, *images] if counts['dependencies'] or counts['images'] else [],
-        'security-malicious-packages': osv,
-        'security-licenses': ['artifact-license-catalog'] if any(counts.values()) else [],
-        'security-container-images': images}
-    body['image_profile'] = None
-    if counts['images']:
-        if any(not isinstance(item.get('reference'), str) or re.fullmatch(r'[^\s$@]+@sha256:[0-9a-f]{64}', item['reference']) is None for item in inventory['images']):
-            raise SecurityDataError('image input requires explicit immutable identities')
-        platforms = {item.get('platform') for item in inventory['images']}
-        if len(platforms) != 1 or not platforms <= {'linux/amd64', 'linux/arm64'}:
-            raise SecurityDataError('image input platform remains unproved')
-        body['image_profile'] = {'images': sorted({item['reference'] for item in inventory['images']}),
-            'platform': next(iter(platforms)), 'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
-            'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
-            'max_manifest_bytes': MAX_INDEX_BYTES, 'max_layers': 10000, 'deadline_seconds': 900}
-    if image_artifacts is not None:
-        from .security_oci import validate_selection
-        validate_selection(image_artifacts, inventory, body['image_profile'])
-        body['image_artifacts_sha256'] = hashlib.sha256(json.dumps(image_artifacts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    if image_selection is not None:
-        body['image_selection_sha256'] = canonical_digest(image_selection)
-    public = current_context()
-    if public is not None:
-        body['public_execution_sha256'] = canonical_digest(public)
-    body['profile_sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    return json.loads(json.dumps(body))
-
-
-def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None) -> dict:
-    if not isinstance(profile, dict) or not isinstance(profile.get('created_at'), str):
-        raise SecurityDataError('explicit public input profile is missing')
-    from .security_data import _timestamp
-    created = _timestamp(profile['created_at'])
-    age = (_clock(now) - created).total_seconds()
-    validate_selection_authority(source, run, image_selection, now=now)
-    if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created, image_artifacts=image_artifacts, image_selection=image_selection):
-        raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
-    return profile
-
-
-def ci_run_context(environ: dict) -> dict:
-    return {'provider': 'github-actions', 'repository': environ.get('GITHUB_REPOSITORY'),
-            'run_id': environ.get('GITHUB_RUN_ID'), 'run_attempt': environ.get('GITHUB_RUN_ATTEMPT'),
-            'head_sha': environ.get('GITHUB_SHA')}
 
 
 def preparation_result(profile: dict, before: dict, after: dict, obligations: list[dict],
@@ -184,19 +114,67 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
     if any(item.get('status') != 'pass' for item in acquisitions):
         gaps.append('acquisition-incomplete')
     count = sum(profile.get('observed_counts', {}).values())
-    if license_result.get('status') != ('pass' if count else 'skip'):
+    selected=license_result.get('selected_run')
+    scoped_ok=False
+    if selected is not None:
+        from .security_license_scope import validate_result
+        scoped_ok=(type(license_result.get('gaps')) is list and type(license_result.get('raw_coverage')) is dict
+            and validate_result(selected,profile=profile,inventory_sha256=profile.get('inventory_sha256'),now=_clock(now),
+                diagnostics=license_result['gaps'],raw_coverage=license_result['raw_coverage'])
+            and selected.get('status')=='pass-for-selected-run' and not selected.get('gaps'))
+    if not scoped_ok and (selected is not None or license_result.get('status') != ('pass' if count else 'skip')):
         gaps.append('artifact-license-input-unverified')
     return {'schema_version': 1, 'kind': 'public-security-input-preparation',
             'status': 'unavailable' if gaps else 'prepared', 'qualification': 'UNVERIFIED',
             'profile': profile, 'profile_sha256': profile.get('profile_sha256'),
             'before': before, 'after': after, 'required_sources': obligations,
             'acquisitions': acquisitions, 'license_inputs': license_result, 'gaps': sorted(set(gaps)),
+            'retained_image_layouts': [item for item in acquisitions if item.get('kind') == 'oci-image-acquisition'],
             'checked_at': _clock(now).isoformat(), 'scan_outcomes': [],
-            'assurance': 'local-input-integrity-only-not-external-attestation'}
+            'assurance': 'local-input-integrity-only-not-external-attestation',
+            **({'preparation_scope':'selected-native-security-run','overall_coverage_complete':False,
+                'selected_run':selected} if selected is not None else {})}
+
+
+def _prepare_families(inventory,artifacts,tools,families,*,now=None,run_context=None):
+    """Acquire finite source data; the common catalog reader owns all charging."""
+    from .security_release_tool_inputs import prepare as prepare_release
+    from .security_action_inputs import prepare_actions
+    providers=[]
+    selected=list(families or [])
+    if run_context is not None:
+        from .security_license_scope import Scope
+        if not isinstance(run_context, Scope):
+            raise SecurityDataError('checker source preparation needs actual selected-run scope')
+        run_context.validate(inventory, run_context.binding)
+        if any(row.get('kind') == 'checker-tool' for row in run_context.required.values()):
+            from .security_go_tool_producer import prepare_tools
+            with _preparation_step('checker-tool-source'):
+                checker = prepare_tools(TRUSTED_ROOT, artifacts, inventory_digest=inventory['digest'], now=now)
+                providers.append(dict(kind='go-checker-tools-v1', report=checker))
+    if run_context is not None and inventory['images']:
+        from .security_license_scope import Scope
+        from .security_image_licenses import prepare_families as prepare_images
+        if not isinstance(run_context, Scope):
+            raise SecurityDataError('image family preparation needs actual selected-run scope')
+        run_context.validate(inventory,run_context.binding)
+        selected.extend(prepare_images(artifacts,inventory,run_context.binding['source'],run_context.binding['run'],now=now))
+    if any(row.get('kind')=='release-tool' for row in inventory['tools']):
+        with _preparation_step('release-tool-source'):
+            release=prepare_release(inventory,artifacts,tools,now=now)
+            providers.append(dict(kind='opengrep-release-v1',frontiers=release['frontiers']))
+            selected.extend(release['records'])
+    if any(row.get('kind')=='github-action' for row in inventory['tools']):
+        with _preparation_step('action-source'):
+            actions=prepare_actions(inventory,artifacts,now=now)
+            providers.append(dict(kind='github-action-source-v1',report=actions))
+            selected.extend(actions['records'])
+    return selected,dict(schema_version=1,providers=providers)
 
 
 def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, profile=None,
-                   run=None, write_profile=False, refresh=False, provision=False, families=None, now=None, image_artifacts=None, image_selection=None) -> dict:
+                   run=None, write_profile=False, refresh=False, provision=False, families=None, now=None, image_artifacts=None, image_selection=None,
+                   package_target=None, network_selection=None) -> dict:
     """Reuse existing producers for explicit inputs; never run vulnerability/scanner callbacks."""
     if not write_profile and not isinstance(profile, dict):
         raise SecurityDataError('explicit current public input profile required before preparation')
@@ -204,30 +182,60 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         raise SecurityDataError('profile declaration cannot execute acquisition')
     if os.name != 'posix':
         raise SecurityDataError('public snapshot preparation requires a qualified POSIX reader; platform unavailable')
-    root = root.resolve()
-    roots = {key: str(path.absolute()) for key, path in
-                                  (('database', database), ('artifacts', artifacts), ('tools', tools))}
-    tools.mkdir(parents=True, exist_ok=True, mode=0o700)
-    env = {'GETZILLA_SECURITY_DB': roots['database'], 'GETZILLA_SECURITY_ARTIFACTS': roots['artifacts'],
-           'GETZILLA_SECURITY_TOOLS': roots['tools']}
-    catalog = _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) if image_artifacts else None
-    selection = read_image_selection(image_selection)
-    if selection is not None:
-        env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(Path(image_selection).absolute())
-    inventory = declared_inventory(root, selection) if selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
-    policy = _policy_digest(root)
+    action_deadline = time.monotonic() + 600
+    with _preparation_step('setup'):
+        root = root.resolve()
+        roots = {key: str(path.absolute()) for key, path in
+                                      (('database', database), ('artifacts', artifacts), ('tools', tools))}
+        tools.mkdir(parents=True, exist_ok=True, mode=0o700)
+        env = {'GETZILLA_SECURITY_DB': roots['database'], 'GETZILLA_SECURITY_ARTIFACTS': roots['artifacts'],
+               'GETZILLA_SECURITY_TOOLS': roots['tools']}
+        catalog = _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) if image_artifacts else None
+        selection = read_image_selection(image_selection)
+        if selection is not None:
+            env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(Path(image_selection).absolute())
+        inventory = declared_inventory(root, selection) if selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
+        policy = _policy_digest(root)
+        package_pins = None
+        package_graphs = None
+        observed_target = package_target if package_target is not None else profile.get('python_target') if profile else None
+        if observed_target is not None and any(dep['ecosystem']=='PyPI' for dep in inventory['dependencies']):
+            from .security_python_target import source_pins, validate_target, closure_graphs
+            package_pins = source_pins(root,inventory,validate_target(observed_target))
+            package_graphs=closure_graphs(root,inventory)
+        factory_inputs=None
+        if observed_target is not None:
+            from .security_factory_inputs import declaration
+            factory_inputs=declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=tools)
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
-        before = source_binding(root, TRUSTED_ROOT, Path(temporary))
+        with _preparation_step('source-binding'):
+            before = source_binding(root, TRUSTED_ROOT, Path(temporary))
+        package_ci_uses=None
+        if package_graphs is not None:
+            from .security_image_authority import ci_use_observations
+            package_ci_uses=ci_use_observations(root,inventory,before,run,package_graphs)
         if write_profile:
-            declared = input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection)
-            if source_bindings(catalog):
-                refresh_images(inventory, tools, now=now, profile=declared['image_profile'], image_artifacts=image_artifacts)
-                if (_json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog
-                        or source_binding(root, TRUSTED_ROOT, Path(temporary)) != before):
-                    raise SecurityDataError('Source or OCI selection changed during declaration')
+            with _preparation_step('profile-declaration'):
+                declared = input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
+                                         package_target=package_target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses, network_selection=network_selection)
+                if source_bindings(catalog):
+                    refresh_images(inventory, tools, now=now, profile=declared['image_profile'], image_artifacts=image_artifacts)
+                    if (_json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog
+                            or source_binding(root, TRUSTED_ROOT, Path(temporary)) != before):
+                        raise SecurityDataError('Source or OCI selection changed during declaration')
             return declared
-        validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection)
-        if refresh and inventory['images'] and image_artifacts is None:
+        with _preparation_step('profile-validation'):
+            validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
+                                   package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
+            if package_target is not None and profile.get('python_target') != package_target:
+                raise SecurityDataError('Python target differs from the current input profile')
+            from .security_python_target import binding
+            python_binding = binding(profile)
+            python_options = {'target_binding': python_binding} if python_binding is not None else {}
+            from .security_license_scope import current as current_run_scope
+            run_context=current_run_scope(root,inventory,python_binding)
+            required_dependencies=run_context.acquisition_dependencies() if run_context is not None else inventory['dependencies']
+        if refresh and inventory['images'] and image_artifacts is None and not profile.get('image_network_selection'):
             raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations are not qualified artifacts')
         if families is not None:
             if (not isinstance(families, dict) or set(families) != {'schema_version', 'inventory_sha256', 'records'}
@@ -242,30 +250,79 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             env['GETZILLA_SECURITY_INPUT_PROFILE'] = json.dumps(profile, sort_keys=True)
         acquisitions = []
         if provision:
-            acquisitions.extend(provision_tools(tools))
+            with _preparation_step('tool-provision'):
+                acquisitions.extend(provision_tools(tools))
         if refresh:
             if inventory['dependencies'] or inventory['images']:
-                acquisitions.extend(refresh_feeds(database, sorted({item['ecosystem'] for item in inventory['dependencies']}), now=now))
+                with _preparation_step('feeds'):
+                    acquisitions.extend(refresh_feeds(database, sorted({item['ecosystem'] for item in inventory['dependencies']}), now=now))
             if inventory['dependencies'] or inventory['tools'] or inventory['images']:
-                bundle = acquire_pypi(inventory['dependencies'], artifacts, inventory_digest=inventory['digest'], now=now, families=families)
-                acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
+                with _preparation_step('package-artifacts'):
+                    family_options={}
+                    if run_context is not None:
+                        families,preparation=_prepare_families(inventory,artifacts,tools,families,now=now,run_context=run_context)
+                        family_options={'family_preparation':preparation}
+                    bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now, families=families,
+                                          **python_options,**family_options)
+                    acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
+                    if python_binding is not None and 'factory_inputs' in python_binding:
+                        from .security_factory_inputs import prepare
+                        prepare(root,artifacts,tools,python_binding,TRUSTED_ROOT,now=now)
+                    if python_binding is not None and 'ci_uses' in python_binding:
+                        from .security_ci_inputs import prepare as prepare_ci
+                        prepare_ci(artifacts,python_binding,now=now)
             if inventory['images']:
                 # No daemon pull can silently bypass the image storage ceiling.
-                acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts))
+                with _preparation_step('image-artifacts'):
+                    acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts,
+                        binding={'source': before, 'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'run': run},
+                        deadline=action_deadline, network_selection=profile.get('image_network_selection')))
                 if image_artifacts is not None:
-                    acquisitions.extend(refresh_image_database(tools, now=now))
+                    with _preparation_step('image-database'):
+                        acquisitions.extend(refresh_image_database(tools, now=now))
         elif families is not None:
             raise SecurityDataError('family publication requires explicit refresh selection')
-        obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
-        licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now)
-        if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
-            raise SecurityDataError('Selected OCI catalog changed during preparation')
-        after_selection = read_image_selection(image_selection)
-        after_inventory = declared_inventory(root, after_selection) if after_selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
-        after = source_binding(root, TRUSTED_ROOT, Path(temporary))
-        if after_inventory != inventory or after_selection != selection:
-            raise SecurityDataError('source inventory changed during public input preparation')
-        return preparation_result(profile, before, after, obligations, acquisitions, licenses, now=now)
+        with _preparation_step('obligations'):
+            obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
+        with _preparation_step('licenses'):
+            licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now, **python_options,
+                **({'run_context':run_context} if run_context is not None else {}))
+        with _preparation_step('final-binding'):
+            if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
+                raise SecurityDataError('Selected OCI catalog changed during preparation')
+            after_selection = read_image_selection(image_selection)
+            after_inventory = declared_inventory(root, after_selection) if after_selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
+            after = source_binding(root, TRUSTED_ROOT, Path(temporary))
+            if after_inventory != inventory or after_selection != selection:
+                raise SecurityDataError('source inventory changed during public input preparation')
+        with _preparation_step('prepare-result'):
+            return preparation_result(profile, before, after, obligations, acquisitions, licenses, now=now)
+
+
+def _output_identity(path):
+    try:
+        value = path.stat(follow_symlinks=False)
+        if stat.S_ISREG(value.st_mode):
+            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    except OSError:
+        pass
+    return None
+
+
+def _failed_input_fault(path, previous):
+    """Refusal data only, read fresh and bounded; never grants success/authority."""
+    current = _output_identity(path)
+    if current is None or current == previous:
+        return {}
+    try:
+        report = _json(read_file(path.parent, path.name, MAX_INDEX_BYTES))
+        if (current != _output_identity(path) or type(report) is not dict
+                or report.get('kind') != 'public-security-input-refusal'
+                or report.get('status') != 'fail' or report.get('qualification') != 'UNVERIFIED'):
+            return {}
+        return _input_fault_detail(report.get('fault'))
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return {}
 
 
 def _supervised_preparation(args, profile):
@@ -293,6 +350,7 @@ def _supervised_preparation(args, profile):
             command.extend(['--image-selection', str(args.image_selection)])
         if args.family_records is not None:
             command.extend(['--family-records', str(args.family_records)])
+        previous = _output_identity(args.json_out)
         process = execute(command, args.root, environment, timeout=600)
         if process.returncode == 0 and process.terminal_state == 'completed' and not process.cleanup_error:
             report = _json(read_file(args.json_out.parent, args.json_out.name, MAX_INDEX_BYTES))
@@ -300,49 +358,17 @@ def _supervised_preparation(args, profile):
                     and report.get('qualification') == 'UNVERIFIED' and report.get('profile') == profile
                     and report.get('profile_sha256') == profile.get('profile_sha256')):
                 return report
-        return {'kind': 'public-security-input-refusal', 'status': 'unavailable', 'qualification': 'UNVERIFIED',
+        refusal = {'kind': 'public-security-input-refusal', 'status': 'unavailable', 'qualification': 'UNVERIFIED',
                 'gaps': ['input-worker-incomplete'], 'returncode': process.returncode,
                 'stop': stop_details(process),
                 'terminal_state': process.terminal_state if process.terminal_state in {'completed', 'timeout', 'interrupted'} else 'unknown',
                 'cleanup_uncertain': bool(process.cleanup_error),
                 'publication_state': 'reconcile selected roots before further publication; no automatic retry'}
-
-
-def _clock(now=None):
-    current = datetime.now(timezone.utc) if now is None else now
-    if current.tzinfo is None or current.utcoffset() is None:
-        raise SecurityDataError('timezone-aware security clock required')
-    return current.astimezone(timezone.utc)
-
-
-def _git(root: Path, arguments: list[str], scratch: Path) -> str:
-    result = execute(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', str(root), *arguments],
-                     scratch, _environment(scratch), timeout=30)
-    if result.returncode or result.terminal_state != 'completed' or result.cleanup_error:
-        error = SecurityDataError('cannot establish source identity using a completed Git observation; stop=' + json.dumps(stop_details(result), sort_keys=True))
-        retain_stop(error, updated_stop(result))
-        raise error
-    return result.stdout.strip()
-
-
-def source_binding(root: Path, checker: Path, scratch: Path) -> dict:
-    values = []
-    for project in (root, checker):
-        try:
-            if not _source_git_root(project):
-                raise VulnerabilityError('selected security source must be the exact Git worktree root')
-        except VulnerabilityError as exc:
-            raise SecurityDataError('selected security source must be the exact Git worktree root') from exc
-        identity = _git(project, ['rev-parse', 'HEAD', 'HEAD^{tree}'], scratch).splitlines()
-        if len(identity) != 2 or not all(re.fullmatch(r'[a-f0-9]{40}', value) for value in identity):
-            raise SecurityDataError('exact commit and tree identity required')
-        clean = not _git(project, ['status', '--porcelain=v1', '--untracked-files=all'], scratch)
-        repository = _repository_identity(_git(project, ['remote', 'get-url', 'origin'], scratch))
-        values.append((identity, clean, repository))
-    return {'head_sha': values[0][0][0], 'tree_sha': values[0][0][1],
-            'checker_sha': values[1][0][0], 'checker_tree_sha': values[1][0][1],
-            'candidate_clean': values[0][1], 'checker_clean': values[1][1],
-            'same_project': bool(values[0][2] and values[1][2] and values[0][2].lower() == values[1][2].lower())}
+        if process.returncode != 0 and process.terminal_state == 'completed' and not process.cleanup_error:
+            fault = _failed_input_fault(args.json_out, previous)
+            if fault:
+                refusal['fault'] = fault
+        return refusal
 
 
 def _check(name: str, outcome: str, summary: str, inventory: dict, policy: str,
@@ -358,11 +384,6 @@ def _check(name: str, outcome: str, summary: str, inventory: dict, policy: str,
                                           'reason': 'complete-inventory-no-objects'}
     return {'name': name, 'status': 'pass' if outcome == 'pass' else 'skip' if outcome == 'not_applicable' else 'fail',
             'summary': summary, 'details': [detail]}
-
-
-
-def _digest(value) -> bool:
-    return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
 
 
 def _source_valid(source: dict) -> bool:
@@ -395,6 +416,7 @@ def _source_valid(source: dict) -> bool:
 
 
 def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
+    from .security_data import osv_decision_ids, SecurityDataError
     findings, accepted = detail['findings'], detail.get('accepted', [])
     if name == 'known-vulnerabilities':
         fields = {'ecosystem', 'package', 'version', 'manifest', 'id', 'aliases', 'summary',
@@ -402,16 +424,19 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
         if findings or not isinstance(accepted, list):
             return False
         for finding in accepted:
-            if (not isinstance(finding, dict) or set(finding) != fields
+            if (not isinstance(finding, dict) or set(finding) not in (fields, fields | {'raw_aliases'})
                     or not all(isinstance(finding.get(k), str) and finding[k] for k in
                                ('ecosystem', 'package', 'version', 'manifest', 'id', 'accepted_until'))
                     or not all(isinstance(finding.get(k), list) and all(isinstance(v, str) for v in finding[k])
                                for k in ('aliases', 'fixed'))):
                 return False
             try:
+                identifiers = set(osv_decision_ids(finding))
+                if any(alias not in identifiers for alias in finding['aliases']):
+                    return False
                 if date.fromisoformat(finding['accepted_until']) < current.date():
                     return False
-            except ValueError:
+            except (ValueError, SecurityDataError):
                 return False
         return True
     if name == 'secret-scan':
@@ -424,7 +449,14 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
                    and type(f['column']) is int and f['column'] > 0 for f in findings)
     if name == 'security-epss':
         fields = {'ecosystem', 'package', 'version', 'manifest', 'id', 'aliases', 'summary', 'severity',
-                  'fixed', 'accepted_until', 'image', 'target', 'intelligence', 'enrichment_reason'}
+                  'fixed', 'accepted_until', 'image', 'target', 'intelligence', 'enrichment_reason', 'raw_aliases'}
+        try:
+            for finding in findings:
+                identifiers = set(osv_decision_ids(finding))
+                if any(alias not in identifiers for alias in finding.get('aliases', [])):
+                    return False
+        except SecurityDataError:
+            return False
         return all(isinstance(f, dict) and not set(f) - fields and isinstance(f.get('id'), str)
                    and isinstance(f.get('intelligence'), dict) and isinstance(f.get('aliases'), list)
                    and f.get('enrichment_reason') in {'cve-aliases', 'no-cve-alias'} for f in findings)
@@ -432,11 +464,21 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
         fields = {'ecosystem', 'package', 'version', 'manifest', 'status', 'expression', 'selected_expression',
                   'distribution', 'artifact_sha256', 'origin', 'license_files', 'notice_files', 'obligations'}
         for finding in findings:
-            if (not isinstance(finding, dict) or not fields <= set(finding) <= fields | {'artifact_id', 'context', 'delivery'}
+            if isinstance(finding,dict) and 'kind' in finding:
+                from .security_license_families import finding_consistent
+                if not finding_consistent(finding,list(ALLOWED),_select_expression):
+                    return False
+                continue
+            if (not isinstance(finding, dict) or not fields <= set(finding) <= fields | {'artifact_id', 'context', 'delivery', 'policy_exception'}
                     or finding['status'] != 'pass' or finding['distribution'] not in {'internal', 'redistributed'}
                     or not _digest(finding['artifact_sha256']) or not isinstance(finding['license_files'], list)
                     or not finding['license_files'] or not isinstance(finding['notice_files'], list)):
                 return False
+            if 'policy_exception' in finding:
+                from .security_license_exceptions import detail_consistent
+                if not detail_consistent(finding):
+                    return False
+                continue
             try:
                 selected, _ = _select_expression(finding['selected_expression'], list(ALLOWED))
                 chosen, _ = _select_expression(finding['expression'], selected, require_all=True)
@@ -457,7 +499,7 @@ def _detail_consistent(name: str, detail: dict, inventory: str, policy: str, cur
                 'data_sources', 'findings', 'gaps', 'assurance'}
     extra = {'family', 'reason_code', 'applicability_evidence'}
     extra |= ({'accepted'} if name == 'known-vulnerabilities' else
-              {'factory_offline_use'} if name == 'security-licenses' else
+              {'factory_offline_use','selected_run','raw_coverage','raw_license_diagnostics'} if name == 'security-licenses' else
               {'binary_inputs'} if name == 'secret-scan' else
               {'coverage'} if name in {'opengrep', 'bandit', 'trivy-config'} else set())
     if (not required <= set(detail) <= required | extra or type(detail.get('schema_version')) is not int
@@ -474,6 +516,17 @@ def _detail_consistent(name: str, detail: dict, inventory: str, policy: str, cur
     if ('applicability_evidence' in detail or detail['outcome'] != 'pass'
             or not _findings_consistent(name, detail, current)):
         return False
+    if name=='security-licenses' and 'selected_run' in detail:
+        from .security_license_scope import validate_result
+        selected=detail['selected_run']
+        raw=detail.get('raw_coverage')
+        if (type(detail.get('raw_license_diagnostics')) is not list or type(raw) is not dict
+                or not validate_result(selected,inventory_sha256=inventory,now=current,
+                    diagnostics=detail['raw_license_diagnostics'],raw_coverage=raw)
+                or selected.get('status')!='pass-for-selected-run' or selected.get('gaps')
+                or selected.get('details')!=detail['findings']
+                or raw.get('complete') is not False):
+            return False
     identifiers = [s.get('source_id') for s in detail['data_sources'] if isinstance(s, dict)]
     if (len(identifiers) != len(detail['data_sources']) or any(not isinstance(i, str) for i in identifiers)
             or len(identifiers) != len(set(identifiers)) or not all(_source_valid(s) for s in detail['data_sources'])):
@@ -568,17 +621,25 @@ def finalize_report(before: dict, after: dict, checks: list[dict], inventory_dig
                     expiry = min(expiry, instant + timedelta(seconds=MAX_AGE_SECONDS))
             except (KeyError, TypeError, ValueError, AttributeError):
                 gaps.append(f'{check.get("name")}: missing, future or stale source timestamp')
-    return {'schema_version': 1, 'kind': 'security-expanded', 'status': 'fail' if gaps else 'pass',
+    scoped=[detail['selected_run'] for check in checks for detail in check.get('details',[])
+        if isinstance(detail,dict) and 'selected_run' in detail]
+    if scoped and (len(scoped)!=1 or not isinstance(scoped[0],dict) or scoped[0].get('source')!=after):
+        gaps.append('selected-run scope differs from actual source or is duplicated')
+    return {'schema_version': 1, 'kind': 'security-expanded',
+            'status': ('fail-for-selected-run' if gaps else 'pass-for-selected-run') if scoped else 'fail' if gaps else 'pass',
             'source': after, 'created_at_utc': current.isoformat(),
             'valid_until_utc': None if gaps else expiry.isoformat(), 'checks': checks,
             'inventory_sha256': inventory_digest, 'policy_sha256': policy_digest,
-            'assurance': 'local-input-integrity-only', 'qualification_gaps': gaps}
+            'assurance': 'local-input-integrity-only', 'qualification_gaps': gaps,
+            **({'acceptance_scope':scoped[0],'overall_coverage_complete':False} if scoped else {})}
 
 
 def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refresh=False,
-             provision=False, now=None, profile=None, run=None, image_artifacts=None, image_selection=None) -> dict:
+             provision=False, now=None, profile=None, run=None, image_artifacts=None, image_selection=None,
+             package_target=None) -> dict:
     if (refresh or provision) and not isinstance(profile, dict):
         raise SecurityDataError('acquisition requires an explicit current public input profile')
+    action_deadline = time.monotonic() + 600
     root, artifacts, tools = (path.resolve() for path in (root, artifacts, tools))
     database = database.absolute()  # Keep named links visible to descriptor snapshot I/O.
     env = {'GETZILLA_SECURITY_DB': str(database), 'GETZILLA_SECURITY_ARTIFACTS': str(artifacts),
@@ -589,12 +650,29 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
     if image_artifacts is not None:
         env['GETZILLA_SECURITY_IMAGE_ARTIFACTS'] = str(image_artifacts.absolute())
         env['GETZILLA_SECURITY_IMAGE_PROFILE'] = json.dumps(profile['image_profile'], sort_keys=True)
+    if image_selection is not None and profile is None:
+        raise SecurityDataError('explicit image selection requires a current source/run input profile')
     selection = read_image_selection(image_selection)
     if selection is not None:
         env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(Path(image_selection).absolute())
     if profile is not None:
         env['GETZILLA_SECURITY_INPUT_PROFILE'] = json.dumps(profile, sort_keys=True)
+    from .security_python_target import binding
+    if package_target is not None and (not isinstance(profile,dict) or profile.get('python_target') != package_target):
+        raise SecurityDataError('Python target differs from the current input profile')
+    python_binding = binding(profile) if profile is not None else None
+    python_options = {'target_binding':python_binding} if python_binding is not None else {}
     inventory = declared_inventory(root, selection) if selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
+    package_pins = None
+    package_graphs = None
+    if profile is not None and 'python_source_pins' in profile:
+        from .security_python_target import source_pins,validate_target,closure_graphs
+        package_pins=source_pins(root,inventory,validate_target(profile['python_target']))
+        package_graphs=closure_graphs(root,inventory)
+    factory_inputs=None
+    if profile is not None and 'factory_inputs' in profile:
+        from .security_factory_inputs import declaration
+        factory_inputs=declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=tools)
     policy = _policy_digest(TRUSTED_ROOT)
     acquisitions = []
     checks = []
@@ -604,10 +682,23 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
         scratch = Path(directory)
         try:
             before = source_binding(root, TRUSTED_ROOT, scratch)
+            package_ci_uses=None
+            if package_graphs is not None:
+                from .security_image_authority import ci_use_observations
+                package_ci_uses=ci_use_observations(root,inventory,before,run,package_graphs)
             if profile is not None:
                 validate_input_profile(profile, before, inventory, {'database': str(database), 'artifacts': str(artifacts),
-                                       'tools': str(tools)}, run, policy, now=now, image_artifacts=catalog, image_selection=selection)
-            if refresh and inventory['images'] and image_artifacts is None:
+                                       'tools': str(tools)}, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
+                                       package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
+            if profile is not None and profile.get('image_network_selection'):
+                env['GETZILLA_SECURITY_OCI_BINDING'] = json.dumps({'source': before,
+                    'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'run': run}, sort_keys=True)
+                env['GETZILLA_SECURITY_OCI_PROFILE'] = json.dumps(profile['image_profile'], sort_keys=True)
+                env['GETZILLA_SECURITY_OCI_NETWORK_SELECTION'] = json.dumps(profile['image_network_selection'], sort_keys=True)
+            from .security_license_scope import current as current_run_scope
+            run_context=current_run_scope(root,inventory,python_binding)
+            required_dependencies=run_context.acquisition_dependencies() if run_context is not None else inventory['dependencies']
+            if refresh and inventory['images'] and image_artifacts is None and not profile.get('image_network_selection'):
                 raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations remain unqualified')
             def acquire(label, operation):
                 try:
@@ -620,16 +711,29 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 ecosystems = sorted({item['ecosystem'] for item in inventory['dependencies']})
                 if inventory['dependencies'] or inventory['images']:
                     acquire('feed-acquisition', lambda: refresh_feeds(database, ecosystems, now=now))
-                if inventory['dependencies']:
+                if inventory['dependencies'] or inventory['tools'] or inventory['images']:
                     def package_artifacts():
-                        bundle = acquire_pypi(inventory['dependencies'], artifacts, inventory_digest=inventory['digest'], now=now)
+                        family_options={}
+                        if run_context is not None:
+                            selected,preparation=_prepare_families(inventory,artifacts,tools,None,now=now,run_context=run_context)
+                            family_options=dict(families=selected,family_preparation=preparation)
+                        bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now,
+                            **python_options,**family_options)
+                        if python_binding is not None and 'factory_inputs' in python_binding:
+                            from .security_factory_inputs import prepare
+                            prepare(root,artifacts,tools,python_binding,TRUSTED_ROOT,now=now)
+                        if python_binding is not None and 'ci_uses' in python_binding:
+                            from .security_ci_inputs import prepare as prepare_ci
+                            prepare_ci(artifacts,python_binding,now=now)
                         return [{'kind': 'artifact-acquisition', 'status': 'fail' if bundle.get('gaps') else 'pass',
                                  'records': len(bundle.get('records', [])), 'gaps': bundle.get('gaps', [])}]
                     acquire('artifact-acquisition', package_artifacts)
                 if inventory['images']:
                     def image_inputs():
                         observations = refresh_images(inventory, tools, now=now,
-                            profile=profile.get('image_profile') if profile else None, image_artifacts=image_artifacts)
+                            profile=profile.get('image_profile') if profile else None, image_artifacts=image_artifacts,
+                            binding=json.loads(env.get('GETZILLA_SECURITY_OCI_BINDING', 'null')), deadline=action_deadline,
+                            network_selection=profile.get('image_network_selection') if profile else None)
                         if image_artifacts is not None:
                             observations.extend(refresh_image_database(tools, now=now))
                         return observations
@@ -669,8 +773,10 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
     checks.sort(key=lambda item: REQUIRED_CHECKS.index(item['name']))
     report = finalize_report(before, after, checks, inventory['digest'], policy, now=now)
     report['acquisitions'] = acquisitions
+    if python_binding is not None:
+        report['python_target_scope'] = dict(target=python_binding['target'],
+            assurance='current-interpreter-only; no unobserved target or final-delivery credit')
     return report
-
 
 
 @contextmanager
@@ -774,15 +880,43 @@ def main(argv=None) -> int:
     preparation = parser.add_mutually_exclusive_group()
     preparation.add_argument('--write-input-profile', type=Path, help='write a current source/run declaration without acquisition or scans')
     preparation.add_argument('--prepare-inputs', action='store_true', help='prepare explicit selected inputs; never grants scan or attestation credit')
+    preparation.add_argument('--produce-images', action='store_true', help='owned Linux OCI builds and all three input stages; needs qualified ephemeral root backend')
+    parser.add_argument('--ci-image-corpus', action='store_true', help='request approved CI8GiB/12GiB job; actual kernel and memory admission required')
+    parser.add_argument('--backend-tool-pins', type=Path, help='bounded source-pinned BuildKit distribution selector; never resource or build-completion authority')
     parser.add_argument('--input-profile', type=Path, help='exact current source/run/attempt/roots profile')
+    parser.add_argument('--oci-network-selection', type=Path,
+                        help='explicit fixed-host global numeric peer map for profile declaration; automatic DNS unavailable')
     parser.add_argument('--family-records', type=Path, help='selected retained family record descriptors whose proof bytes already exist in --artifacts')
     parser.add_argument('--image-selection', type=Path, help='bounded source/run/currentness declarations; never image execution credit')
     parser.add_argument('--image-artifacts', type=Path, help='explicit local OCI layout catalog bound to complete inventory/profile; no daemon or registry acquisition')
     parser.add_argument('--input-worker', help=argparse.SUPPRESS)
     parser.add_argument('--json-out', type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.ci_image_corpus and not args.produce_images:
+        parser.error('--ci-image-corpus requires the live --produce-images path')
+    if args.produce_images:
+        if (args.backend_tool_pins is None or args.input_profile is None or args.image_artifacts is not None
+                or args.image_selection is not None or args.family_records is not None or args.input_worker is not None
+                or args.refresh or args.provision_tools):
+            parser.error('--produce-images requires backend tool pins and profile output; it owns preparation and image inputs')
+        from .security_image_producer import run_pipeline
+        try:
+            report = run_pipeline(args, ci_run_context(os.environ))
+        except (OSError, ValueError, RuntimeError) as error:
+            report = {'kind': 'public-security-input-refusal', 'status': 'fail', 'qualification': 'UNVERIFIED',
+                      'gaps': ['bounded-image-producer-unavailable'], 'reason': 'owned image producer or ordinary security stage refused'}
+            if isinstance(getattr(error, 'detail', None), dict):
+                report['fault'] = error.detail
+        _atomic(args.json_out, (json.dumps(report, sort_keys=True) + '\n').encode())
+        if os.geteuid() == 0 and os.environ.get('SUDO_UID', '').isdecimal() and os.environ.get('SUDO_GID', '').isdecimal():
+            os.chown(args.json_out, int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID']), follow_symlinks=False)
+        return 0 if report.get('status') in {'pass','pass-for-selected-run'} else 1
+    if args.backend_tool_pins is not None:
+        parser.error('--backend-tool-pins requires --produce-images')
     if args.image_artifacts is not None:
         args.image_artifacts = args.image_artifacts.absolute()
+    if args.image_selection is not None:
+        args.image_selection = args.image_selection.absolute()
     if args.family_records is not None and not (args.prepare_inputs and args.refresh):
         parser.error('--family-records requires explicit input preparation and refresh')
     if args.write_input_profile is not None and args.input_profile is not None:
@@ -792,6 +926,10 @@ def main(argv=None) -> int:
         parser.error('invalid internal preparation dispatch')
     try:
         profile = _json(read_file(args.input_profile.parent, args.input_profile.name, MAX_INDEX_BYTES)) if args.input_profile else None
+        network_selection = _json(read_file(args.oci_network_selection.parent, args.oci_network_selection.name, 16384)) if args.oci_network_selection else None
+        if args.oci_network_selection is not None and args.write_input_profile is None and (
+                not isinstance(profile, dict) or network_selection != profile.get('image_network_selection')):
+            raise SecurityDataError('OCI numeric selection differs from explicit input profile')
         families = _json(read_file(args.family_records.parent, args.family_records.name, MAX_INDEX_BYTES)) if args.family_records else None
         run = ci_run_context(os.environ)
         if args.prepare_inputs and args.input_worker is None:
@@ -801,15 +939,18 @@ def main(argv=None) -> int:
         elif args.prepare_inputs or args.write_input_profile is not None:
             report = prepare_inputs(args.root, args.database, args.artifacts, args.tools,
                 profile=profile, run=run, write_profile=args.write_input_profile is not None,
-                refresh=args.refresh, provision=args.provision_tools, families=families, image_artifacts=args.image_artifacts, image_selection=args.image_selection)
+                refresh=args.refresh, provision=args.provision_tools, families=families, image_artifacts=args.image_artifacts, image_selection=args.image_selection, network_selection=network_selection)
             if args.write_input_profile is not None:
                 _atomic(args.write_input_profile, (json.dumps(report, sort_keys=True) + '\n').encode())
         else:
             report = evaluate(args.root, args.database, args.artifacts, args.tools,
                               **_evaluation_kwargs(args, profile, run))
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as error:
         report = {'kind': 'public-security-input-refusal', 'status': 'fail', 'qualification': 'UNVERIFIED',
                   'gaps': ['input-preparation-unavailable'], 'reason': 'selected public input/profile/source validation refused'}
+        fault = _input_fault(error)
+        if fault:
+            report['fault'] = fault
     body = (json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + '\n').encode()
     if len(body) > MAX_INDEX_BYTES:
         raise SecurityDataError('public input report exceeds the existing metadata byte bound')
@@ -821,4 +962,4 @@ def main(argv=None) -> int:
         print(f'{check["status"].upper()} {check["name"]}: {check["summary"]}')
     for gap in report['qualification_gaps']:
         print(f'BLOCKED: {gap}')
-    return 0 if report['status'] == 'pass' else 1
+    return 0 if report['status'] in {'pass','pass-for-selected-run'} else 1

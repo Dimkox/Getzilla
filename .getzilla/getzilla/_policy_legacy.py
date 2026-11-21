@@ -12,10 +12,12 @@ import posixpath
 import re
 import shlex
 import threading
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from . import fsx
 from .state import active_write_agents, get_active_route, has_valid_approval
@@ -1120,6 +1122,9 @@ def _unwrap_execution_wrappers(tokens: list[str]) -> tuple[list[str], bool]:
             elif index < len(remaining) and remaining[index].startswith('-'):
                 return [], True
         elif wrapper == 'timeout':
+            # Exact bounded-task wrapper. Other wrapper options remain ambiguous.
+            if index < len(remaining) and remaining[index] == '--signal=KILL':
+                index += 1
             if index < len(remaining) and remaining[index] == '--':
                 index += 1
             if index >= len(remaining) or remaining[index].startswith('-'):
@@ -1894,6 +1899,40 @@ def _gh_file_operands(parsed: _GhArguments) -> list[str]:
             if separator and field.startswith('@'):
                 paths.append(field[1:])
     return paths
+def _literal_graphql_query(document: str) -> bool:
+    """Recognize one bounded query, never a mutation or a second operation."""
+    if not document or len(document) > 65536 or any(c in document for c in '$`'):
+        return False
+    token = re.compile(r'\s+|#[^\n]*|"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z_0-9]*|[0-9.+-]+|[{}()\[\]!:@=,]')
+    parts = []
+    cursor = 0
+    while cursor < len(document):
+        match = token.match(document, cursor)
+        if not match:
+            return False
+        item = match.group()
+        cursor = match.end()
+        if not item.isspace() and not item.startswith('#'):
+            parts.append(item)
+    if not parts:
+        return False
+    if parts[0] == 'query':
+        parts = parts[1:]
+        if parts and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', parts[0]):
+            parts = parts[1:]
+    if not parts or parts[0] != '{':
+        return False
+    stack: list[str] = []
+    pairs = {'}': '{', ')': '(', ']': '['}
+    for index, item in enumerate(parts):
+        if item in ('{', '(', '['):
+            stack.append(item)
+        elif item in pairs:
+            if not stack or stack.pop() != pairs[item]:
+                return False
+            if not stack and index != len(parts) - 1:
+                return False
+    return not stack and parts[-1] == '}'
 
 
 def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') -> tuple[str, str, str] | None:
@@ -1903,6 +1942,8 @@ def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') 
     """
     method: str | None = None
     fields = False
+    query_fields: list[str] = []
+    other_fields = False
     host = default_host
     endpoint = ''
     index = 0
@@ -1918,22 +1959,32 @@ def _gh_api_request(arguments: list[str], default_host: str = 'api.github.com') 
         elif token[:2] in {'-X', '-x'} and len(token) > 2:
             name, value = '-X', token[2:].lstrip('=')
         elif re.match(r'^-[fF]\S', token):
-            name = '-f'
+            name, value = token[:2], token[2:]
         if name in {'-X', '--method'}:
             method = (value or '').strip().upper()
         elif name in _GH_API_FIELD_OPTIONS:
             fields = True
+            if name in {'-f', '--raw-field'} and value is not None and value.startswith('query='):
+                query_fields.append(value[6:])
+            else:
+                other_fields = True
         elif name == '--hostname':
             host = (value or host).lower()
         elif not token.startswith('-') and not endpoint:
             endpoint = token
         index += 1
     method = method or ('POST' if fields else 'GET')
-    if method in _GH_API_READ_METHODS:
-        return None
-    url = re.match(r'^https?://([^/]+)/(.*)$', endpoint)
+    url = re.match(r'^https?://([^/]+)/(.*)$', endpoint, re.IGNORECASE)
     if url:
         host, endpoint = url.group(1).lower(), url.group(2)
+    target = endpoint.lstrip('/')
+    if re.split(r'[?#]', target, maxsplit=1)[0].rstrip('/') == 'graphql':
+        if (target == 'graphql' and method in {'GET', 'POST'} and len(query_fields) == 1 and not other_fields
+                and _literal_graphql_query(query_fields[0])):
+            return None
+        return method, host, target
+    if method in _GH_API_READ_METHODS:
+        return None
     return method, host, endpoint.lstrip('/')
 
 
@@ -2662,11 +2713,6 @@ _INERT_SECRET = frozenset({
     'readlink',
 })
 _GREP_FAMILY = frozenset({'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ack-grep'})
-_ALWAYS_RECURSIVE_GREP = frozenset({'rg', 'ag', 'ack', 'ack-grep'})
-_GREP_VALUE_OPTIONS = frozenset({
-    '-m', '--max-count', '-A', '-B', '-C', '--before-context', '--after-context', '--context', '-d', '-D', '--devices',
-    '--binary-files', '--color', '--colour', '--include', '--exclude', '--exclude-dir', '--include-dir',
-})
 _COPY_READERS = frozenset({'cp', 'rsync', 'scp'})
 _WINDOWS_COPY_READERS = frozenset({'robocopy', 'xcopy', 'copy-item', 'copy', 'cpi'})
 _WINDOWS_ARCHIVE_READERS = frozenset({'compress-archive'})
@@ -2854,6 +2900,7 @@ def _bounded_glob(start: str, pattern: str, budget: _Budget) -> list[str]:
 
 def _secret_reference(
     root: Path, raw: str, patterns: list[str], *, expand: bool = True, budget: _Budget | None = None,
+    execution_cwd: Path | None = None,
 ) -> bool:
     """Whether ``raw`` names secret material, inside the repository or outside it."""
     if budget is not None:
@@ -2862,13 +2909,19 @@ def _secret_reference(
         budget.tick()
     if not raw or '\x00' in raw:
         return False
+    if execution_cwd is not None and not Path(raw).is_absolute() and not raw.startswith('~'):
+        raw = str(execution_cwd / raw)
     rel = safe_relative_path(root, raw)
-    if _secret_exception(raw, patterns) and (rel is None or _secret_exception(rel, patterns)):
-        return False
-    if rel is not None and _secret_path_match(rel, patterns):
-        return True
-    if _secret_path_match(raw, patterns):
-        return True
+    resolved = os.path.realpath(os.path.join(str(root), os.path.expanduser(raw)))
+    public = (_secret_exception(raw, patterns) and (rel is None or _secret_exception(rel, patterns))
+              and (not _secret_path_match(resolved, patterns) or _secret_exception(resolved, patterns)))
+    if not public:
+        if rel is not None and _secret_path_match(rel, patterns):
+            return True
+        if _secret_path_match(raw, patterns) or _secret_path_match(resolved, patterns):
+            return True
+    # Public-looking globs still need bounded expansion: a matched public name
+    # can be a symlink to protected material outside this policy root.
     if expand and _GLOB_META.search(raw):
         budget = budget or _Budget()
         for match in _bounded_glob(str(root), raw, budget):
@@ -2877,44 +2930,66 @@ def _secret_reference(
     return False
 
 
-def _resolve_under_root(root: Path, word: str) -> str | None:
+def _resolve_under_root(root: Path, word: str, *, execution_cwd: Path | None = None) -> str | None:
     if not word or _GLOB_META.search(word):
         return None
+    if execution_cwd is not None and not Path(word).is_absolute() and not word.startswith('~'):
+        word = str(execution_cwd / word)
     rel = safe_relative_path(root, word)
     if rel is None:
         return None
     return str(root) if rel in ('', '.') else os.path.join(str(root), rel)
 
 
+def _read_target(raw: str, directory: Path, budget: _Budget) -> tuple[str, bool]:
+    """Resolve a current recursive-read target, including targets outside policy root."""
+    budget.tick()
+    full = os.path.abspath(os.path.join(str(directory), os.path.expanduser(raw)))
+    try:
+        metadata = os.stat(full)
+    except FileNotFoundError:
+        # A proven absent target has no contents to inspect. Other errors are unknown.
+        return full, False
+    except (OSError, ValueError):
+        raise _BudgetExceeded from None
+    if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+        raise _BudgetExceeded
+    return full, stat.S_ISDIR(metadata.st_mode)
+
+
 def _walk_for_secret(
     root: Path, directory: str, patterns: list[str], budget: _Budget, glob_filter: str | None = None,
-    *, skip_hidden: bool = False,
+    *, skip_hidden: bool = False, exclude_dirs: tuple[str, ...] = (),
 ) -> str | None:
-    """First secret file in ``directory`` (recursively, skipping ``.git``), under ``budget``.
-
-    ``skip_hidden`` models ripgrep's default of not descending into dotfiles/dot-dirs,
-    so a plain ``Grep`` of the tree is not flagged for a hidden ``.env`` it would never
-    open (review S59-8); an explicit glob clears it so a glob targeting secrets still hits.
-    """
+    """Inspect metadata under a bounded recursive scope; unknown scope refuses."""
     stack = [directory]
+    visited: set[tuple[int, int]] = set()
     while stack:
         current = stack.pop()
         try:
+            budget.tick()
+            metadata = os.stat(current)
+            identity = (metadata.st_dev, metadata.st_ino)
+            if identity in visited:
+                raise _BudgetExceeded
+            visited.add(identity)
             with os.scandir(current) as entries:
                 for entry in entries:
                     budget.tick()
-                    if entry.name == '.git':
-                        continue
                     if skip_hidden and entry.name.startswith('.'):
                         continue
-                    if entry.is_dir(follow_symlinks=False):
-                        stack.append(entry.path)
+                    metadata = entry.stat(follow_symlinks=True)
+                    if stat.S_ISDIR(metadata.st_mode):
+                        if not any(fnmatch.fnmatchcase(entry.name, pattern) for pattern in exclude_dirs):
+                            stack.append(entry.path)
+                    elif not stat.S_ISREG(metadata.st_mode):
+                        raise _BudgetExceeded
                     elif (not glob_filter or any(fnmatch.fnmatch(entry.name, g) for g in _brace_expand(glob_filter))) and _secret_reference(
-                        root, entry.path, patterns, expand=False,
+                        root, entry.path, patterns, expand=False, budget=budget,
                     ):
                         return entry.path
-        except OSError:
-            continue
+        except (OSError, ValueError):
+            raise _BudgetExceeded from None
     return None
 
 
@@ -2958,49 +3033,151 @@ def _git_path_words(rest: list[str]) -> list[str]:
     return words
 
 
-def _grep_path_words(rest: list[str]) -> list[str]:
-    words: list[str] = []
-    have_pattern = False
-    index = 0
+_UNKNOWN_GREP_SCOPE = 'unproved search utility argument grammar'
+
+
+@dataclass(frozen=True)
+class _GrepReadScope:
+    read_files: tuple[str, ...] = ()
+    paths: tuple[str, ...] = ()
+    recursive: bool = False
+    files_only: bool = False
+    unknown: bool = False
+    exclude_dirs: tuple[str, ...] = ()
+
+
+# GNU grep3.11 and ripgrep15 help define these option arities. Unknown grammar
+# refuses; option values never become flags. Filters do not remove scope unless
+# their exclusion is explicitly represented below.
+_GREP_SHORT_FLAGS = frozenset('EGFPiwxyzsvVbnhHoqalLcTZUIrR')
+_GREP_SHORT_VALUES = {'e': 'pattern', 'f': 'pattern-file', 'm': 'value', 'A': 'value',
+                      'B': 'value', 'C': 'value', 'd': 'directories', 'D': 'value'}
+_RG_SHORT_FLAGS = frozenset('sFivxUPSawL.ubhnN0opqHIclV')
+_RG_SHORT_VALUES = {letter: 'value' for letter in 'EmjgdtTABCMr'}
+_RG_SHORT_VALUES.update({'e': 'pattern', 'f': 'pattern-file'})
+_GREP_LONG_FLAGS = frozenset('''extended-regexp fixed-strings basic-regexp perl-regexp
+ignore-case no-ignore-case word-regexp line-regexp null-data no-messages invert-match
+byte-offset line-number with-filename no-filename only-matching quiet silent text
+files-without-match files-with-matches count initial-tab null binary line-buffered
+no-group-separator recursive dereference-recursive help version'''.split())
+_GREP_LONG_VALUES = {name: 'value' for name in '''max-count before-context after-context
+context label binary-files devices include exclude group-separator'''.split()}
+_GREP_LONG_VALUES.update({'regexp': 'pattern', 'file': 'pattern-file',
+                          'exclude-from': 'read-file', 'exclude-dir': 'exclude-dir',
+                          'directories': 'directories'})
+_RG_LONG_FLAGS = frozenset('''case-sensitive crlf fixed-strings ignore-case invert-match
+line-regexp mmap no-mmap multiline multiline-dotall no-unicode unicode null-data pcre2
+smart-case stop-on-nonmatch text auto-hybrid-regex no-pcre2-unicode binary follow no-follow
+glob-case-insensitive hidden no-hidden ignore-file-case-insensitive no-ignore no-ignore-dot
+no-ignore-exclude no-ignore-files no-ignore-global no-ignore-parent no-ignore-vcs
+no-require-git one-file-system unrestricted block-buffered column heading no-heading
+include-zero line-buffered line-number no-line-number max-columns-preview null
+only-matching passthru pretty quiet trim vimgrep with-filename no-filename sort-files
+count count-matches files-with-matches files-without-match json debug no-ignore-messages
+no-messages stats trace files no-config help pcre2-version type-list version'''.split())
+_RG_LONG_VALUES = {name: 'value' for name in '''dfa-size-limit encoding engine max-count
+regex-size-limit threads glob iglob max-depth max-filesize type type-not type-add type-clear
+after-context before-context color colors context context-separator field-context-separator
+field-match-separator hyperlink-format max-columns path-separator replace sort sortr'''.split()}
+_RG_LONG_VALUES.update({'regexp': 'pattern', 'file': 'pattern-file', 'ignore-file': 'read-file'})
+
+
+def _grep_read_scope(argv: list[str]) -> _GrepReadScope:
+    """Parse bounded actual utility argv; keep patterns, file inputs and targets separate."""
+    name, rest = argv[0], argv[1:]
+    if name not in {'grep', 'egrep', 'fgrep', 'rg'}:
+        return _GrepReadScope(unknown=True)
+    rg = name == 'rg'
+    flags = _RG_SHORT_FLAGS if rg else _GREP_SHORT_FLAGS
+    values = _RG_SHORT_VALUES if rg else _GREP_SHORT_VALUES
+    long_flags = _RG_LONG_FLAGS if rg else _GREP_LONG_FLAGS
+    long_values = _RG_LONG_VALUES if rg else _GREP_LONG_VALUES
+    recursive, files_only, explicit_pattern = rg, False, False
+    read_files: list[str] = []
+    positional: list[str] = []
+    exclude_dirs: list[str] = []
+    index, end_options = 0, False
     while index < len(rest):
-        token = rest[index]
-        if token == '--':  # nosec B105
-            tail = rest[index + 1:]
-            if not have_pattern and tail:
-                tail = tail[1:]
-            words.extend(tail)
-            break
-        if token in {'-e', '--regexp'}:  # the regexp is data, not a path
-            have_pattern = True
-            index += 2
-            continue
-        if token.startswith('--regexp='):
-            have_pattern = True
-            index += 1
-            continue
-        if token in {'-f', '--file'}:  # a pattern file is itself a path to read
-            if index + 1 < len(rest):
-                words.append(rest[index + 1])
-            have_pattern = True
-            index += 2
-            continue
-        if token.startswith('--file='):
-            words.append(token.split('=', 1)[1])
-            have_pattern = True
-            index += 1
-            continue
-        if token in _GREP_VALUE_OPTIONS:
-            index += 2
-            continue
-        if token.startswith('-') and len(token) > 1:
-            index += 1
-            continue
-        if not have_pattern:
-            have_pattern = True  # the first bare operand is the pattern
-        else:
-            words.append(token)
+        word = rest[index]
         index += 1
-    return words
+        if end_options or word == '-' or not word.startswith('-'):
+            positional.append(word)
+            continue
+        if word == '--':
+            end_options = True
+            continue
+        options: list[tuple[str, str | None, str]] = []
+        if word.startswith('--'):
+            option, separator, value = word[2:].partition('=')
+            if option in long_values:
+                if not separator:
+                    if index >= len(rest):
+                        return _GrepReadScope(unknown=True)
+                    value = rest[index]
+                    index += 1
+                options.append((option, value, long_values[option]))
+            elif not rg and option in {'color', 'colour'}:
+                options.append((option, value if separator else None, 'value'))
+            elif option in long_flags and not separator:
+                options.append((option, None, 'flag'))
+            else:
+                return _GrepReadScope(unknown=True)
+        else:
+            offset = 1
+            while offset < len(word):
+                option = word[offset]
+                offset += 1
+                if option in values:
+                    value = word[offset:]
+                    if not value:
+                        if index >= len(rest):
+                            return _GrepReadScope(unknown=True)
+                        value = rest[index]
+                        index += 1
+                    options.append((option, value, values[option]))
+                    break  # the rest of this token is one value, never more flags
+                if option in flags or (not rg and option.isascii() and option.isdigit()):
+                    options.append((option, None, 'flag'))
+                else:
+                    return _GrepReadScope(unknown=True)
+        for option, value, kind in options:
+            if kind in {'pattern', 'pattern-file'}:
+                explicit_pattern = True
+            if kind in {'pattern-file', 'read-file'} and value != '-':
+                read_files.append(value or '')
+            if kind == 'exclude-dir':
+                # GNU directory exclusions match descendant directory basenames.
+                # Path-bearing patterns are not used to reduce inspection scope.
+                if value and '/' not in value and '\\' not in value:
+                    exclude_dirs.append(value)
+            if kind == 'directories':
+                if value not in {'read', 'skip', 'recurse'}:
+                    return _GrepReadScope(unknown=True)
+                recursive = value == 'recurse'
+            if not rg and option in {'r', 'R', 'recursive', 'dereference-recursive'}:
+                recursive = True
+            if option in ({'h', 'V', 'help', 'version', 'pcre2-version', 'type-list'} if rg
+                          else {'V', 'help', 'version'}):
+                # GNU reads auxiliary inputs during option parsing, before this exit.
+                # Suppress search contents, but retain all earlier/later file inputs.
+                files_only = True
+            if rg and option == 'files':
+                files_only = True
+    if not explicit_pattern and not files_only:
+        if not positional:
+            return _GrepReadScope(unknown=True)
+        positional = positional[1:]  # exactly one positional regexp, regardless of option order
+    return _GrepReadScope(tuple(read_files), tuple(path for path in positional if path != '-'),
+                          recursive, files_only, False, tuple(exclude_dirs))
+
+
+def _grep_path_words(rest: list[str], *, pattern_files: bool = True) -> list[str]:
+    """Compatibility view for GNU grep operands; new consumers retain parsed scope."""
+    scope = _grep_read_scope(['grep', *rest])
+    if scope.unknown:
+        return [_UNKNOWN_GREP_SCOPE]
+    return [*(scope.read_files if pattern_files else ()), *scope.paths]
+
 
 
 def _skip_first_positional(rest: list[str], value_options: frozenset[str]) -> list[str]:
@@ -3088,7 +3265,9 @@ def consumer_secret_paths(consumers: object, *, script_matches: Callable[[str], 
     return frozenset(allowed)
 
 
-def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozenset[str]]:
+def _consumer_handoffs(
+    root: Path, command: str, *, execution_cwd: Path | None = None,
+) -> dict[tuple[str, ...], frozenset[str]]:
     """Secret paths the owner lets an exact script receive (project policy ``secret_consumers``).
 
     The exception belongs to one top-level simple command: a real Python interpreter (or the script
@@ -3096,6 +3275,7 @@ def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozen
     no directory change anywhere in the command (#100). A redirection or ``tee`` aimed at a handed
     secret voids the exception: reading it is allowed, writing it never is (#101).
     """
+    directory = execution_cwd if execution_cwd is not None else root
     consumers = project_policy(root).get('secret_consumers')
     if not isinstance(consumers, list):
         return {}
@@ -3131,11 +3311,15 @@ def _consumer_handoffs(root: Path, command: str) -> dict[tuple[str, ...], frozen
         first = _executable_name(raw[0])
         interpreter = _CONSUMER_INTERPRETER.fullmatch(first) is not None
         script = raw[1] if interpreter and len(raw) > 1 else raw[0]
-        allowed = consumer_secret_paths(consumers, script_matches=lambda listed: _same_file(root, script, listed))
+        if (interpreter and len(raw) < 2) or not script or script.startswith('-'):
+            continue
+        actual_script = str(directory / script) if directory != root and not Path(script).is_absolute() else script
+        allowed = consumer_secret_paths(consumers, script_matches=lambda listed: _same_file(root, actual_script, listed))
         if not allowed:
             continue
         sinks = {*redirected, *written}
-        if any(os.path.realpath(sink) == os.path.realpath(secret) or sink == secret for sink in sinks for secret in allowed):
+        if any(os.path.realpath(os.path.join(str(directory), sink))
+               == os.path.realpath(os.path.join(str(root), secret)) for sink in sinks for secret in allowed):
             continue
         argv = ['git', first[4:], *raw[1:]] if first.startswith('git-') and len(first) > 4 else [first, *raw[1:]]
         handoffs[tuple(argv)] = frozenset(allowed)
@@ -3156,7 +3340,12 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
     if name == 'git':
         return _git_path_words(rest)
     if name in _GREP_FAMILY:
-        return _grep_path_words(rest)
+        scope = _grep_read_scope(argv)
+        if scope.unknown:
+            return [_UNKNOWN_GREP_SCOPE]
+        if scope.files_only:
+            return list(scope.read_files) or None
+        return [*scope.read_files, *scope.paths, *(['.'] if scope.recursive and not scope.paths else [])]
     if name in {'jq', 'yq'}:
         return _skip_first_positional(rest, frozenset({'--arg', '--argjson', '--slurpfile', '--rawfile', '-L'}))
     if name == 'awk':
@@ -3205,14 +3394,9 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
 
 def _is_recursive_reader(argv: list[str]) -> bool:
     name, rest = argv[0], argv[1:]
-    if name in _ALWAYS_RECURSIVE_GREP:
-        return True
     if name in _GREP_FAMILY:
-        return any(
-            token in {'--recursive', '--dereference-recursive', '-r', '-R'}
-            or (token.startswith('-') and not token.startswith('--') and ('r' in token[1:] or 'R' in token[1:]))
-            for token in rest
-        )
+        scope = _grep_read_scope(argv)
+        return scope.unknown or (scope.recursive and not scope.files_only)
     if name in _COPY_READERS:
         return any(
             token in {'-r', '-R', '-a', '--recursive', '--archive'}
@@ -3241,37 +3425,51 @@ def _is_recursive_reader(argv: list[str]) -> bool:
 def _argv_secret_reference(
     root: Path, argv: list[str], patterns: list[str], budget: _Budget,
     handoffs: dict[tuple[str, ...], frozenset[str]] | None = None,
+    *, execution_cwd: Path | None = None,
 ) -> str | None:
     if not argv:
         return None
+    grep_scope = _grep_read_scope(argv) if argv[0] in _GREP_FAMILY else None
+    if grep_scope is not None and grep_scope.unknown:
+        return _UNKNOWN_GREP_SCOPE
     words = _secret_path_words(argv)
     if words is None:
         return None
     handed = (handoffs or {}).get(tuple(argv), frozenset())
     if handed:
         # The owner lets this script read these secrets itself; the agent still never names them elsewhere.
-        words = [word for word in words if word not in handed and word.split('=', 1)[-1] not in handed]
+        if execution_cwd is None or execution_cwd == root:
+            words = [word for word in words if word not in handed and word.split('=', 1)[-1] not in handed]
+        else:
+            # Registration paths belong to the policy root, argv paths to native cwd.
+            # Do not let a relative resource spelling borrow another root's identity.
+            registered = {os.path.normcase(os.path.abspath(os.path.join(str(root), secret))) for secret in handed}
+            words = [word for word in words if os.path.normcase(os.path.abspath(
+                os.path.join(str(execution_cwd), word.split('=', 1)[-1]),
+            )) not in registered]
     recursive = _is_recursive_reader(argv)
     for word in words:
         for variant in _brace_expand(word):
             if recursive:
-                full = _resolve_under_root(root, variant)
-                if full is None and _GLOB_META.search(variant):
-                    # `findstr /s PAT deploy\*` / `grep -r PAT deploy/*`: walk the literal prefix dir.
-                    prefix = _literal_pattern_prefix(variant)
-                    full = _resolve_under_root(root, prefix) if prefix else None
-                if full and os.path.isdir(full):
-                    hit = _walk_for_secret(root, full, patterns, budget)
+                target = _literal_pattern_prefix(variant) if _GLOB_META.search(variant) else variant
+                if not target:
+                    raise _BudgetExceeded
+                full, is_directory = _read_target(target, execution_cwd or root, budget)
+                if is_directory:
+                    hit = _walk_for_secret(root, full, patterns, budget,
+                                           exclude_dirs=grep_scope.exclude_dirs if grep_scope else ())
                     if hit is not None:
                         rel = safe_relative_path(root, hit)
                         return rel if rel is not None else hit
             for piece in _SECRET_PIECE_SPLIT.split(_HTTP_URL.sub(' ', variant)):
-                if piece and _secret_reference(root, piece, patterns, budget=budget):
+                if piece and _secret_reference(root, piece, patterns, budget=budget, execution_cwd=execution_cwd):
                     return piece
     return None
 
 
-def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget: _Budget) -> str | None:
+def _raw_secret_reference(
+    root: Path, command: str, patterns: list[str], budget: _Budget, *, execution_cwd: Path | None = None,
+) -> str | None:
     """Fallback for untokenizable text: scan every quoted/fragmented piece."""
     unquoted = command.replace('"', '').replace("'", '')
     seen: set[str] = set()
@@ -3280,18 +3478,153 @@ def _raw_secret_reference(root: Path, command: str, patterns: list[str], budget:
             if not piece or piece in seen:
                 continue
             seen.add(piece)
-            if _secret_reference(root, piece, patterns, budget=budget):
+            if _secret_reference(root, piece, patterns, budget=budget, execution_cwd=execution_cwd):
                 return piece
     return None
 
 
 _COMMAND_SCAN_BYTE_LIMIT = 131072
-_SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...], bool, bytes], str | None] = {}
-_GH_OPAQUE_MARKER = 'unresolved GitHub CLI shell expansion'
+_UNSPECIFIED_READ_CWD = object()
+_UNKNOWN_READ_CWD = 'unresolved native execution directory for a read'
+
+
+def _read_directory(root: Path, value: object) -> Path | None:
+    if value is _UNSPECIFIED_READ_CWD:
+        return root
+    return value if isinstance(value, Path) and value.is_absolute() else None
+
+
+def is_read_tool(tool: str) -> bool:
+    lowered = tool.lower()
+    return lowered in {'read', 'read_file', 'open_file', 'fs_read', 'grep', 'notebookread', 'search'} or (
+        tool.startswith('mcp__') and 'read' in lowered
+    )
 
 
 @_bounded_invocation(_BUDGET_MARKER)
-def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
+def read_secret_reference(
+    root: Path, tool: str, inputs: Any, patterns: list[str], *, execution_cwd: object = _UNSPECIFIED_READ_CWD,
+) -> str | None:
+    """Existing structured-read protection with execution cwd separate from policy root."""
+    directory = _read_directory(root, execution_cwd)
+    is_grep = tool.lower() == 'grep'
+    glob_filter = inputs.get('glob') if is_grep and isinstance(inputs, dict) else None
+    glob_filter = glob_filter if isinstance(glob_filter, str) and glob_filter else None
+    search_inputs = _extract_paths(inputs)
+    if is_grep and not search_inputs:
+        if directory is None:
+            return _UNKNOWN_READ_CWD
+        search_inputs = [str(directory)]
+    if directory is None and any(
+        isinstance(raw, str) and raw and not Path(raw).is_absolute() for raw in search_inputs
+    ):
+        return _UNKNOWN_READ_CWD
+    budget = _current_invocation_budget()
+    try:
+        if is_grep and glob_filter:
+            for variant in _brace_expand(glob_filter):
+                if _secret_reference(root, variant, patterns, budget=budget, execution_cwd=directory):
+                    return variant
+        for raw in search_inputs:
+            if not isinstance(raw, str) or not raw:
+                continue
+            if _secret_reference(root, raw, patterns, budget=budget, execution_cwd=directory):
+                return raw
+            if is_grep:
+                target = _literal_pattern_prefix(raw) if _GLOB_META.search(raw) else raw
+                if not target:
+                    raise _BudgetExceeded
+                folder, is_directory = _read_target(target, directory or root, budget)
+            else:
+                folder = os.path.abspath(os.path.join(str(directory or root), os.path.expanduser(raw)))
+                is_directory = os.path.isdir(folder)
+            if is_directory:
+                hit = _walk_for_secret(root, folder, patterns, budget, glob_filter,
+                                       skip_hidden=is_grep and glob_filter is None)
+                if hit is not None:
+                    return hit
+    except _BudgetExceeded:
+        return _BUDGET_MARKER
+    return None
+
+
+_SECRET_SCAN_CACHE: dict[tuple[str, str, str, tuple[str, ...], bool, bytes], str | None] = {}
+_GH_OPAQUE_MARKER = 'unresolved GitHub CLI shell expansion'
+
+
+
+_READ_CWD_CHANGERS = frozenset({'cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', 'chroot', 'nsenter'})
+
+
+def _read_cwd_uncertain(command: str, depth: int = 0) -> bool:
+    """Flattened argv cannot prove cwd across directory changes or cwd wrappers.
+
+    Refuse that read scope rather than treating an operand as initial-cwd relative.
+    Operators, subshells and nested wrapper payloads share this conservative rule.
+    """
+    if depth > 4:
+        return True
+    try:
+        tokens = _shell_tokens(_ANSI_C_QUOTE.sub(_ansi_c, command))
+    except ValueError:
+        return True
+    current: list[str] = []
+    for token in [*tokens, _ShellToken(';', 0, 0, operator=True)]:
+        if not token.operator:
+            current.append(token.value)
+            continue
+        if '<' in token.value or '>' in token.value:
+            continue
+        if not current:
+            continue
+        # Inspect options before ordinary normalization discards wrapper metadata.
+        for index, word in enumerate(current):
+            name = _executable_name(word)
+            if name in {'env', 'sudo'} and any(
+                value in {'-C', '-D', '--chdir'} or value.startswith(('--chdir=', '-C', '-D'))
+                for value in current[index + 1:]
+            ):
+                return True
+        argv = _strip_wrappers(current)
+        current = []
+        if not argv:
+            continue
+        argv = [_executable_name(argv[0]), *argv[1:]]
+        if argv[0] in _READ_CWD_CHANGERS:
+            return True
+        nested = _nested_commands(argv)
+        if argv[0] not in _DATA_ARGUMENT_EXECUTABLES:
+            nested.extend(word for word in argv[1:] if any(char.isspace() for char in word))
+        for payload in nested:
+            if payload is None:
+                return True
+            if isinstance(payload, list):
+                payload = shlex.join(payload)
+            if _read_cwd_uncertain(payload, depth + 1):
+                return True
+    return False
+
+
+
+def _cwd_dependent_read(argv: list[str] | None) -> bool:
+    if argv is None:
+        return True
+    name = argv[0]
+    if name in _READ_CWD_CHANGERS:
+        return False
+    # Nested commands are checked separately. A shell payload is not a file operand.
+    if name in (_SHELL_EXECUTABLES | _WINDOWS_SHELL_EXECUTABLES) and _nested_commands(argv):
+        return False
+    # Push authority has its own exact target/grant checks; ref names are not read paths.
+    if name == 'git' and _git_subcommand([word.lower() for word in argv])[0] == 'push':
+        return False
+    return bool(_secret_path_words(argv))
+
+
+@_bounded_invocation(_BUDGET_MARKER)
+def shell_secret_reference(
+    root: Path, command: str, patterns: list[str], *, execution_cwd: object = _UNSPECIFIED_READ_CWD,
+) -> str | None:
     """First secret path a shell command names, under any quoting, nesting or option form.
 
     The command is tokenized (never executed); per-command path operands are checked,
@@ -3302,14 +3635,30 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     PreToolUse timeout (review S59-1). The result is memoized for the life of the process
     so the hook never pays for the same scan twice (sensitive_action + evaluate_pre_tool).
     """
+    directory = _read_directory(root, execution_cwd)
+    if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
+        return _BUDGET_MARKER
+    commands = _simple_commands(command)
+    if _read_cwd_uncertain(command) and any(
+        _cwd_dependent_read(argv) for argv in commands
+    ):
+        return _UNKNOWN_READ_CWD
+    if directory is None:
+        # Explicit unknown native cwd must never become a public root-relative read.
+        return _UNKNOWN_READ_CWD if any(
+            argv is None or bool(_secret_path_words(argv)) for argv in _simple_commands(command)
+        ) else None
     # The reading is part of the key: Windows and Git Bash read the same text differently.
     # Owner opt-ins change the verdict, so the project policy is part of the key too.
     try:
         owner = (root / PROJECT_POLICY).read_bytes()
     except OSError:
         owner = b''
-    key = (str(root), command, tuple(patterns), _windows_reading(), owner)
-    if key in _SECRET_SCAN_CACHE:
+    key = (str(root), str(directory), command, tuple(patterns), _windows_reading(), owner)
+    # Recursive scope needs current target metadata, not an earlier directory verdict.
+    cacheable = not any(argv and _is_recursive_reader(argv) and _secret_path_words(argv) is not None
+                        for argv in commands)
+    if cacheable and key in _SECRET_SCAN_CACHE:
         return _SECRET_SCAN_CACHE[key]
     if len(command) > _COMMAND_SCAN_BYTE_LIMIT:
         _SECRET_SCAN_CACHE[key] = _BUDGET_MARKER
@@ -3320,19 +3669,19 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     budget = _current_invocation_budget()
     result: str | None = None
     try:
-        handoffs = _consumer_handoffs(root, command)
+        handoffs = _consumer_handoffs(root, command, execution_cwd=directory)
         for argv in _simple_commands(command):
             hit = (
-                _raw_secret_reference(root, command, patterns, budget)
+                _raw_secret_reference(root, command, patterns, budget, execution_cwd=directory)
                 if argv is None
-                else _argv_secret_reference(root, argv, patterns, budget, handoffs)
+                else _argv_secret_reference(root, argv, patterns, budget, handoffs, execution_cwd=directory)
             )
             if hit is not None:
                 result = hit
                 break
     except _BudgetExceeded:
         result = _BUDGET_MARKER
-    if len(_SECRET_SCAN_CACHE) < 256:
+    if cacheable and len(_SECRET_SCAN_CACHE) < 256:
         _SECRET_SCAN_CACHE[key] = result
     return result
 
@@ -3354,13 +3703,14 @@ def evaluate_pre_tool(
     *,
     _skip_substring_control_plane_guard: bool = False,
     execution_cwd: Path | None = None,
+    _execution_cwd: object = _UNSPECIFIED_READ_CWD,
 ) -> tuple[bool, str | None]:
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     route = get_active_route(root)
-    config = load_json(root / '.getzilla/config/policy.json', {}) or {}
-    if not isinstance(config, dict):
-        config = {}
+    config = load_json(root / '.getzilla/config/policy.json', None)
+    if not isinstance(config, dict) or config.get('schema_version') != 2:
+        return False, 'Mandatory policy configuration missing or invalid.'
     control_plane = _configured_patterns(config, 'control_plane_paths', DEFAULT_CONTROL_PLANE)
     protected = _configured_patterns(config, 'protected_paths', DEFAULT_PROTECTED)
     secret_read = _configured_patterns(config, 'secret_read_paths', DEFAULT_SECRET_READ)
@@ -3378,11 +3728,13 @@ def evaluate_pre_tool(
         )
         if pattern is not None:
             return False, f'Blocked destructive command by repository policy: {pattern}'
-        secret = shell_secret_reference(root, command, secret_read)
+        secret = shell_secret_reference(root, command, secret_read, execution_cwd=_execution_cwd)
         if secret == _GH_OPAQUE_MARKER:
             return False, 'GitHub CLI arguments must be literal; quote or escape data and use explicit option values.'
+        if secret == _BUDGET_MARKER:
+            return False, f'Reading secret material is blocked: {_BUDGET_MARKER}'
         if secret is not None:
-            return False, f'Reading secret material is blocked: the shell command references {secret}'
+            return False, 'Reading secret material is blocked by repository policy.'
         authority = analyze_command_authority(command)
         if authority.ambiguous or (authority.actions and not authority.context_proven):
             return False, (
@@ -3437,6 +3789,11 @@ def evaluate_pre_tool(
                 return False, f'Live paid run of {paid_resource} is blocked: {gate_reason}'
         http_resource = mutations.invocations[0].external if mutations.invocations else None
         if http_resource:
+            parsed_paid_target = urlsplit(http_resource)
+            paid_hosts = {'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai',
+                          'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com'}
+            if (parsed_paid_target.hostname or '').lower().rstrip('.') in paid_hosts:
+                return False, 'Direct paid provider dispatch requires durable paid-operation admission; generic external-write grants do not apply.'
             from .human_gates import gate_block_reason
 
             gate_reason = gate_block_reason(root, 'external-write', 'external-write', http_resource)
@@ -3450,10 +3807,7 @@ def evaluate_pre_tool(
         candidate_paths.extend(_extract_patch_paths(str(tool_input.get('command', tool_input.get('patch', '')))))
 
     lowered_tool = tool.lower()
-    is_read = (
-        lowered_tool in {'read', 'read_file', 'open_file', 'fs_read', 'grep', 'notebookread', 'search'}
-        or ('read' in lowered_tool and tool.startswith('mcp__'))
-    )
+    is_read = is_read_tool(tool)
     is_write = tool in {'apply_patch', 'Edit', 'Write', 'MultiEdit'} or any(word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file'))
 
     normalized: list[str] = []
@@ -3466,34 +3820,9 @@ def evaluate_pre_tool(
         normalized.append(rel)
 
     if is_read:
-        budget = _current_invocation_budget()
-        is_grep = isinstance(tool_input, dict) and lowered_tool == 'grep'
-        glob_filter = tool_input.get('glob') if is_grep else None
-        glob_filter = glob_filter if isinstance(glob_filter, str) and glob_filter else None
-        search_inputs = list(candidate_paths)
-        try:
-            if is_grep and glob_filter:
-                # A grep glob names the files ripgrep opens even with no path given; a glob that
-                # targets secret material (`glob='.env'`, `'**/server.key'`) is a read (review S59-3).
-                # ripgrep globs take `{a,b}` alternatives: check every alternative (#64).
-                search_inputs.extend(_brace_expand(glob_filter))
-            for raw in search_inputs:
-                if not isinstance(raw, str) or not raw:
-                    continue
-                if _secret_reference(root, raw, secret_read, budget=budget):
-                    rel = safe_relative_path(root, raw)
-                    return False, f'Reading secret material is blocked: {rel if rel is not None else raw}'
-                directory = _resolve_under_root(root, raw)
-                if directory and os.path.isdir(directory):
-                    hit = _walk_for_secret(
-                        root, directory, secret_read, budget, glob_filter,
-                        skip_hidden=is_grep and glob_filter is None,
-                    )
-                    if hit is not None:
-                        rel = safe_relative_path(root, hit)
-                        return False, f'Reading secret material is blocked: {rel if rel is not None else hit}'
-        except _BudgetExceeded:
-            return False, f'Reading secret material is blocked: {_BUDGET_MARKER}'
+        secret = read_secret_reference(root, tool, tool_input, secret_read, execution_cwd=_execution_cwd)
+        if secret is not None:
+            return False, 'Reading secret material is blocked by repository policy.'
 
     if is_write:
         for rel in normalized:
@@ -3504,6 +3833,11 @@ def evaluate_pre_tool(
 
     if tool == 'Agent' or lowered_tool in {'spawn_agent', 'agent'}:
         agent_type = _agent_type(tool_input)
+        if (not route or route.get('schema_version') != 1 or not isinstance(route.get('allowed_agents'), list)
+                or not route.get('route_id') or not agent_type
+                or not all(isinstance(item, str) and item for item in route['allowed_agents'])
+                or route.get('write_agent') not in route['allowed_agents']):
+            return False, 'Mandatory agent route missing or invalid.'
         if route and agent_type:
             allowed = set(route.get('allowed_agents', []))
             if agent_type not in allowed:
@@ -3516,6 +3850,9 @@ def evaluate_pre_tool(
                 active = active_write_agents(root, roles)
                 if active:
                     return False, f'Another write agent is already active: {active}'
+
+    if tool.startswith('mcp__') and re.search(r'__(?:openai|anthropic|xai|suno|image_gen|imagegen)__', tool, re.IGNORECASE) and re.search(r'(?:generate|imagegen|completion|inference|create_image|create_video)', tool, re.IGNORECASE):
+        return False, 'Paid inference, image and video tools require separate durable paid-operation authority; generic external-write grants do not apply.'
 
     if mcp_side_effect(tool, root):
         from .human_gates import gate_block_reason

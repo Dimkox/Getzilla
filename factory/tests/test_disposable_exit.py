@@ -1,11 +1,15 @@
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 import io
+import tempfile
+from pathlib import Path
 import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from factory.tests import run_disposable_exit as runner
+from getzilla.disposable_resources import CleanupUnconfirmed
+from getzilla import live_acceptance
 
 
 CONTAINER_ID = "a" * 64
@@ -17,10 +21,96 @@ PASS_LINE = (
 DIAGNOSTIC_SENTINEL = "test-only-diagnostic-payload"
 
 
+class LiveProducerSourceTests(unittest.TestCase):
+    def test_live_commands_use_the_running_controller_interpreter(self):
+        binding = dict(head='a'*40, tree='b'*40, run_id='owned', attempt='1', cell='factory',
+                       namespace='gz-owned', nonce='c'*32, producer_sha256='d'*64)
+        owner = unittest.mock.Mock()
+        owner.nonce, owner.namespace = binding['nonce'], binding['namespace']
+        owner.network.return_value = {'identity': {'Id': 'e'*64}}
+        commands = []
+        with tempfile.TemporaryDirectory() as raw, ExitStack() as owned:
+            output = Path(raw)
+            controller = live_acceptance._FactoryEnvironment(output)
+            owned.callback(lambda: self.assertEqual(controller.cleanup(child_exit_confirmed=True)['status'], 'removed'))
+            environment = controller.path
+            owner.manifest = output / 'factory-resources.json'
+            with patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING': 'owned',
+                    'GETZILLA_LIVE_ARTIFACTS': raw, 'UV_PROJECT_ENVIRONMENT': str(environment)}), \
+                    patch.object(runner, 'read_document', return_value=binding), \
+                    patch.object(runner, 'OwnedDocker', return_value=owner), \
+                    patch.object(runner, '_postgres', side_effect=[
+                        ({'id': '1'*64, 'name': 'owned-primary'}, 'postgresql://owned/primary'),
+                        ({'id': '2'*64, 'name': 'owned-fresh'}, 'postgresql://owned/fresh')]), \
+                    patch.object(runner, '_internal_endpoint'), \
+                    patch.object(runner, 'acknowledge_cleanup'), patch.object(runner, 'seal_component'), \
+                    patch.object(runner, '_run', side_effect=lambda command, **kwargs: commands.append((command, kwargs))), \
+                    patch('subprocess.Popen', side_effect=AssertionError('unexpected native effect')):
+                self.assertEqual(runner._live_main(), 0)
+            self.assertEqual(len(commands), 4)
+            self.assertEqual(controller.python,
+                environment / ('Scripts/python.exe' if runner.os.name == 'nt' else 'bin/python3'))
+            for command, options in commands:
+                self.assertEqual(command[:7], ['uv', 'run', '--python', runner.sys.executable,
+                                               '--project', str(runner.ROOT/'factory'), str(controller.python)])
+                self.assertEqual(options['environment']['UV_PROJECT_ENVIRONMENT'], str(environment))
+            self.assertEqual(commands[2][1]['timeout'], runner._FULL_SUITE_TIMEOUT_SECONDS)
+            owner.cleanup.assert_called_once()
+
+    def test_bound_live_failure_keeps_primary_when_owned_cleanup_fails(self):
+        import tempfile
+        primary = RuntimeError('owned primary')
+        cleanup = PermissionError('owned cleanup')
+        binding = {'head':'a'*40,'tree':'b'*40,'run_id':'owned','attempt':'1','cell':'factory',
+                   'namespace':'gz-owned','nonce':'c'*32,'producer_sha256':'d'*64}
+        owner = unittest.mock.Mock()
+        owner.cleanup.side_effect = cleanup
+        with tempfile.TemporaryDirectory() as raw, \
+                patch('subprocess.Popen', side_effect=AssertionError('unmocked child forbidden')), \
+                patch('socket.socket.connect', side_effect=AssertionError('unmocked network forbidden')), \
+                patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING':'owned', 'GETZILLA_LIVE_ARTIFACTS':raw}), \
+                patch.object(runner,'read_document',return_value=binding), \
+                patch.object(runner,'OwnedDocker',return_value=owner), \
+                patch.object(runner,'_postgres',side_effect=primary):
+            environment=runner.Path(raw)/'factory-live-venv-owned'
+            environment.mkdir(mode=0o700)
+            runner.os.environ['UV_PROJECT_ENVIRONMENT']=str(environment)
+            with self.assertRaises(RuntimeError) as caught:
+                runner.main()
+        self.assertIs(caught.exception, primary)
+        owner.cleanup.assert_called_once()
+        self.assertTrue(any('cleanup=resources' in note for note in caught.exception.__notes__))
+
+
 class DisposableExitTests(unittest.TestCase):
+    def setUp(self):
+        # Independent image observation, not inferred from the container being checked.
+        self.enterContext(patch.object(runner, 'runtime_image_id', return_value=runner.POSTGRES['image_id']))
+
+    def test_error_diagnostics_name_only_a_fixed_docker_operation(self):
+        for command, operation in ((["docker", "port", CONTAINER_ID, "5432/tcp"], "docker.port"),
+                                   (["docker", "run", "--env", (''.join(('POSTGRES_', 'PASSWORD', '=')) + DIAGNOSTIC_SENTINEL) + DIAGNOSTIC_SENTINEL], "docker.run"),
+                                   (["docker", "network", "inspect", DIAGNOSTIC_SENTINEL], "docker.network.inspect")):
+            with self.subTest(operation=operation):
+                error = subprocess.CalledProcessError(1, command, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL)
+                detail = runner._error_detail(error)
+                self.assertIn("operation=" + operation, detail)
+                self.assertNotIn(DIAGNOSTIC_SENTINEL, detail)
+        detail = runner._error_detail(subprocess.CalledProcessError(1, ["docker", DIAGNOSTIC_SENTINEL]))
+        self.assertNotIn(DIAGNOSTIC_SENTINEL, detail)
+
+    def test_locked_commands_use_the_running_controller_interpreter(self):
+        with self.harness() as run:
+            self.assertEqual(runner.main(), 0)
+        self.assertEqual(len(run.commands), 4)
+        for command, _options in run.commands:
+            self.assertEqual(command[:7], ['uv', 'run', '--locked', '--python', runner.sys.executable,
+                                           '--project', 'factory'])
+
     @contextmanager
     def harness(self, *, primary=None, venv_error=None, container_error=None):
         events = []
+        commands = []
         stdout = io.StringIO()
         stderr = io.StringIO()
 
@@ -39,40 +129,53 @@ class DisposableExitTests(unittest.TestCase):
                     raise venv_error
 
         def docker(command, **_kwargs):
-            if command[:2] == ["docker", "run"]:
-                events.append("create")
-                return subprocess.CompletedProcess(command, 0, CONTAINER_ID)
             if command == ["docker", "port", CONTAINER_ID, "5432/tcp"]:
-                return subprocess.CompletedProcess(command, 0, "127.0.0.1:5432\n")
+                return subprocess.CompletedProcess(command, 0, "127.0.0.1:6543\n")
             self.fail(f"unexpected subprocess: {command[:2]}")
 
-        def execute(command, **_kwargs):
-            phase = (
-                "suite" if "unittest" in command
-                else "preflight" if "--preflight-only" in command
-                else "restart"
-            )
+        def execute(command, **kwargs):
+            commands.append((command, dict(kwargs, environment=dict(kwargs.get("environment", {})))))
+            phase = ("suite" if "factory/tests/run_live_suite.py" in command
+                     else "preflight" if "--preflight-only" in command else "restart")
             events.append(phase)
             if phase == "suite" and primary is not None:
                 raise primary
 
-        def remove(container_id, _name, _nonce):
-            self.assertEqual(container_id, CONTAINER_ID)
+        def remove():
             events.append("container-cleanup")
             if container_error is not None:
                 raise container_error
 
-        with (
-            patch.object(runner.subprocess, "run", side_effect=docker),
-            patch.object(runner, "_binding_matches", return_value=True),
-            patch.object(runner, "_final_postgres_ready", return_value=True),
-            patch.object(runner, "_run", side_effect=execute),
-            patch.object(runner, "_remove_bound_container", side_effect=remove),
-            patch.object(runner.tempfile, "TemporaryDirectory", return_value=Environment()),
-            redirect_stdout(stdout),
-            redirect_stderr(stderr),
-        ):
-            yield SimpleNamespace(events=events, stdout=stdout, stderr=stderr)
+        owner = SimpleNamespace(namespace="gz-fixture", nonce="b" * 32,
+                                manifest=Path("/inert/factory-resources.json"),
+                                network=lambda _suffix: {"identity": {"Id": "d" * 64}}, cleanup=remove)
+        def create(_owner, suffix, _password, _network):
+            events.append("create" if suffix == "db" else "fresh-create")
+            identifier = CONTAINER_ID if suffix == "db" else "c" * 64
+            host = "172.28.0.2" if suffix == "db" else "172.28.0.3"
+            return {"id": identifier, "name": "gz-fixture-" + suffix}, f"postgresql://factory_exit:synthetic@{host}:5432/factory_exit"
+
+        def endpoint(_owner, item, _network):
+            return ("172.28.0.2" if item["id"] == CONTAINER_ID else "172.28.0.3"), 5432
+
+        with tempfile.TemporaryDirectory(dir=runner.ROOT / '.getzilla/runtime') as owned_output:
+            owner.manifest = Path(owned_output) / 'factory-resources.json'
+            with (
+                patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING': ''}),
+                patch.object(runner.subprocess, "run", side_effect=docker),
+                patch.object(runner, "runtime_image_id", return_value=runner.POSTGRES["image_id"]),
+                patch.object(runner, "_binding_matches", return_value=True),
+                patch.object(runner, "_final_postgres_ready", return_value=True),
+                patch.object(runner, "_run", side_effect=execute),
+                patch.object(runner, "_new_owner", return_value=owner),
+                patch.object(runner, '_default_binding', return_value=dict(head='a'*40, tree='b'*40, run_id='local', attempt='1', cell='factory', namespace=owner.namespace, nonce=owner.nonce, producer_sha256='c'*64)),
+                patch.object(runner, "_postgres", side_effect=create),
+                patch.object(runner, "_internal_endpoint", side_effect=endpoint),
+                patch.object(runner.tempfile, "TemporaryDirectory", return_value=Environment()),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                yield SimpleNamespace(events=events, commands=commands, owner=owner, stdout=stdout, stderr=stderr)
 
     def test_pass_is_emitted_only_after_both_finalizers_succeed(self):
         with self.harness() as run:
@@ -82,8 +185,26 @@ class DisposableExitTests(unittest.TestCase):
             printed.assert_called_once_with(PASS_LINE)
         self.assertEqual(
             run.events,
-            ["create", "preflight", "suite", "restart", "venv-cleanup", "container-cleanup", "printed"],
+            ["create", "preflight", "fresh-create", "preflight", "suite", "restart", "venv-cleanup", "container-cleanup", "printed"],
         )
+
+    def test_main_propagates_exact_network_authority_to_each_preflight(self):
+        with self.harness() as run:
+            self.assertEqual(runner.main(), 0)
+        for _command, options in run.commands:
+            environment = options["environment"]
+            self.assertEqual(environment.get("FACTORY_TEST_POSTGRES_NETWORK_ID"), "d" * 64)
+            self.assertEqual(environment.get("FACTORY_TEST_POSTGRES_NAMESPACE"), "gz-fixture")
+
+    def test_changed_endpoint_after_preflight_blocks_mutating_suite_and_still_cleans_up(self):
+        with self.harness() as run:
+            with patch.object(runner, "_internal_endpoint", return_value=("172.28.0.99", 5432)):
+                self.assertEqual(runner._cli(), 1)
+        self.assertNotIn("suite", run.events)
+        self.assertNotIn("restart", run.events)
+        self.assertEqual(run.events[-2:], ["venv-cleanup", "container-cleanup"])
+        self.assertIn("phase=suite-bind", run.stderr.getvalue())
+        self.assertNotIn(PASS_LINE, run.stdout.getvalue())
 
     def test_success_with_failed_cleanup_never_prints_pass(self):
         for venv_error, container_error in (
@@ -105,57 +226,29 @@ class DisposableExitTests(unittest.TestCase):
     def test_real_container_removal_is_checked_bounded_and_controls_result(self):
         for remove_exit in (0, 17):
             with self.subTest(remove_exit=remove_exit):
-                calls, finalizers, owner = [], [], {}
-                stdout, stderr = io.StringIO(), io.StringIO()
-
+                calls = []
                 def docker(command, **kwargs):
                     calls.append((command, kwargs))
-                    if command[:2] == ["docker", "run"]:
-                        owner["name"] = command[command.index("--name") + 1]
-                        owner["nonce"] = command[command.index("--label") + 1].split("=", 1)[1]
-                        return subprocess.CompletedProcess(command, 0, CONTAINER_ID)
                     if command[:2] == ["docker", "inspect"]:
-                        metadata = "\t".join((
-                            CONTAINER_ID, "/" + owner["name"], "postgres:17-alpine", "true", owner["nonce"],
-                        ))
+                        metadata = "\t".join((CONTAINER_ID, "/gz-fixture-db", runner.POSTGRES["reference"],
+                                               "false", "b" * 32, runner.POSTGRES["image_id"]))
                         return subprocess.CompletedProcess(command, 0, metadata)
-                    if command == ["docker", "port", CONTAINER_ID, "5432/tcp"]:
-                        return subprocess.CompletedProcess(command, 0, "127.0.0.1:5432")
-                    if command[:2] == ["docker", "rm"]:
-                        finalizers.append("container")
-                        if remove_exit and kwargs.get("check"):
-                            raise subprocess.CalledProcessError(
-                                remove_exit, command, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL,
-                            )
-                        return subprocess.CompletedProcess(command, remove_exit, "")
-                    self.fail(f"unexpected subprocess: {command[:2]}")
-
-                venv = SimpleNamespace(
-                    name="/inert/disposable-venv", cleanup=lambda: finalizers.append("venv"),
-                )
-                with (
-                    patch.object(runner.subprocess, "run", side_effect=docker),
-                    patch.object(runner.tempfile, "TemporaryDirectory", return_value=venv),
-                    patch.object(runner, "_final_postgres_ready", return_value=True),
-                    patch.object(runner, "_run"),
-                    redirect_stdout(stdout), redirect_stderr(stderr),
-                ):
-                    self.assertEqual(runner._cli(), 1 if remove_exit else 0)
-                self.assertEqual(finalizers, ["venv", "container"])
+                    if command[:2] == ["docker", "rm"] and remove_exit:
+                        raise subprocess.CalledProcessError(remove_exit, command)
+                    return subprocess.CompletedProcess(command, 0, "")
+                with patch.object(runner.subprocess, "run", side_effect=docker):
+                    if remove_exit:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            runner._remove_bound_container(CONTAINER_ID, "gz-fixture-db", "b" * 32)
+                    else:
+                        runner._remove_bound_container(CONTAINER_ID, "gz-fixture-db", "b" * 32)
                 removals = [(command, kwargs) for command, kwargs in calls if command[:2] == ["docker", "rm"]]
                 self.assertEqual(len(removals), 1)
-                command, kwargs = removals[0]
-                self.assertEqual(command, ["docker", "rm", "-f", CONTAINER_ID])
-                self.assertIs(kwargs.get("check"), True)
-                self.assertEqual(kwargs.get("timeout"), 30)
-                self.assertNotIn(DIAGNOSTIC_SENTINEL, stdout.getvalue() + stderr.getvalue())
-                if remove_exit:
-                    self.assertNotIn(PASS_LINE, stdout.getvalue())
-                    self.assertIn("primary=passed", stderr.getvalue())
-                    self.assertIn("container=unconfirmed", stderr.getvalue())
-                    self.assertIn("exit=17", stderr.getvalue())
-                else:
-                    self.assertEqual(stdout.getvalue().strip(), PASS_LINE)
+                self.assertEqual(removals[0][0], ["docker", "rm", "-f", CONTAINER_ID])
+                self.assertIs(removals[0][1]["check"], True)
+                self.assertEqual(removals[0][1]["timeout"], 30)
+                if not remove_exit:
+                    self.assertEqual(calls[-1][0][:3], ["docker", "container", "ls"])
 
     def test_cleanup_only_failure_retains_both_original_exception_objects(self):
         venv_error = PermissionError(DIAGNOSTIC_SENTINEL)
@@ -279,71 +372,40 @@ class DisposableExitTests(unittest.TestCase):
         self.assertNotIn(PASS_LINE, run.stdout.getvalue())
 
     def test_cli_reports_uncertain_creation_without_secret_argv_or_name_cleanup(self):
-        for failure_kind, expected in (("exit", 1), ("timeout", 124)):
-            calls = []
-
-            def failed_create(command, **_kwargs):
-                calls.append(command)
-                self.assertEqual(command[:2], ["docker", "run"])
-                if failure_kind == "timeout":
-                    raise subprocess.TimeoutExpired(command, 60, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL)
-                raise subprocess.CalledProcessError(125, command, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL)
-
-            stdout, stderr = io.StringIO(), io.StringIO()
-            with (
-                self.subTest(failure=failure_kind),
-                patch.object(runner.subprocess, "run", side_effect=failed_create),
-                patch.object(runner.uuid, "uuid4", return_value=SimpleNamespace(hex="e" * 32)),
-                redirect_stdout(stdout), redirect_stderr(stderr),
-            ):
-                self.assertEqual(runner._cli(), expected)
-            self.assertEqual(len(calls), 1)
-            self.assertNotIn(PASS_LINE, stdout.getvalue())
-            report = stderr.getvalue()
-            self.assertIn("phase=container-create", report)
-            self.assertIn("venv=not_created", report)
-            self.assertIn("container=unbound", report)
-            for private in (DIAGNOSTIC_SENTINEL, "POSTGRES_PASSWORD", "local-" + "e" * 32, "postgresql://"):
-                self.assertNotIn(private, report)
+        for failure, expected in ((subprocess.CalledProcessError(125, [DIAGNOSTIC_SENTINEL]), 1),
+                                  (subprocess.TimeoutExpired([DIAGNOSTIC_SENTINEL], 60), 124)):
+            with self.subTest(failure=type(failure).__name__), self.harness() as run:
+                with patch.object(runner, "_postgres", side_effect=failure):
+                    self.assertEqual(runner._cli(), expected)
+                self.assertEqual(run.events, ["container-cleanup"])
+                self.assertNotIn(PASS_LINE, run.stdout.getvalue())
+                report = run.stderr.getvalue()
+                self.assertIn("phase=container-create", report)
+                self.assertIn("venv=not_created", report)
+                self.assertIn("container=removed", report)
+                self.assertNotIn(DIAGNOSTIC_SENTINEL, report)
 
     def test_cli_does_not_echo_unvalidated_container_output(self):
-        result = subprocess.CompletedProcess(["docker", "run"], 0, DIAGNOSTIC_SENTINEL)
-        stderr = io.StringIO()
-        with (
-            patch.object(runner.subprocess, "run", return_value=result) as called,
-            patch.object(runner, "_remove_bound_container") as remove,
-            redirect_stderr(stderr),
-        ):
-            self.assertEqual(runner._cli(), 1)
-        self.assertEqual(called.call_count, 1)
-        remove.assert_not_called()
-        self.assertIn("container=unbound", stderr.getvalue())
-        self.assertIn("container_id=unknown", stderr.getvalue())
-        self.assertNotIn(DIAGNOSTIC_SENTINEL, stderr.getvalue())
+        with self.harness() as run:
+            with patch.object(runner, "_postgres", side_effect=ValueError(DIAGNOSTIC_SENTINEL)):
+                self.assertEqual(runner._cli(), 1)
+            self.assertIn("container_id=unknown", run.stderr.getvalue())
+            self.assertNotIn(DIAGNOSTIC_SENTINEL, run.stderr.getvalue())
+            self.assertNotIn(PASS_LINE, run.stdout.getvalue())
 
     def test_changed_binding_at_cleanup_is_unconfirmed_and_never_removed(self):
-        remove = runner._remove_bound_container
-        with self.harness() as run:
-            with (
-                patch.object(runner, "_remove_bound_container", new=remove),
-                patch.object(runner, "_binding_matches", side_effect=[True, True, False]),
-                patch.object(runner.subprocess, "run", wraps=runner.subprocess.run) as called,
-            ):
-                self.assertEqual(runner._cli(), 1)
-        self.assertEqual(
-            [call.args[0][:2] for call in called.call_args_list],
-            [["docker", "run"], ["docker", "port"], ["docker", "port"]],
-        )
+        # The real live identity/absence decisions are exercised by IsolatedResourceTests.
+        with self.harness(container_error=CleanupUnconfirmed("changed")) as run:
+            self.assertEqual(runner._cli(), 1)
         self.assertNotIn(PASS_LINE, run.stdout.getvalue())
         self.assertIn("primary=passed", run.stderr.getvalue())
         self.assertIn("container=unconfirmed", run.stderr.getvalue())
-        self.assertIn("error=RuntimeError", run.stderr.getvalue())
 
     def test_changed_or_unobservable_identity_never_authorizes_removal(self):
         name, nonce = "adaptive-factory-exit-owner", "b" * 32
-        valid = [CONTAINER_ID, f"/{name}", "postgres:17-alpine", "false", nonce]
+        valid = [CONTAINER_ID, f"/{name}", runner.POSTGRES["reference"], "false", nonce, runner.POSTGRES["image_id"]]
         invalid = []
-        for index, value in ((0, "c" * 64), (1, "/foreign"), (2, "postgres:18-alpine"), (3, "unknown"), (4, "d" * 32)):
+        for index, value in ((0, "c" * 64), (1, "/foreign"), (2, "postgres:18-alpine"), (3, "unknown"), (4, "d" * 32), (5, "sha256:" + "0" * 64)):
             fields = list(valid)
             fields[index] = value
             invalid.append(subprocess.CompletedProcess([], 0, "\t".join(fields)))

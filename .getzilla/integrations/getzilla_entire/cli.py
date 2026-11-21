@@ -6,11 +6,11 @@ import json
 import os
 from pathlib import Path
 
-from .client import EntireClient, EntireError
+from .client import EntireClient, EntireError, read_metadata
 from .operations import EntireAdapter
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, authority=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path.cwd(), help='project Git root (default: current directory)')
     parser.add_argument('--context', help='explicit saved Entire context; no implicit login')
@@ -40,13 +40,19 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument('--head', required=True)
     create.add_argument('--request-id', required=True)
     for name, help_text in [('checks', 'inspect provider gates without granting merge authority'),
-                            ('merge', 'explicit unsupported result until external CI provenance is implemented')]:
+                            ('merge', 'ordinary exact-head merge with an operator-configured protected CI authority')]:
         command = commands.add_parser(name, help=help_text)
         command.add_argument('trail_id')
         command.add_argument('--head', required=True)
+        if name == 'merge':
+            command.add_argument('--branch')
+            command.add_argument('--base')
+            command.add_argument('--base-head')
+            command.add_argument('--proof', type=Path)
+            command.add_argument('--request-id')
     args = parser.parse_args(argv)
     try:
-        if args.command == 'merge':
+        if args.command == 'merge' and authority is None:
             raise EntireError('unsupported', 'Entire automated merge is unsupported; a trusted external CI adapter '
                               'bound to this repository, Trail and exact commit is required')
         if not args.context:
@@ -57,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             raise EntireError('unsupported_os', 'Entire remote operations currently require POSIX process-group cleanup')
         root = args.root.resolve(strict=True)
         client = EntireClient(root, context=args.context, timeout=args.timeout)
-        adapter = EntireAdapter(root, client)
+        adapter = EntireAdapter(root, client, authority=authority)
         if args.command == 'status':
             result = adapter.status()
         elif args.command == 'clone':
@@ -66,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
             result = adapter.fetch(args.branch)
         elif args.command == 'push':
             result = adapter.push(args.branch, args.head, args.request_id)
+        elif args.command == 'merge':
+            if args.proof is None:
+                raise EntireError('merge_identity', 'a source-bound accepted-check proof is required')
+            result = adapter.merge(args.trail_id, args.head, branch=args.branch, base=args.base,
+                                   base_head=args.base_head, proof=read_metadata(args.proof), request_id=args.request_id)
         elif args.command == 'checks':
             result = adapter.checks(args.trail_id, args.head)
         elif args.trail_command in {'list', 'show'}:

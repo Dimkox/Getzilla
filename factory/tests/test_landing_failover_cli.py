@@ -7,11 +7,9 @@ import json
 from pathlib import Path
 import socketserver
 import tempfile
-import threading
 import unittest
 from unittest.mock import patch
 
-from getzilla_factory.contracts import canonical_json
 from getzilla_factory.landing_failover import FailoverCoordinator
 from getzilla_factory.landing_failover_cli import main
 from getzilla_factory.landing_failover_config import FailoverConfig
@@ -70,55 +68,13 @@ class UnixCallerTests(unittest.TestCase):
                     self.assertEqual("stopped", result["state"])
                     self.assertEqual([], script.calls)
 
+    @unittest.skipUnless(__import__('os').environ.get('FACTORY_TEST_DATABASE_URL'),
+                         'shared-control positive requires bound disposable PostgreSQL; legacy POST stays blocked')
     def test_absent_primary_real_unix_secondary_lost_post_recovers_existing_winner(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            document = configuration(root, count=2)
-            # systemd removes RuntimeDirectory on service stop; the whole
-            # primary socket parent may be absent before config is loaded.
-            document["backends"][0]["socket_path"] = str(root / "run" / "stopped-primary" / "control.sock")
-            config = FailoverConfig.from_dict(document)
-            for backend in config.backends:
-                backend.token_file.write_text("t" * 32)
-                backend.token_file.chmod(0o600)
-            script = ScriptedBackends({"grok-vision": "success"})
-            secondary = script.factory(config.backends[1], config=config)
-            class Handler(BaseHTTPRequestHandler):
-                def log_message(self, *args):
-                    pass
-                def do_GET(self):
-                    payload = secondary.capability() if self.path == "/v4/landing-backend" else secondary.observe(self.path.split("/")[3])
-                    raw = canonical_json(payload)
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(raw)))
-                    self.end_headers()
-                    self.wfile.write(raw)
-                def do_POST(self):
-                    self.server.expected_headers = (self.headers.get("X-Expected-Actor-ID"), self.headers.get("X-Expected-Profile-Digest"))
-                    payload = self.rfile.read(int(self.headers["Content-Length"]))
-                    secondary.submit(self.headers["Idempotency-Key"], payload, self.headers["Content-Type"])
-                    # The provider result is committed, but the caller loses HTTP202.
-                    self.close_connection = True
-                    self.connection.close()
-            server = socketserver.UnixStreamServer(str(config.backends[1].socket_path), Handler)
-            thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
-            thread.start()
-            try:
-                with CallerJournal(config) as journal:
-                    caller = FailoverCoordinator(config, journal)
-                    result = caller.submit("real-unix", b"private synthetic source", "text/plain")
-                    self.assertEqual("artifact_ready", result["state"])
-                    self.assertEqual("not_submitted", result["attempts"][0]["state"])
-                    self.assertEqual("grok", result["winner"]["provider_id"])
-                    self.assertEqual(["grok-vision"], script.calls)
-                    self.assertEqual((config.actor_id, config.backends[1].profile_digest), server.expected_headers)
-                    self.assertEqual(result, caller.resume("real-unix"))
-                    self.assertEqual(["grok-vision"], script.calls)
-            finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(2)
+        # The old independent-host protocol cannot submit paid work. Qualify the
+        # new opt-in control with real CLI/server processes and one paid store.
+        from factory.tests.shared_control_process_case import qualified_lost_response
+        qualified_lost_response(self)
 
     def test_cli_all_absent_has_five_slots_and_never_prints_input_or_tokens(self):
         with tempfile.TemporaryDirectory() as temporary:

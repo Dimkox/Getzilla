@@ -1,6 +1,7 @@
 """Owned root Stop must not lose unfinished work even without a success claim."""
 from __future__ import annotations
 
+
 import json
 import os
 import shutil
@@ -168,7 +169,8 @@ class StopContinuationTests(unittest.TestCase):
                 self.assertEqual(data.get('decision') == 'block', bool(expected), data)
 
     def test_current_receipts_do_not_waive_unchecked_plan(self):
-        with project_copy(git=True) as root:
+        from tests._support import owned_verification_report
+        with project_copy(git=True, verification_fixture=True) as root:
             self.package(root, evidence=('verification',))
             source = prepare_review_source(root)
             # Reconciliation may add review kinds. Keep a structurally complete package,
@@ -180,9 +182,11 @@ class StopContinuationTests(unittest.TestCase):
                  'reason': 'Fixture initial accounting before receipt publication.'}
                 for kind in state.get_active_route(root)['required_evidence']]
             (path / 'state.json').write_text(json.dumps(package_state), encoding='utf-8')
+            report = owned_verification_report(root)
+            self.assertEqual(report['check_status'], 'pass', report['checks'])
             for kind in state.get_active_route(root)['required_evidence']:
                 write_receipt(root, kind, 'pass', expected_context=observed_context(root),
-                              **({} if kind == 'verification' else source))
+                              **({'details': report} if kind == 'verification' else source))
             self.assertEqual(validate_evidence(root, state.get_active_route(root)), [])
             data = self.root_stop(root)
             self.assertEqual(data.get('decision'), 'block', data)
@@ -334,7 +338,8 @@ class StopContinuationTests(unittest.TestCase):
             self.package(root)
             generated = render(PROJECT, repository_all=True)
             for path in ('.claude/settings.json', '.codex/hooks.json'):
-                config = json.loads(generated[path])
+                from getzilla import harnesses
+                config = json.loads(harnesses.platform_hook_payload(path, generated[path], source_launcher=False))
                 command = config['hooks']['Stop'][0]['hooks'][0]['command']
                 proc = subprocess.run(['bash', '-c', command], cwd=root, capture_output=True,
                                       input=json.dumps({'cwd': str(root), 'session_id': 's1',

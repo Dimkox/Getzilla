@@ -23,7 +23,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         config = self.root / '.getzilla/config'
         config.mkdir(parents=True)
-        (config / 'policy.json').write_text('{}\n')
+        (config / 'policy.json').write_text('{"schema_version": 2}\n')
         (self.root / '.env').write_text('FIXTURE_ONLY=not-a-credential\n')
 
     def check(self, command):
@@ -158,7 +158,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
 
     def test_attached_scanner_paths_use_configured_secret_patterns(self):
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["fixture-sensitive.json"]}\n')
         for option in ('-c fixture-sensitive.json', '-cfixture-sensitive.json',
                        '-o fixture-sensitive.json', '-ofixture-sensitive.json'):
             with self.subTest(option=option):
@@ -168,7 +168,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
     def test_scanner_secret_operands_follow_possible_shell_directories(self):
         (self.root / 'nested/deeper').mkdir(parents=True)
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         # Config, report and positional source paths all use the command's directory.
         operands = (
             '-c fixture-sensitive.json -- example.py',
@@ -194,7 +194,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
     def test_scanner_directory_controls_keep_public_paths_and_fail_closed_when_unknown(self):
         (self.root / 'nested').mkdir()
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         # The || branch runs from the original directory when cd fails.
         for command in (
             'cd nested || python3 -m bandit -cfixture-sensitive.json -- example.py',
@@ -209,7 +209,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertFalse(self.check(command)[0], command)
-        (self.root / '.getzilla/config/policy.json').write_text('{}\n')
+        (self.root / '.getzilla/config/policy.json').write_text('{"schema_version": 2}\n')
         command = 'cd nested && python3 -m bandit -c.env.example -o.env.example -- example.py'
         self.assertTrue(self.check(command)[0], command)
 
@@ -218,7 +218,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
 
         (self.root / 'nested/deeper').mkdir(parents=True)
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         for prefix in ('cd nested || true; ', 'cd nested || true && ',
                        'cd nested && cd deeper || true; ', 'true || cd nested; '):
             for operand in ('-cfixture-sensitive.json -- example.py',
@@ -244,7 +244,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
         directory = self.root / 'nested'
         (directory / 'deeper').mkdir(parents=True)
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         # A failed command can skip cd; a later join resumes in the original directory.
         for separator in ('; ', '\n', ' & ', ' | ', ' |& '):
             for operand in ('-cfixture-sensitive.json -- example.py',
@@ -314,6 +314,32 @@ class ScratchPipPolicyTest(unittest.TestCase):
         allowed, reason = self.check(self.command + ' -r .getzilla/config/python-quality-requirements.txt')
         self.assertTrue(allowed, reason)
 
+    def test_bounded_markers_are_requirement_data_without_new_shell_authority(self):
+        self.requirements.write_text('pytest-cov==7.1.0\ncoverage[toml]==7.15.4\n')
+        allowed, reason = self.check(self.command)
+        self.assertTrue(allowed, reason)
+        for marker in ('python_version < "3.13"', 'python_version >= "3.11"', 'sys_platform == "win32"',
+                       'platform_system == "Windows"', 'python_version < "3.11" or python_full_version <= "3.11.0a6"'):
+            with self.subTest(marker=marker):
+                self.requirements.write_text('pytest==9.1.1\ntyping-extensions==4.16.0; ' + marker + '\n')
+                allowed, reason = self.check(self.command)
+                self.assertTrue(allowed, reason)
+        for invalid in ('typing-extensions==4.16.0;', 'typing-extensions==4.16.0; custom_setting == "yes"',
+                        'typing-extensions==4.16.0; python_version < "3.13" --index-url https://example.invalid',
+                        'typing-extensions[extra]==4.16.0; python_version < "3.13"',
+                        'coverage[other]==7.15.4', 'coverage[toml,other]==7.15.4',
+                        'typing-extensions>=4.16.0; python_version < "3.13"',
+                        'typing-extensions==4.16.0; python_version == "' + 'x' * 256 + '"'):
+            with self.subTest(invalid=invalid):
+                self.requirements.write_text(invalid + '\n')
+                allowed, reason = self.check(self.command)
+                self.assertFalse(allowed, reason)
+        self.requirements.write_text('pytest==9.1.1; python_version >= "3.10"\n')
+        for extra in (' --index-url https://example.invalid', ' ; echo done', ' --target .getzilla/config'):
+            with self.subTest(extra=extra):
+                allowed, reason = self.check(self.command + extra)
+                self.assertFalse(allowed, reason)
+
     def test_fixture_does_not_depend_on_the_test_runner_python_location(self):
         case = ScratchPipPolicyTest()
         try:
@@ -345,7 +371,7 @@ class ScratchPipPolicyTest(unittest.TestCase):
 
     def test_nested_requirements_and_non_pins_are_refused(self):
         for content in ('-r other.txt\n', '--target .grok\n', '-e .\n', 'pytest>=9\n',
-                        'pkg @ https://example.invalid/pkg.whl\n', 'pytest==9.1.1; python_version>="3"\n'):
+                        'pkg @ https://example.invalid/pkg.whl\n', 'pytest==9.1.1; unknown_environment>="3"\n'):
             with self.subTest(content=content):
                 self.requirements.write_text(content)
                 self.assertFalse(self.check(self.command)[0])

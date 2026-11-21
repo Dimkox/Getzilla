@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "kind": "shared-context-selection",
+  "index": "code-graph",
+  "native_authority_required": true,
+  "background_workers": 0,
+  "model_calls": 0
+}

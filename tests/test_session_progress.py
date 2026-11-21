@@ -442,7 +442,8 @@ class ProgressHookTests(unittest.TestCase):
                 results, stderr = [], io.StringIO()
                 with patch.object(progress, 'refusal', side_effect=RuntimeError('PRIVATE-OBSERVER')), \
                      patch.object(sys, 'stderr', stderr), \
-                     patch.dict(pre['main'].__globals__, {'read_payload': lambda: {**payload, 'tool_input': {'command': command}}, 'emit': results.append}):
+                     patch.object(sys, 'stdin', io.StringIO(json.dumps({**payload, 'tool_input': {'command': command}}))), \
+                     patch.dict(pre['main'].__globals__, {'emit': results.append}):
                     pre['main']()
                 self.assertEqual(results[-1]['decision'], decision, results[-1])
                 self.assertNotIn('PRIVATE', str(results) + stderr.getvalue())

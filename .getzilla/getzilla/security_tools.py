@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import time
 import stat
 import sys
 import tempfile
@@ -23,16 +24,21 @@ from pathlib import Path
 
 from . import verification_dispositions as dispositions
 from .python_test_runner import execute
-from .verification_journal import retain_stop, stop_details, updated_stop
+from .verification_actions import retain_stop, stop_details, updated_stop
 from .security_acquisition import MAX_DOWNLOAD, TRIVY_ARCHIVE_SHA256, TRIVY_VERSION, trivy_binary
 from .security_data import MAX_AGE_SECONDS, SecurityDataError
-from .updater import OPENGREP_ASSETS
+from .release_transport import OPENGREP_ASSETS
+from .security_oci_layout import OCIError, Budget as OCIBudget, read_directory as read_oci_directory, read_owned_file
+from .security_oci_transport import acquire_images as acquire_oci_images, retained_acquisition, validate_network_selection
 
 TRUSTED_ROOT = Path(__file__).resolve().parents[2]
 TRIVY_DB_URL = 'ghcr.io/aquasecurity/trivy-db:2'
 MAX_REPORT = 64 * 1024 * 1024
 MAX_SOURCE_FILE = 16 * 1024 * 1024
 MAX_SOURCE_TOTAL = 256 * 1024 * 1024
+_REVIEWED_BENCHMARK_PATH = 'engineering/benchmarks/issue162/results/large-results.json'
+_REVIEWED_BENCHMARK_SIZE = 3_244_376
+_REVIEWED_BENCHMARK_SHA256 = '4f64f31130d92b5477168a0aa97749273e2a46e2043176884d32b28c00067838'
 _DIGEST_IMAGE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}\Z')
 _SAST_SUFFIXES = {'.py', '.php', '.js', '.jsx', '.ts', '.tsx', '.java', '.go', '.rb', '.rs', '.c', '.cc', '.cpp', '.cs'}
 _SAST_EXCLUDED = {'tests', 'fixtures', 'engineering', 'examples', 'dist', 'packages', 'vendor', 'node_modules'}
@@ -227,6 +233,13 @@ def image_report(report: dict, reference: str, *, expected_image_id: str | None 
             or not re.fullmatch(r'sha256:[a-f0-9]{64}', str(metadata.get('ImageID', '')))
             or (expected_image_id is not None and metadata['ImageID'] != expected_image_id)):
         raise SecurityDataError('image report is missing or bound to another image')
+    return _image_packages(report, reference)
+
+
+def _image_packages(report: dict, reference: str) -> dict:
+    metadata = report.get('Metadata', {})
+    if not isinstance(metadata, dict) or not isinstance(metadata.get('OS', {}), dict):
+        raise SecurityDataError('invalid image package metadata')
     results = report.get('Results')
     if not isinstance(results, list) or not results:
         raise SecurityDataError('image report has no package coverage')
@@ -252,15 +265,36 @@ def image_report(report: dict, reference: str, *, expected_image_id: str | None 
     return {'package_count': packages, 'findings': findings, 'image_id': metadata['ImageID']}
 
 
+def image_layout_report(report: dict, validated: dict, *, input_name: str) -> dict:
+    """Pinned Trivy0.74 OCI-directory metadata, meaningful only with trusted execution.
+
+    Archives intentionally have no RepoDigests. The caller must bind the actual
+    input object set/argv/tool/DB before and after execution, not this JSON alone.
+    """
+    if not isinstance(report, dict) or not isinstance(report.get('Metadata'), dict) or not isinstance(report.get('Trivy'), dict):
+        raise SecurityDataError('invalid OCI layout report metadata')
+    metadata = report['Metadata']
+    image_config = metadata.get('ImageConfig')
+    if (report.get('SchemaVersion') != 2 or report.get('ArtifactType') != 'container_image'
+            or report.get('ArtifactName') != input_name or report.get('Trivy', {}).get('Version') != TRIVY_VERSION
+            or metadata.get('ImageID') != validated['config_digest']
+            or metadata.get('DiffIDs') != validated['diff_ids']
+            or metadata.get('RepoDigests') not in (None, [])
+            or not isinstance(image_config, dict)
+            or any(key not in image_config or image_config[key] != value for key, value in validated['config'].items())):
+        raise SecurityDataError('OCI archive report differs from validated input/config/platform')
+    return _image_packages(report, validated['manifest_digest'])
+
+
 def image_acquisition_profile(inventory: dict, profile: dict | None) -> dict:
     """Require finite aggregate bounds before selecting any image transport."""
     keys = {'images', 'max_images', 'max_compressed_bytes', 'max_unpacked_bytes', 'max_storage_bytes',
             'max_manifest_bytes', 'max_layers', 'deadline_seconds', 'platform'}
     if not isinstance(profile, dict) or set(profile) != keys or profile.get('platform') not in {'linux/amd64', 'linux/arm64'}:
         raise SecurityDataError('image acquisition needs a complete explicit bounded profile')
-    limits = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
-              'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
-              'max_manifest_bytes': MAX_REPORT, 'max_layers': 10000, 'deadline_seconds': 900}
+    from .security_oci import active_limits
+    limits = active_limits()
+    limits['max_manifest_bytes'] = min(limits['max_manifest_bytes'], MAX_REPORT)
     if any(type(profile[key]) is not int or not 0 < profile[key] <= limit for key, limit in limits.items()):
         raise SecurityDataError('image acquisition profile exceeds existing finite ceilings')
     images = inventory.get('images')
@@ -273,10 +307,12 @@ def image_acquisition_profile(inventory: dict, profile: dict | None) -> dict:
     return profile
 
 
-def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, image_artifacts=None) -> list[dict]:
+def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, image_artifacts=None, binding=None,
+                   deadline=None, image_opener=None, network_selection=None) -> list[dict]:
     """Explicit acquisition for the isolated runner; never starts an image."""
     if not isinstance(inventory.get('images'), list):
         raise SecurityDataError('image acquisition requires a complete declared image list')
+    results = []
     if inventory.get('images'):
         image_acquisition_profile(inventory, profile)
         if image_artifacts is not None:
@@ -289,16 +325,25 @@ def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, imag
                          'images': [{'reference': image.reference, 'manifest_sha256': image.manifest_digest,
                                      'config_sha256': image.config_digest, 'platform': image.platform}
                                     for image in images]}]
-        # The daemon writes outside this process's byte budget. Descriptor
-        # estimates do not enforce compressed/unpacked/storage ceilings.
-        raise SecurityDataError('image transport cannot enforce selected storage/byte ceilings; acquisition unavailable')
-    return refresh_image_database(tools, now=now)
+        selected_network = image_network_selection(inventory, network_selection)
+        destination = tools / 'oci'
+        destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            body = acquire_oci_images(inventory['images'], profile, destination, open_url=image_opener,
+                now=now, binding=binding, deadline=deadline, network_selection=selected_network)
+            raw, _ = read_owned_file(destination, 'manifest.json', 16 * 1024 * 1024)
+            results.append({'kind': 'oci-image-acquisition', 'status': 'pass', 'qualification': 'UNVERIFIED',
+                'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'root': str(destination.absolute()),
+                'records': body['records'], 'profile': profile, 'binding': binding, 'network_selection': selected_network})
+        except OCIError as exc:
+            raise SecurityDataError('bounded OCI acquisition refused: ' + str(exc)) from exc
+    return results + refresh_image_database(tools, now=now)
 
 
 def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
     """Explicit DB-only refresh; separate from local OCI import and image pulls."""
-    trivy = pinned_tool('trivy', tools)
     results = []
+    trivy = pinned_tool('trivy', tools)
     tools.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='refresh-', dir=tools) as directory:
         scratch = Path(directory)
@@ -314,9 +359,121 @@ def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
     return results
 
 
+def image_network_selection(inventory: dict, selection: dict | None) -> dict:
+    required = set()
+    for item in inventory.get('images', []):
+        reference = item.get('reference', '') if isinstance(item, dict) else ''
+        registry, _, repository = reference.partition('/') if isinstance(reference, str) else ('', '', '')
+        if not repository:
+            raise SecurityDataError('OCI fixed registry selection is unavailable')
+        if registry == 'docker.io':
+            required.update({'registry-1.docker.io', 'auth.docker.io'})
+        elif registry == 'ghcr.io':
+            required.add('ghcr.io')
+        else:
+            raise SecurityDataError('OCI fixed registry selection is unavailable')
+    try:
+        return validate_network_selection(selection, required=required)
+    except OCIError as exc:
+        raise SecurityDataError('OCI numeric network selection is unqualified') from exc
+
+
+def scan_layouts(inventory: dict, tools: Path, *, binding: dict, now=None, process=None,
+                 profile=None, network_selection=None) -> dict:
+    """Consume retained native layouts through an explicitly isolated runner port.
+
+    No environment flag supplies this boundary. The ordinary process launcher
+    does not enforce a physical quota and is deliberately not a fallback here.
+    Controlled test ports prove contracts, never real scanner execution.
+    """
+    results, gaps, findings = [], [], []
+    source = None
+    try:
+        root = tools / 'oci'
+        retained = retained_acquisition(root, inventory['images'], binding=binding, now=now,
+                                       profile=profile, network_selection=network_selection)
+        if process is None:
+            raise SecurityDataError('isolated OCI scanner execution boundary is unavailable')
+        trivy = pinned_tool('trivy', tools)
+        tool_before = _regular(trivy, limit=MAX_DOWNLOAD, digest_only=True)
+        source = trivy_database_source(tools, now=now)
+        deadline = time.monotonic() + min(retained['profile']['deadline_seconds'], 600)
+        budget = OCIBudget(retained['profile'], deadline=deadline)
+        budget.charge('storage', retained['counters']['storage_high_water_bytes'])
+        with tempfile.TemporaryDirectory(prefix='oci-scan-', dir=tools) as directory:
+            scratch = Path(directory)
+            for index, record in enumerate(retained['records']):
+                reference = record['subject']['reference']
+                before = read_oci_directory(root / record['layout'], reference, record['platform'], budget=budget)
+                if (before['manifest_digest'] != record['manifest_digest'] or before['config_digest'] != record['config_digest']
+                        or before['diff_ids'] != record['diff_ids'] or
+                        {name: {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)} for name, raw in before['objects'].items()} != record['objects']):
+                    raise SecurityDataError('retained OCI object set changed')
+                if {name: list(before['identities'][name]) for name in before['objects']} != record['object_identities']:
+                    raise SecurityDataError('retained original OCI inodes were replaced')
+                # A fresh private read-only input namespace avoids cache/source path reuse.
+                selected = scratch / ('input-' + str(index))
+                selected.mkdir(mode=0o700)
+                for name, raw in before['objects'].items():
+                    target = selected / name
+                    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    budget.charge('storage', len(raw))
+                    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+                    with os.fdopen(descriptor, 'wb') as stream:
+                        stream.write(raw)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                selected_before = read_oci_directory(selected, reference, record['platform'], budget=budget)
+                input_name = str(selected) + '@' + before['manifest_digest']
+                output = scratch / ('report-' + str(index) + '.json')
+                # Reserve the largest accepted report before the isolated port writes it.
+                budget.charge('storage', MAX_REPORT)
+                command = [str(trivy), 'image', '--input', input_name, '--scanners', 'vuln',
+                    '--cache-dir', str(tools / 'cache'), '--config', '', '--ignorefile', '',
+                    '--offline-scan', '--skip-db-update', '--skip-java-db-update', '--skip-check-update',
+                    '--skip-version-check', '--show-suppressed', '--list-all-pkgs', '--parallel', '1',
+                    '--max-image-size', str(min(retained['profile']['max_unpacked_bytes'], 256 * 1024 * 1024)),
+                    '--format', 'json', '--output', str(output)]
+                result = process(command, scratch, scratch, timeout=max(0.001, deadline - time.monotonic()))
+                if result.returncode != 0 or result.terminal_state != 'completed' or result.cleanup_error:
+                    raise _process_error(result, 'OCI scanner process did not complete')
+                parsed = image_layout_report(_process_report(output, result), before, input_name=input_name)
+                after = read_oci_directory(root / record['layout'], reference, record['platform'], budget=budget)
+                selected_after = read_oci_directory(selected, reference, record['platform'], budget=budget)
+                current = retained_acquisition(root, inventory['images'], binding=binding, now=now,
+                                               profile=profile, network_selection=network_selection)
+                if (before['identities'] != after['identities'] or before['objects'] != after['objects']
+                        or selected_before['identities'] != selected_after['identities']
+                        or selected_before['objects'] != selected_after['objects']
+                        or current != retained or _regular(trivy, limit=MAX_DOWNLOAD, digest_only=True) != tool_before
+                        or trivy_database_source(tools, now=now) != source):
+                    raise SecurityDataError('OCI input/tool/DB/source envelope changed during scan')
+                budget.check()
+                results.append({'image': reference, 'input_manifest_digest': before['manifest_digest'],
+                    'input_archive_sha256': record['archive_sha256'], **parsed})
+                findings.extend(parsed['findings'])
+    except (OCIError, OSError, ValueError, RuntimeError) as exc:
+        gaps.append({'code': 'image-scan-unavailable', 'message': str(exc)})
+    if not gaps:
+        gaps.append({'code': 'isolated-execution-unqualified',
+                     'message': 'injected port proves contracts only, not actual scanner execution'})
+    return {'outcome': 'blocked', 'qualification': 'UNVERIFIED', 'execution': 'UNEXECUTED',
+            'summary': f'{len(results)} OCI contract observations; actual isolated scanner execution unqualified',
+            'images': [], 'contract_observations': results, 'findings': [], 'gaps': gaps,
+            'data_sources': []}
+
+
 def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
     env = os.environ if environ is None else environ
     tools = tools_directory(TRUSTED_ROOT, env)
+    if not env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS') and ((tools / 'oci/manifest.json').exists() or (tools / 'oci/manifest.json').is_symlink()):
+        try:
+            binding = json.loads(env.get('GETZILLA_SECURITY_OCI_BINDING', 'null'))
+            profile = json.loads(env.get('GETZILLA_SECURITY_OCI_PROFILE', 'null'))
+            network_selection = json.loads(env.get('GETZILLA_SECURITY_OCI_NETWORK_SELECTION', 'null'))
+        except (ValueError, TypeError):
+            binding = profile = network_selection = None
+        return scan_layouts(inventory, tools, binding=binding, now=now, profile=profile, network_selection=network_selection)
     if not env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS') and any(
             row.get('selection_assurance') == 'declaration-only-unverified' for row in inventory['images']):
         return {'outcome':'blocked', 'summary':'declared images require verified offline OCI artifacts',
@@ -380,21 +537,21 @@ def _normalize(value: str) -> str:
 
 
 def validate_tool_report(name: str, report: dict, targets: list[str]) -> dict:
+    if name == 'opengrep':
+        from .opengrep_contract import OpenGrepError, validate_report
+        try:
+            observed = validate_report(report, targets, 0)
+        except OpenGrepError:
+            raise SecurityDataError('OpenGrep report or exact target coverage is incomplete') from None
+        findings = [{'rule': item['rule'], 'path': item['path'], 'line': int(item['line'])}
+                    for item in observed['findings']]
+        return {'outcome': observed['outcome'], 'findings': findings, 'coverage': observed['coverage'],
+                'summary': f'{len(targets)} files checked; {observed["finding_count"]} findings'}
     expected = {_normalize(value) for value in targets}
     if not expected:
         raise SecurityDataError('tool applicability needs source inventory, not an empty report')
     findings = []
-    if name == 'opengrep':
-        if not isinstance(report.get('results'), list) or not isinstance(report.get('errors'), list):
-            raise SecurityDataError('incomplete OpenGrep report')
-        # Partial parsing and timeouts can be warning-level diagnostics even
-        # when the file appears in paths.scanned. None proves full coverage.
-        if report['errors']:
-            raise SecurityDataError('OpenGrep reported incomplete parse/scan coverage')
-        observed = {_normalize(value) for value in report.get('paths', {}).get('scanned', [])}
-        findings = [{'rule': value.get('check_id'), 'path': value.get('path'),
-                     'line': value.get('start', {}).get('line')} for value in report['results']]
-    elif name == 'bandit':
+    if name == 'bandit':
         if report.get('errors') != [] or not isinstance(report.get('results'), list):
             raise SecurityDataError('Bandit reported missing/error coverage')
         metrics = report.get('metrics', {})
@@ -472,17 +629,42 @@ def _secret_text(relative: str, raw: bytes) -> str:
     return text
 
 
-def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_ROOT) -> dict:
+def _secret_input_core(root: Path, files: list[str], trusted_root: Path, *, file_limit: int, native: bool) -> dict:
+    """One byte/encoding engine; projections never originate disposition authority."""
     findings, gaps, binary = [], [], []
     total = 0
+    policy = None
+    stage = 'policy'
+    relative = '.'
+
+    def gap(code, path=None):
+        detail = {'code': code, 'message': 'secret input coverage is unavailable'}
+        if path is not None:
+            detail['path'] = path
+        gaps.append(detail)
+        if native:
+            findings.append({'severity': 'error', 'effective_severity': 'error', 'code': code,
+                             'path': path or '.', 'message': 'Secret input coverage is unavailable.'})
+
     try:
-        policy = dispositions.Dispositions(trusted_root)
+        try:
+            policy = dispositions.Dispositions(trusted_root)
+        except (dispositions.DispositionError, OSError):
+            if not native:
+                raise
+            # Native findings remain visible when review policy cannot qualify.
+            # An invalid policy never authorizes any disposition.
+            findings.append(dispositions.invalid_finding())
+            gaps.append({'code': 'disposition-config-invalid', 'message': 'reviewed disposition binding unavailable'})
+        stage = 'input'
         for relative in files:
-            raw = _regular(root / relative, limit=MAX_SOURCE_FILE)
+            reviewed_report = native and relative == _REVIEWED_BENCHMARK_PATH
+            limit = _REVIEWED_BENCHMARK_SIZE if reviewed_report else file_limit
+            raw = _regular(root / relative, limit=min(limit, MAX_SOURCE_TOTAL - total))
             total += len(raw)
-            if total > MAX_SOURCE_TOTAL:
-                raise SecurityDataError('secret input inventory exceeds the bounded total')
             digest = hashlib.sha256(raw).hexdigest()
+            if reviewed_report and len(raw) > file_limit and digest != _REVIEWED_BENCHMARK_SHA256:
+                raise SecurityDataError("oversized benchmark report differs from reviewed content")
             try:
                 views = [(_secret_text(relative, raw), False)]
             except (ValueError, SyntaxError, LookupError):
@@ -490,9 +672,13 @@ def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_R
                 if _opaque_asset(Path(relative), raw):
                     binary.append({'path': relative, 'sha256': digest,
                                    'reason': 'recognized asset; visible bytes checked, opaque contents not decoded'})
+                    if native:
+                        findings.append({'severity': 'info', 'effective_severity': 'info',
+                                         'code': 'secret-binary-input', 'path': relative,
+                                         'file_sha256': digest,
+                                         'message': 'Recognized asset; visible bytes checked, opaque contents not decoded.'})
                 else:
-                    gaps.append({'code': 'secret-text-coverage', 'path': relative,
-                                 'message': 'cannot establish supported text encoding or opaque asset type'})
+                    gap('secret-text-coverage', relative)
             # The supported narrow codecs preserve ASCII. A wide decoder can hide
             # a separate contiguous ASCII string, so inspect visible bytes there
             # too. Latin-1 here is a 1:1 byte view, not an encoding assertion.
@@ -504,19 +690,49 @@ def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_R
                     for match in pattern.finditer(text):
                         line, column = dispositions.location(text, match.start())
                         entry = (policy.secret(relative, digest, text, match)
-                                 if label == 'generic-secret' and not byte_view else None)
-                        finding = {'rule': label, 'path': relative, 'line': line, 'column': column,
-                                   'file_sha256': digest, 'disposition': entry.get('id') if entry else None}
+                                 if policy and label == 'generic-secret' and not byte_view else None)
+                        if native:
+                            finding = {'severity': 'error', 'effective_severity': 'error', 'observation': True,
+                                       'code': label, 'path': relative, 'line': line, 'column': column,
+                                       'file_sha256': digest, 'message': 'Potential committed secret.'}
+                            if policy:
+                                policy.apply(finding, entry)
+                        else:
+                            finding = {'rule': label, 'path': relative, 'line': line, 'column': column,
+                                       'file_sha256': digest, 'disposition': entry.get('id') if entry else None}
                         if byte_view:
                             finding['byte_offset'] = match.start()
                         findings.append(finding)
-        policy.assert_current()
-    except (OSError, ValueError, RuntimeError) as exc:
-        gaps.append({'code': 'secret-input-unavailable', 'message': str(exc)})
+        stage = 'policy'
+        if policy:
+            policy.assert_current()
+    except (OSError, ValueError, RuntimeError):
+        if native and stage == 'policy':
+            findings.append(dispositions.invalid_finding())
+            gaps.append({'code': 'disposition-config-invalid', 'message': 'reviewed disposition binding unavailable'})
+        else:
+            gap('secret-input-unavailable', relative if native else None)
+    if native:
+        summary = dispositions.summary(policy, findings)
+        findings.append(summary)
+        text = (f'{summary["observed"]} potential secrets; {summary["disposed"]} disposed; '
+                f'{summary["unresolved"]} unresolved')
+        if gaps:
+            text = 'secret input coverage incomplete; ' + text
+        return {'outcome': 'blocked' if gaps else ('finding' if summary['unresolved'] else 'pass'),
+                'summary': text, 'details': findings}
     unresolved = [item for item in findings if item['disposition'] is None]
     return {'outcome': 'blocked' if gaps else ('finding' if unresolved else 'pass'),
             'summary': f'{len(unresolved)} unresolved text-pattern secret findings; {len(gaps)} coverage gaps',
             'findings': findings, 'gaps': gaps, 'binary_inputs': binary}
+
+
+def scan_secrets(root: Path, files: list[str], *, trusted_root: Path = TRUSTED_ROOT) -> dict:
+    return _secret_input_core(root, files, trusted_root, file_limit=MAX_SOURCE_FILE, native=False)
+
+
+def native_secret_observations(root: Path, files: list[str]) -> dict:
+    return _secret_input_core(root, files, root, file_limit=dispositions.MAX_FILE_BYTES, native=True)
 
 
 def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path = TRUSTED_ROOT) -> list[dict]:
@@ -530,8 +746,25 @@ def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path
               or Path(value).name.endswith('.Dockerfile') or Path(value).suffix == '.tf']
     # Compose files remain a required source inventory and are checked by their
     # native schema/build validations. Trivy's IaC engine does not claim Compose coverage.
-    targets = {'opengrep': sast, 'bandit': python, 'trivy-config': config}
+    targets = {'bandit': python, 'trivy-config': config}
     reports = [{'name': 'secret-scan', **scan_secrets(root, inventory['files'], trusted_root=trusted_root)}]
+    try:
+        from .security_opengrep import OpenGrepError, scan_source as observe_opengrep
+        from .opengrep_contract import targets as target_roster
+        declared = target_roster(sast) if sast else ()
+        observed = observe_opengrep(root, rules_root=trusted_root / '.getzilla/sast/rules',
+                                   executable=tools / 'bin/opengrep', profile='expanded')
+        if observed['outcome'] in {'pass', 'finding', 'not_applicable'}:
+            if tuple(observed['coverage']['expected']) != declared:
+                raise OpenGrepError('inventory_target_coverage_incomplete')
+        projection = {key: observed[key] for key in ('outcome', 'summary', 'coverage')}
+        projection['findings'] = [{'rule': item['rule'], 'path': item['path'], 'line': int(item['line'])}
+                                  for item in observed['findings']]
+        reports.append({'name': 'opengrep', **projection})
+    except (OSError, ValueError, RuntimeError):
+        reports.append({'name': 'opengrep', 'outcome': 'blocked',
+                        'summary': 'OpenGrep 1.30.1 incomplete: source, inventory or tool unavailable',
+                        'gaps': [{'code': 'scanner-unavailable', 'message': 'source, inventory or tool unavailable'}]})
     with tempfile.TemporaryDirectory(prefix='source-', dir=tools) as directory:
         scratch = Path(directory)
         source = scratch / 'input'
@@ -563,10 +796,6 @@ def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path
                     bandit_config.write_text(safe_dump(settings), encoding='utf-8', newline='\n')
                     command = [sys.executable, '-I', '-m', 'bandit', '-c', str(bandit_config),
                                '--ignore-nosec', '-q', '-f', 'json', '-o', str(output), '--', *files]
-                elif name == 'opengrep':
-                    command = [str(pinned_tool(name, tools)), 'scan', '--config', str(trusted_root / '.getzilla/sast/rules'),
-                               '--taint-intrafile', '--json', '--quiet', '--strict', '--disable-version-check', '--disable-nosem',
-                               '--no-git-ignore', '--timeout', '30', '--jobs', '1', '--output', str(output), *files]
                 else:
                     command = [str(pinned_tool('trivy', tools)), 'config', '--config', '', '--ignorefile', '',
                                '--skip-check-update', '--skip-version-check', '--include-non-failures',

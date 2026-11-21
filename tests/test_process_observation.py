@@ -216,6 +216,22 @@ class RetainedObservationTests(unittest.TestCase):
         self.assertNotIn('pid', journal._json(snapshot).decode())
 
 class PassiveAnnotationTests(unittest.TestCase):
+    def test_optional_cleanup_projection_rejects_changed_defaults_and_dispatch(self):
+        from tests._stop_annotations import default_cleanup_contract
+        root=Path(__file__).resolve().parents[1]
+        tree=ast.parse((root/'.getzilla/getzilla/python_test_runner.py').read_text())
+        stop=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='_stop')
+        execute=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='execute')
+        for original,old,new in ((stop,'None','1'),
+                                 (stop,'else grace_seconds','else 1'),
+                                 (execute,'<= 180','<= 181'),
+                                 (execute,'len(inherited_fds) > 16','len(inherited_fds) > 17'),
+                                 (execute,'**descriptor_options','**other_options'),
+                                 (execute,'grace_seconds=termination_grace','grace_seconds=1')):
+            changed=ast.parse(ast.unparse(original).replace(old,new,1)).body[0]
+            with self.subTest(old=old),self.assertRaises(AssertionError):
+                default_cleanup_contract(changed)
+
     def test_original_control_flow_assertions_and_deadlines_are_preserved(self):
         expected = {
             '_stop': '4913ce4ec0b26184ef8b44f29876bc6b1d0ad2fb66a0a5560ef4aa026499eed7',
@@ -236,15 +252,16 @@ class PassiveAnnotationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         seen = set()
         for path in ('.getzilla/getzilla/python_test_runner.py', 'tests/test_python_test_runner.py'):
-            tree = ast.parse((root / path).read_text())
+            from tests._stop_annotations import bind_diagnostic_imports
+            tree = bind_diagnostic_imports(ast.parse((root / path).read_text()))
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef) and node.name in expected:
                     seen.add(node.name)
                     marks = [item for item in ast.walk(node) if diagnostic(item, 'ownership_mark')]
                     self.assertTrue(marks, 'missing passive marks: ' + node.name)
                     stripped = RemoveAnnotations().visit(node)
-                    from tests._stop_annotations import strip_stop_annotations
-                    stripped = strip_stop_annotations(stripped)
+                    from tests._stop_annotations import strip_stop_annotations, default_cleanup_contract
+                    stripped = default_cleanup_contract(strip_stop_annotations(stripped))
                     options = {'show_empty': True} if sys.version_info >= (3, 13) else {}
                     digest = hashlib.sha256(ast.dump(stripped, include_attributes=False, **options).encode()).hexdigest()
                     self.assertEqual(digest, expected[node.name], node.name)

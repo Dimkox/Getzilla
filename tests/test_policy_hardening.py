@@ -7,6 +7,7 @@ inputs are synthetic hook payloads; nothing here executes the commands.
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterator
 from unittest import mock
 
@@ -42,6 +44,7 @@ def github_project() -> Iterator[Path]:
     with project_copy(git=True) as root:
         subprocess.run(['git', 'checkout', '-q', '-b', 'policy-parser-fixture'], cwd=root, check=True)
         subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'], cwd=root, check=True)
+        subprocess.run(['git', 'checkout', '-qb', 'parser-fixture'], cwd=root, check=True)
         activate_owned_route(root, build_route(root, 'Исправить PHP баг', 's1').to_dict())
         # Synthetic secret material and an ordinary source tree (never real keys).
         (root / 'deploy/tls').mkdir(parents=True)
@@ -182,6 +185,38 @@ class RecursiveRemoveTests(_Case):
 
 
 class SecretReadTests(_Case):
+    def test_secret_denials_do_not_echo_untrusted_operands(self) -> None:
+        directory = self.root / 'UNTRUSTED_OPERAND_CANARY'
+        directory.mkdir(exist_ok=True)
+        target = directory / '.env.CANARY'
+        target.write_text('inert fixture\n', encoding='utf-8', newline='\n')
+        for tool, data in (
+            ('Bash', {'command': f'cat {target}'}),
+            ('Read', {'file_path': str(target)}),
+            ('Grep', {'pattern': '.', 'path': str(directory), 'glob': '**/*'}),
+        ):
+            with self.subTest(tool=tool):
+                allowed, reason = self.tool(tool, data)
+                self.assertFalse(allowed)
+                self.assertIn('secret', reason)
+                self.assertNotIn('CANARY', reason)
+                self.assertNotIn(str(self.root), reason)
+
+    def test_private_denial_reason_keeps_exact_input_fingerprints_distinct(self) -> None:
+        spec = importlib.util.spec_from_file_location('owned_denial_hook', ROOT/'.getzilla/hooks/pre_tool_use.py')
+        hook = importlib.util.module_from_spec(spec)
+        with mock.patch.object(sys, 'path', [str(ROOT/'.getzilla/hooks'), *sys.path]):
+            spec.loader.exec_module(hook)
+        context = SimpleNamespace(session_root=self.root, effective_root=self.root,
+                                  resolution_status='resolved', sensitive_safe=True)
+        reason = 'Reading secret material is blocked by repository policy.'
+        with mock.patch.object(hook, '_grants_digest', return_value='f'*64):
+            first = hook._denial_fingerprints('owned', 'Read', {'file_path': '.env.FIRST'}, reason, context, 'secret-read')
+            second = hook._denial_fingerprints('owned', 'Read', {'file_path': '.env.SECOND'}, reason, context, 'secret-read')
+        self.assertNotEqual(first[0], second[0])
+        # The private category groups one objective; exact retries still bind operands.
+        self.assertEqual(first[1], second[1])
+
     def test_quoting_and_expansion_do_not_hide_secret_names(self) -> None:
         self.assert_denied((
             "cat .e''nv",
@@ -446,7 +481,14 @@ class Review2PosixTests(_Case):
 
     def test_grep_without_a_secret_target_stays_allowed(self) -> None:
         self.assertTrue(self.tool('Grep', {'pattern': 'TODO', 'glob': '*.py'})[0])
-        self.assertTrue(self.tool('Grep', {'pattern': 'TODO'})[0])
+        self.assertTrue(evaluate_pre_tool(self.root, {'tool_name': 'Grep', 'tool_input': {'pattern': 'TODO'}},
+                                          execution_cwd=self.root / 'src')[0])
+
+    def test_implicit_grep_cannot_read_a_protected_tree(self) -> None:
+        # Omitting path still searches cwd, including this fixture's visible server.key.
+        allowed, reason = self.tool('Grep', {'pattern': 'TODO'})
+        self.assertFalse(allowed)
+        self.assertIn('secret', reason or '')
 
     def test_package_publish_clients_need_a_grant(self) -> None:
         # S59-7: deny-by-default for known publish verbs.
@@ -558,9 +600,24 @@ class Review2PosixTests(_Case):
         legacy._SECRET_SCAN_CACHE.clear()
         command = 'cat deploy/tls/server.key'
         patterns = legacy.DEFAULT_SECRET_READ
-        legacy.shell_secret_reference(self.root, command, patterns)
-        key = (str(self.root), command, tuple(patterns), legacy._windows_reading(), b'')  # no project policy in this fixture
-        self.assertIn(key, legacy._SECRET_SCAN_CACHE)
+        with mock.patch.object(legacy, '_argv_secret_reference', wraps=legacy._argv_secret_reference) as scan:
+            self.assertEqual(legacy.shell_secret_reference(self.root, command, patterns), 'deploy/tls/server.key')
+            self.assertEqual(legacy.shell_secret_reference(self.root, command, patterns), 'deploy/tls/server.key')
+            self.assertEqual(scan.call_count, 1)
+
+    def test_secret_scan_memo_never_crosses_execution_directories(self) -> None:
+        with project_copy() as root:
+            (root / 'README.md').write_text('synthetic public text\n', encoding='utf-8')
+            (root / '.env').write_text('synthetic no-secret marker\n', encoding='utf-8')
+            (root / 'sub').mkdir()
+            (root / 'sub/README.md').symlink_to('../.env')
+            legacy._SECRET_SCAN_CACHE.clear()
+            self.assertIsNone(legacy.shell_secret_reference(
+                root, 'cat README.md', legacy.DEFAULT_SECRET_READ, execution_cwd=root,
+            ))
+            self.assertEqual(legacy.shell_secret_reference(
+                root, 'cat README.md', legacy.DEFAULT_SECRET_READ, execution_cwd=root / 'sub',
+            ), 'README.md')
 
     def test_secret_scan_memo_never_crosses_readings(self) -> None:
         legacy._SECRET_SCAN_CACHE.clear()

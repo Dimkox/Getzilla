@@ -25,6 +25,39 @@ def forbidden_yaml_constructor():
 
 
 class SelectedRootInventoryTests(unittest.TestCase):
+    def test_standalone_gitless_inventory_does_not_invoke_strict_git_reader(self):
+        from getzilla.security_osv_snapshot import _tracked_files
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'requirements.txt').write_text('public-example==1.2.3\n', encoding='utf-8')
+            with mock.patch('getzilla.architecture_diff.run_git_read',
+                            side_effect=AssertionError('Gitless inventory must not invoke Git')) as read:
+                self.assertEqual(_tracked_files(root), ['requirements.txt'])
+            read.assert_not_called()
+            self.assertEqual(collect_inventory(root)['dependencies'][0]['name'], 'public-example')
+
+    def test_malformed_registration_does_not_enable_filesystem_fallback(self):
+        from getzilla.security_osv_snapshot import VulnerabilityError, _tracked_files
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.git').write_text('not a Git registration\n', encoding='utf-8')
+            (root / 'requirements.txt').write_text('public-example==1.2.3\n', encoding='utf-8')
+            with mock.patch('pathlib.Path.rglob') as walk:
+                with self.assertRaises(VulnerabilityError):
+                    _tracked_files(root)
+            walk.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'posix', 'requires harmless local symlink fixture')
+    def test_dangling_registration_link_does_not_enable_filesystem_fallback(self):
+        from getzilla.security_osv_snapshot import VulnerabilityError, _tracked_files
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.git').symlink_to(root / 'missing-registration')
+            with mock.patch('pathlib.Path.rglob') as walk:
+                with self.assertRaises(VulnerabilityError):
+                    _tracked_files(root)
+            walk.assert_not_called()
+
     def test_nested_git_selection_is_incomplete_not_absent(self):
         from getzilla.security_osv_snapshot import VulnerabilityError, _tracked_files
         from tests.test_security_cli import _public_git, _public_source_repo
@@ -362,23 +395,26 @@ class StructuralYamlInventoryTests(unittest.TestCase):
         self.assertNotEqual(first['digest'], second['digest'])
         self.assertNotEqual(first['manifests'], second['manifests'])
 
-    def test_isolated_cli_and_checker_obligations_keep_flow_image_required_and_blocked(self):
+    def test_isolated_cli_and_required_plan_keep_flow_image_required_and_blocked(self):
         from getzilla.expanded_security import security_obligations
         from getzilla.security_cli import evaluate
+        from getzilla.verification_plan import build_required_plan
         inventory = self.fixture('compose.yaml', f'services: {{db: {{image: "{IMAGE}"}}}}\n')
         source = {'head_sha': 'a' * 40, 'tree_sha': 'b' * 40, 'checker_sha': 'c' * 40,
                   'checker_tree_sha': 'd' * 40, 'candidate_clean': True, 'checker_clean': True,
                   'same_project': True}
         runtime = self.root / '.getzilla/runtime'
-        # Only native Git identities are fixture inputs. All inventory,
+        # Only native Git identities are fixture inputs. All inventory, planning,
         # local security producers and final CLI aggregation run normally.
         with mock.patch('getzilla.security_cli.source_binding', return_value=source):
             report = evaluate(self.root, runtime / 'db', runtime / 'artifacts', runtime / 'tools', now=NOW)
         self.assertEqual(report['status'], 'fail')
         images = next(item for item in report['checks'] if item['name'] == 'security-container-images')
         self.assertEqual(images['details'][0]['outcome'], 'blocked')
-        obligations = security_obligations(self.root, inventory=inventory, environ={}, now=NOW)
-        image_obligation = next(item for item in obligations if item['check_id'] == 'security-container-images')
+        plan = build_required_plan(self.root, mode='fast', context={}, source=source, inventory=inventory,
+                                   risk={'risk': 'high'}, selection={'mode': 'fast'},
+                                   extra_obligations=security_obligations(self.root, environ={}, now=NOW))
+        image_obligation = next(item for item in plan['obligations'] if item['check_id'] == 'security-container-images')
         self.assertEqual(image_obligation['applicability'], 'required')
         self.assertEqual(image_obligation['evidence']['inventory_sha256'], inventory['digest'])
 

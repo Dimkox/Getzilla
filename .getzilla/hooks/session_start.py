@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+sys.dont_write_bytecode = True
 
 try:
     from _lib import emit, harness, read_payload, root_from, run_hook
@@ -57,6 +58,11 @@ def main() -> None:
         context = unavailable_authority_notice(root) or 'No active route. Submit a development task to classify work.'
     context += package_note
     model_note = startup_note(root, harness())
+    if os.name == 'nt':
+        model_note += (' Installing pwsh does not change this client\'s current tool shell. '
+                       'Use PowerShell 5.1 syntax when the tool runs powershell.exe; '
+                       'use PowerShell 7 operators only when the client explicitly runs pwsh. '
+                       'Hook launchers and shell tools have separate shell contracts.')
     context = f'{context} {model_note}'
     note = _tool_update_note()
     if note:
@@ -67,6 +73,11 @@ def main() -> None:
     if len(context.encode('utf-8')) > 16384 and route:
         remaining = 16384 - len(model_note.encode('utf-8')) - 1
         context = f'{route_context(route, root, max_bytes=remaining)} {model_note}'
+    try:
+        from getzilla.retrieval.lifecycle import startup_note as context_startup_note, append_note
+        context = append_note(context, context_startup_note(root))
+    except (ImportError, ValueError, OSError):
+        pass  # Optional context failure cannot displace the mandatory handoff.
     # Copilot consumes top-level additionalContext. Other harnesses use the
     # existing SessionStart envelope. See docs/model-continuation.md.
     if harness() == 'copilot':

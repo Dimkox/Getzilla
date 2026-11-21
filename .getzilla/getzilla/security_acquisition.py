@@ -17,13 +17,17 @@ from pathlib import Path
 from typing import Callable
 
 from .security_data import SOURCE_URLS, SecurityDataError, osv_coverage, publish_snapshot
-from .security_intelligence import validate_epss, validate_kev
-from .updater import OPENGREP_ASSETS, OPENGREP_DOWNLOAD, OPENGREP_VERSION
+from .security_intelligence import validate_epss as validate_epss, validate_kev as validate_kev
+from .release_transport import OPENGREP_ASSETS, OPENGREP_DOWNLOAD, OPENGREP_VERSION
 
 TRIVY_VERSION = '0.74.0'
 TRIVY_ARCHIVE_SHA256 = '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a'
 TRIVY_URL = f'https://github.com/aquasecurity/trivy/releases/download/v{TRIVY_VERSION}/trivy_{TRIVY_VERSION}_Linux-64bit.tar.gz'
 MAX_DOWNLOAD = 1024 * 1024 * 1024
+TYPESCRIPT_VERSION = '5.9.3'
+TYPESCRIPT_URL = 'https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz'
+TYPESCRIPT_ARCHIVE_SHA256 = '10e108c9cf7d5f2879053dff18515fb405abf2ccef63eaaf017d9c571687a1d3'
+TYPESCRIPT_COMPILER_SHA256 = '3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675'
 
 
 @dataclass(frozen=True)
@@ -65,7 +69,7 @@ def _allowed_response(url: str, source_url: str) -> bool:
 def fetch_public(url: str) -> FetchResult:
     parsed = urllib.parse.urlsplit(url)
     allowed = {'github.com', 'www.cisa.gov', 'epss.empiricalsecurity.com', 'osv-vulnerabilities.storage.googleapis.com'}
-    if parsed.hostname not in allowed or not _allowed_response(url, url):
+    if (parsed.hostname not in allowed and url != TYPESCRIPT_URL) or not _allowed_response(url, url):
         raise SecurityDataError('security download requires a registered public HTTPS origin')
     request = urllib.request.Request(url, headers={'User-Agent': 'getzilla-security-acquisition/1', 'Accept-Encoding': 'identity'})
     opener = urllib.request.build_opener(_HTTPSRedirects(url))
@@ -104,6 +108,8 @@ def _body(response: FetchResult, expected_url: str) -> bytes:
 
 def refresh_feeds(database: Path, ecosystems: list[str], *, fetch: Callable[[str], FetchResult] = fetch_public,
                   now: datetime | None = None) -> list[dict]:
+    # This expanded caller remains inactive in the native OSV-only closure.
+    from .security_intelligence import validate_epss, validate_kev
     results = []
     for source_id in [*(f'osv:{item}' for item in sorted(set(ecosystems))), 'kev', 'epss']:
         try:
@@ -128,6 +134,32 @@ def refresh_feeds(database: Path, ecosystems: list[str], *, fetch: Callable[[str
                                      'status': response.status}})
         except (OSError, ValueError, RuntimeError) as exc:
             results.append({'source_id': source_id, 'status': 'fail', 'reason': str(exc)})
+    return results
+
+
+def refresh_osv(database: Path, ecosystems: list[str], *, fetch: Callable[[str], FetchResult] = fetch_public,
+                now: datetime | None = None) -> list[dict]:
+    """Explicit native OSV acquisition; never activate unrelated feed families."""
+    results = []
+    for ecosystem in sorted(set(ecosystems)):
+        source_id = f'osv:{ecosystem}'
+        try:
+            if source_id not in SOURCE_URLS:
+                raise SecurityDataError('unsupported OSV source')
+            url = SOURCE_URLS[source_id]
+            response = fetch(url)
+            payload = _body(response, url)
+            current = datetime.now(timezone.utc) if now is None else now
+            coverage = osv_coverage(payload, ecosystem)
+            acquisition = {'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download',
+                           'producer': 'getzilla-native-osv-acquisition-v1'}
+            proof = publish_snapshot(database, source_id, payload, acquisition=acquisition, coverage=coverage, now=now)
+            results.append({'source_id': source_id, 'status': 'pass', 'snapshot': proof,
+                            'http': {'requested_url': response.requested_url, 'final_url': response.final_url,
+                                     'status': response.status}})
+        except (OSError, ValueError, RuntimeError) as error:
+            # The store uses fixed refusal reasons and hashed record locations.
+            results.append({'source_id': source_id, 'status': 'fail', 'reason': str(error)[:512]})
     return results
 
 
@@ -171,6 +203,34 @@ def trivy_binary(archive: bytes) -> bytes:
         return payload
 
 
+def typescript_compiler(archive: bytes) -> bytes:
+    """Select one pinned JS parser without extracting or running package scripts."""
+    if hashlib.sha256(archive).hexdigest() != TYPESCRIPT_ARCHIVE_SHA256:
+        raise SecurityDataError('TypeScript archive differs from the reviewed pin')
+    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as bundle:
+        members = []
+        for member in bundle:
+            if len(members) >= 200:
+                raise SecurityDataError('TypeScript archive census exceeds bound')
+            members.append(member)
+        selected = [member for member in members if member.name == 'package/lib/typescript.js']
+        if len(selected) != 1 or not selected[0].isreg() or not 0 < selected[0].size <= 16 * 1024 * 1024:
+            raise SecurityDataError('TypeScript compiler archive member is unavailable')
+        with bundle.extractfile(selected[0]) as stream:
+            raw = stream.read(16 * 1024 * 1024 + 1)
+    if len(raw) != selected[0].size or hashlib.sha256(raw).hexdigest() != TYPESCRIPT_COMPILER_SHA256:
+        raise SecurityDataError('TypeScript compiler differs from the reviewed pin')
+    return raw
+
+
+def provision_typescript(destination: Path, *, fetch=fetch_public) -> Path:
+    archive = _body(fetch(TYPESCRIPT_URL), TYPESCRIPT_URL)
+    raw = typescript_compiler(archive)
+    path = destination / f'typescript-{TYPESCRIPT_VERSION}.js'
+    _atomic(path, raw)
+    return path
+
+
 def provision_tools(destination: Path, *, fetch: Callable[[str], FetchResult] = fetch_public) -> list[dict]:
     """Only pinned binaries are placed in the isolated tools directory; no install scripts."""
     key = (platform.system().lower(), platform.machine().lower())
@@ -197,3 +257,85 @@ def provision_tools(destination: Path, *, fetch: Callable[[str], FetchResult] = 
         except (OSError, ValueError, RuntimeError, tarfile.TarError) as exc:
             output.append({'tool': name, 'status': 'fail', 'reason': str(exc)})
     return output
+
+
+class _NoQueryRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        raise SecurityDataError('qualified OSV query redirects are unsupported')
+
+
+def fetch_osv_request(method: str, url: str, request_body: bytes, deadline: float,
+                      maximum: int):
+    """One fixed query request with remaining time/body bounds; no retries."""
+    from .security_osv_query import (DETAIL_URL, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
+                                     QUERY_URL, QueryResponse, _identifier, check_deadline)
+    if (method == 'POST' and url != QUERY_URL or method == 'GET' and not url.startswith(DETAIL_URL)
+            or method not in {'POST', 'GET'} or type(request_body) is not bytes
+            or len(request_body) > MAX_REQUEST_BYTES or method == 'GET' and request_body
+            or type(maximum) is not int or not 0 < maximum <= MAX_RESPONSE_BYTES):
+        raise SecurityDataError('qualified OSV request is outside the closed protocol')
+    if method == 'GET':
+        _identifier(url.removeprefix(DETAIL_URL))
+    check_deadline(deadline)
+    remaining_time = min(10.0, deadline - time.monotonic())
+    if remaining_time <= 0:
+        raise SecurityDataError('query acquisition deadline exceeded')
+    request = urllib.request.Request(url, data=request_body if method == 'POST' else None, method=method,
+        headers={'User-Agent': 'getzilla-qualified-osv-query/1', 'Accept-Encoding': 'identity',
+                 'Content-Type': 'application/json'})
+    opener = urllib.request.build_opener(_NoQueryRedirects())
+    try:
+        with opener.open(request, timeout=remaining_time) as response:
+            check_deadline(deadline)
+            if response.status != 200 or response.geturl() != url:
+                raise SecurityDataError('qualified OSV response identity or status differs')
+            declared = response.headers.get('Content-Length')
+            if (response.headers.get('Content-Encoding', 'identity') != 'identity'
+                    or declared is not None and (type(declared) is not str or len(declared) > 20
+                    or not declared.isdecimal() or int(declared) > maximum)):
+                raise SecurityDataError('qualified OSV response exceeds its remaining body bound or encoding')
+            chunks, remaining = [], maximum + 1
+            while remaining:
+                check_deadline(deadline)
+                chunk = response.read1(min(65536, remaining))
+                check_deadline(deadline)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            body = b''.join(chunks)
+            if not body or len(body) > maximum or declared is not None and len(body) != int(declared):
+                raise SecurityDataError('qualified OSV response is empty, incomplete or exceeds bound')
+            return QueryResponse(method, url, request_body, body, response.status, response.geturl())
+    except http.client.HTTPException:
+        raise SecurityDataError('qualified OSV HTTP response is incomplete or malformed') from None
+
+
+def refresh_query(root: Path, database: Path, *, transport=None,
+                  now: datetime | None = None) -> dict:
+    """Explicit producer; read-only scans and receipt consumers never call it."""
+    from .known_vulns import dependency_inventory, load_config
+    from .security_osv_query import MAX_SECONDS, SOURCE_ID, acquire_transcript, check_deadline
+    deadline = time.monotonic() + MAX_SECONDS
+    try:
+        inventory = dependency_inventory(root, load_config(root))[2]
+        if not inventory['objects']:
+            return {'source_id': SOURCE_ID, 'status': 'skip', 'reason': 'actual structural absence; no acquisition'}
+        payload, acquisition, coverage = acquire_transcript(inventory, transport=fetch_osv_request if transport is None else transport,
+                                                           now=now, deadline=deadline)
+        if transport is None:
+            # This names the selected default code path, not independent
+            # publisher/runner authority. Explicit test ports stay synthetic.
+            acquisition['producer'] = 'getzilla-native-osv-query-v1'
+        def current_inputs():
+            check_deadline(deadline)
+            if dependency_inventory(root, load_config(root))[2] != inventory:
+                raise SecurityDataError('query policy or inventory changed before publication')
+            check_deadline(deadline)
+        current_inputs()
+        proof = publish_snapshot(database, SOURCE_ID, payload, acquisition=acquisition,
+                                 coverage=coverage, now=now, before_commit=current_inputs)
+        return {'source_id': SOURCE_ID, 'status': 'pass', 'snapshot': proof}
+    except (OSError, ValueError, RuntimeError):
+        return {'source_id': SOURCE_ID, 'status': 'fail',
+                'reason': 'qualified query acquisition or publication unavailable; possible commits require checked reconciliation'}

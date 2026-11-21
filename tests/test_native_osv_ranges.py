@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import subprocess
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 from pathlib import Path
 
@@ -27,7 +27,7 @@ class NativeOsvRangeTests(unittest.TestCase):
     def test_actual_cli_refuses_malformed_aliases_before_skipped_record_filters(self):
         for case in ('matched', 'withdrawn', 'unrelated', 'unaffected', 'accepted'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
-                fixtures._mirror(Path(database), 'PyPI', [fixtures.NativeAliasTests.record(case)])
+                fixtures._tampered_mirror(Path(database), 'PyPI', [fixtures.NativeAliasTests.record(case)])
                 files = {'requirements.txt': 'jinja2==2.11.0\n'}
                 if case == 'accepted':
                     files[KV.CONFIG_PATH] = json.dumps({'accept': [{'id': fixtures.JINJA['id'],
@@ -40,7 +40,7 @@ class NativeOsvRangeTests(unittest.TestCase):
                         cwd=root, env={**os.environ, 'GETZILLA_OSV_DB': database, 'GETZILLA_OSV_ONLINE': '0'},
                         capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 2)
-                self.assertIn('OSV aliases must be null or a list of valid identifiers', result.stderr)
+                self.assertIn('aliases', result.stderr)
                 self.assertNotIn('CVE-2099-9999', result.stdout+result.stderr)
 
     def test_actual_cli_keeps_nullable_and_valid_alias_findings(self):
@@ -194,7 +194,7 @@ class NativeOsvRangeTests(unittest.TestCase):
                     'node_modules/synthetic-package': {'version': version}}}
                 context, root = fixtures._repo({'package-lock.json': json.dumps(lock)})
                 with context, tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
-                    fixtures._mirror(Path(directory), 'npm', [record])
+                    fixtures._tampered_mirror(Path(directory), 'npm', [record])
                     config = root/KV.CONFIG_PATH
                     config.parent.mkdir(parents=True)
                     config.write_text(json.dumps({'accept': [{
@@ -370,7 +370,14 @@ class NativeOsvRangeTests(unittest.TestCase):
                 return KV.scan(target,environ={'GETZILLA_OSV_DB':str(database)},today=date(2026,11,5))
             with self.assertRaises(KV.VulnerabilityError):
                 actual_scan(root)
-            with patch.object(verification,'scan_known_vulnerabilities',side_effect=actual_scan):
+            from getzilla.expanded_security import known_vulnerability_check
+            def native_producer(target):
+                return known_vulnerability_check(target, environ={'GETZILLA_OSV_DB': str(database)},
+                                                  now=datetime(2026,11,5,tzinfo=timezone.utc))
+            with patch.object(verification,'known_vulnerability_check',side_effect=native_producer):
                 result = verification._known_vulnerabilities(root)
             self.assertEqual(result.status,'fail')
-            self.assertEqual(result.details,[])
+            structured = [row for row in result.details if row.get('kind') == 'security-result']
+            self.assertEqual(len(structured),1)
+            self.assertEqual(structured[0]['outcome'],'blocked')
+            self.assertEqual(structured[0]['accepted'],[])

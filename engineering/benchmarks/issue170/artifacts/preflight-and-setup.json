@@ -1,0 +1,21 @@
+{
+  "source_download_wall_seconds": null,
+  "source_download_peak_rss_kib": null,
+  "initial_build_wall_seconds": null,
+  "initial_build_peak_rss_kib": null,
+  "initial_build_observed_steps_seconds": {
+    "apt": 114.6,
+    "pip": 65.4,
+    "npm": 18.5,
+    "export_and_unpack": 79.9
+  },
+  "initial_build_measurement": "BuildKit observed stage durations copied from terminal; no complete build log or aggregate RSS captured",
+  "lifecycle": "Native SubagentStart child ID and generation were not exposed; no lifecycle event identity invented",
+  "initial_extension_build_failure": "FROM local name@sha256 attempted Docker Hub resolution and failed insufficient_scope; fixed to local tag after asserting exact local image ID",
+  "preflight": {
+    "experiment_mode": "0o700",
+    "free_disk_before_preparation": "276 GiB observed with df -h",
+    "network": "GitHub source and Hugging Face immutable model downloads succeeded; registry, apt, pip, npm preparation succeeded; analysis network=none",
+    "scope": "all inputs and outputs below experiment root; no product edits; no source upload"
+  }
+}

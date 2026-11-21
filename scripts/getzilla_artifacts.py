@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,17 @@ def _parser() -> argparse.ArgumentParser:
     export.add_argument("--change-id", required=True)
     export.add_argument("--write", action="store_true")
     export.add_argument("--expected-digest")
+    intake = sub.add_parser('intake')
+    intake.add_argument('action', choices=('inspect','assess','apply','recover','trace','decide'))
+    intake.add_argument('--request', help='Bounded repository-relative native request JSON')
+    intake.add_argument('--expected-cut', help='Exact cut digest; none only for initial publication')
+    intake.add_argument('--expected-state', help='Exact raw state digest; zero SHA for initial publication')
+    intake.add_argument('--publication-id')
+    intake.add_argument('--criterion-id')
+    intake.add_argument('--decision',choices=('accept','reject'),help='Explicit delegated native owner choice; never human/security approval')
+    intake.add_argument('--event-id',help='Stable exact owner action identity')
+    intake.add_argument('--draft-digest',help='Exact current substantive draft digest')
+    intake.add_argument('--source-digest',help='Exact current requirements source digest')
     return parser
 
 
@@ -60,6 +72,40 @@ def main() -> int:
     args = _parser().parse_args()
     try:
         root = find_root(ROOT)
+        if args.command == 'intake':
+            from getzilla.intake_publication import prepare_intake, recover_intake, read_intake_cut, trace_requirement, decide_intake, _request
+            from getzilla.requirements_intake import IntakeError, project_requirements
+            from getzilla.intake_readiness import assess_readiness
+            from getzilla.package_status import read_package_file
+            from getzilla.workflow_artifacts import _strict_json
+            if args.action == 'decide':
+                if args.request is not None or any(value is None for value in (args.decision,args.event_id,args.draft_digest,args.source_digest,args.expected_cut,args.expected_state)):
+                    raise IntakeError('explicit_decision_bindings_required')
+                result = decide_intake(root,decision=args.decision,event_id=args.event_id,
+                    expected_cut_digest=args.expected_cut,expected_state_digest=args.expected_state,
+                    expected_draft_digest=args.draft_digest,expected_source_digest=args.source_digest)
+            elif args.action == 'inspect':
+                result = read_intake_cut(root)
+            elif args.action == 'trace':
+                result = trace_requirement(root,args.criterion_id)
+            elif args.action == 'recover':
+                result = recover_intake(root,args.publication_id)
+            else:
+                if args.request is None:
+                    raise IntakeError('request_required')
+                request = _strict_json(read_package_file(root,args.request,1_000_000),limit=1_000_000)
+                request = _request(request)
+                if args.action == 'assess':
+                    from getzilla.state import require_route_owner
+                    require_route_owner(root)
+                    projection = project_requirements(request['snapshot'])
+                    result = assess_readiness(request['snapshot']['spec'],projection,request['snapshot']['policy'])
+                else:
+                    if args.expected_cut is None or args.expected_state is None:
+                        raise IntakeError('expected_bindings_required')
+                    result = prepare_intake(root,request,None if args.expected_cut=='none' else args.expected_cut,args.expected_state)
+            print(json.dumps(result,sort_keys=True,indent=2))
+            return 0
         route = load_runtime_authority(root, "route")
         active = load_runtime_authority(root, "change")
         from getzilla.workflow_storage import change_directory, valid_package_path

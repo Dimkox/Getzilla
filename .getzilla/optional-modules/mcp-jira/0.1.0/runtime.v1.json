@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "module": "mcp-jira",
+  "version": "0.1.0",
+  "required_features": [
+    "owned-runtime-v1",
+    "trusted-transport-v1",
+    "resource-budget-v1"
+  ],
+  "native_profiles": [
+    "managed-stdio-v1"
+  ]
+}

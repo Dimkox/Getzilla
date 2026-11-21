@@ -3,14 +3,14 @@
 #   download this script from a release tag, check its SHA-256 against the digest
 #   published in README.md / QUICKSTART.md, then run it (never pipe it into iex)
 #
-# Installs what is missing (Git, Python 3.13, your coding agent), downloads Getzilla,
-# points the agent at its models and runs its health check. Uses winget when it is available; otherwise it downloads the
-# official installers and installs them for the current user, without administrator
-# rights. Nothing is changed in your projects unless you ask for it below.
+# Resolves current verified Git/Python/PowerShell and selected managed software,
+# downloads Getzilla, reports provider setup and runs the final health check.
+# Portable runtimes install for the current user without administrator rights. Nothing is changed in your projects unless you ask for it below.
 #
-# Minimum versions: Windows PowerShell 5.1 can run this installer; Getzilla itself needs
-# PowerShell 7.4 or newer (pwsh), which this installer adds with winget when it is missing,
-# because agent hooks use the && and || operators that Windows PowerShell 5.1 lacks.
+# Runtime compatibility: Windows PowerShell 5.1 can run this installer and the
+# generated Windows hook launchers. The managed tool profile separately requires
+# PowerShell 7.4 or newer (pwsh), resolved and staged for the current user.
+# Installing pwsh does not change the parent shell of an already running client.
 #
 # Optional environment variables (set them before the command above):
 #   $env:GETZILLA_HOME = 'D:\Tools\Getzilla'   where Getzilla is kept (default: $HOME\Getzilla)
@@ -30,10 +30,10 @@
 #   $env:GETZILLA_SKIP_WINGET = '1'             do not install winget when it is missing
 #
 # Every run (first install or re-run) installs the mandatory baseline: the vulnerability data
-# (OSV CVE database, pinned OpenGrep scanner) and the pinned, commit-verified Superpowers, BMAD
-# and Spec Kit for your coding agent. There is no option to skip it: if any part does not
-# install, the installer stops with an error and says what to fix. Updating third-party tools
-# to newer versions stays a separate command: scripts/getzilla_update.py --only agents --only sources.
+# (OSV CVE database, current verified OpenGrep) and current release-bound Superpowers, BMAD
+# and Spec Kit payloads for your coding agent. There is no option to skip it: if any part does not
+# install, the installer stops with an error and says what to fix. Selected managed software
+# is freshly resolved each run; the updater also remains available explicitly.
 #
 # winget is missing on many Windows 10 machines. The installer then installs it
 # (App Installer from github.com/microsoft/winget-cli); if that is not possible it
@@ -66,19 +66,12 @@ function Install-Getzilla {
 
     Write-Step 'Getzilla installer (Windows)'
 
-    Initialize-Winget
+    $script:ResolvedRuntimeTargets = @{}
 
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Install-Git }
+    Install-Git
     Write-Step ("Git: " + (& git --version))
 
-    $Python = Find-Python
-    if (-not $Python) {
-        Install-Python
-        $Python = Find-Python
-    }
-    if (-not $Python) {
-        throw 'Python 3.10 or newer is still missing. Open a new PowerShell window and run this installer again.'
-    }
+    $Python = @(Install-Python)
     Write-Step ("Python: " + (Invoke-Python $Python @('--version')))
 
     Install-PowerShell7
@@ -93,20 +86,24 @@ function Install-Getzilla {
     if ($env:GETZILLA_SKIP_AGENT -eq '1') {
         Write-Step 'Skipping the coding agent (GETZILLA_SKIP_AGENT=1).'
     } else {
-        Install-Agent $Agent
+        Write-Step "Selected $Agent; exact current software is installed after source setup."
     }
 
     Get-GetzillaSource -Repo $Repo -Ref $Ref -Destination $GetzillaHome
     # One `getzilla <command>` for every tool (bin\getzilla.cmd), on PATH for new windows.
     Add-UserPath (Join-Path $GetzillaHome 'bin')
     Initialize-PythonEnvironment $Python $GetzillaHome
+    $Python = @((Join-Path $GetzillaHome '.venv\Scripts\python.exe'))
+    Add-UserPath (Join-Path $GetzillaHome '.venv\Scripts')
+    Install-Agent $Agent $Python $GetzillaHome
+    $AgentExit = 0
 
     Push-Location $GetzillaHome
     try {
-        if ($env:GETZILLA_SKIP_AGENT -ne '1') { Set-AgentConfiguration $Python $Agent $Provider }
-        Write-Step 'Checking this machine...'
-        Invoke-Python $Python @('scripts/getzilla_doctor.py', '--offer-install')
-        $DoctorExit = $LASTEXITCODE
+        if ($env:GETZILLA_SKIP_AGENT -ne '1') {
+            Set-AgentConfiguration $Python $Agent $Provider
+            $AgentExit = $LASTEXITCODE
+        }
     } finally {
         Pop-Location
     }
@@ -139,13 +136,28 @@ function Install-Getzilla {
     }
 
     $PythonText = $Python -join ' '
+    Push-Location $GetzillaHome
+    try {
+        Write-Step 'Checking this machine after all updates...'
+        $final = @('scripts/getzilla_install_managed.py', '--verify-only', '--home', $GetzillaHome)
+        if ($env:GETZILLA_SKIP_AGENT -ne '1') { $final += @('--agent', $Agent) }
+        foreach ($tool in @($env:GETZILLA_TOOLS -split ',' | Where-Object { $_ })) { $final += @('--tool', $tool.Trim()) }
+        Invoke-Python $Python $final
+        if ($LASTEXITCODE -ne 0) { throw 'Actual managed software/PATH changed or latest metadata is unavailable.' }
+        Invoke-Python $Python @('scripts/getzilla_doctor.py', '--offer-install')
+        $DoctorExit = $LASTEXITCODE
+    } finally { Pop-Location }
     Write-Host ''
-    if ($DoctorExit -eq 0) {
+    if ($DoctorExit -eq 0 -and $AgentExit -eq 0) {
         Write-Host "Getzilla is ready in $GetzillaHome" -ForegroundColor Green
     } else {
-        Write-Host "Getzilla is installed in $GetzillaHome, but the health check reported problems (FAIL lines above)." -ForegroundColor Yellow
+        throw "Getzilla installation is incomplete: health=$DoctorExit, agent/provider=$AgentExit. Follow the errors and next steps above."
     }
     Write-Host ''
+    # Optional telemetry has its own process deadline and cannot fail setup.
+    try { Invoke-Python $Python @((Join-Path $GetzillaHome 'scripts/getzilla_install_analytics.py'), '--ready') } catch {
+        Write-Verbose 'Optional installation telemetry is unavailable.'
+    }
     Write-Host 'Next:'
     Write-Host '  0. Every Getzilla tool is one command: getzilla help   (open a new PowerShell window first)'
     Write-Host "  1. New project:      cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --materialize-new C:\path\to\new\project"
@@ -174,16 +186,16 @@ function Update-SessionPath {
     if (-not (Test-IsWindowsHost)) { return }
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = (@($machine, $user) | Where-Object { $_ }) -join ';'
+    $env:Path = (@($env:Path, $user, $machine) | Where-Object { $_ }) -join ';'
 }
 
 function Add-UserPath([string]$Directory) {
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
     $parts = @()
     if ($user) { $parts = $user -split ';' | Where-Object { $_ } }
-    if ($parts -notcontains $Directory) {
-        [Environment]::SetEnvironmentVariable('Path', (@($parts) + $Directory) -join ';', 'User')
-    }
+    $parts = @($parts | Where-Object { $_ -ine $Directory })
+    [Environment]::SetEnvironmentVariable('Path', (@($Directory) + $parts) -join ';', 'User')
+    $env:Path = $Directory + ';' + $env:Path
     Update-SessionPath
 }
 
@@ -305,23 +317,62 @@ function Install-Winget {
 }
 
 function Expand-ToUserPrograms([string]$Zip, [string]$Name) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
     $target = Join-Path $env:LOCALAPPDATA "Programs\$Name"
-    $staging = Join-Path ([System.IO.Path]::GetTempPath()) "getzilla-$Name"
-    foreach ($path in @($target, $staging)) { if (Test-Path $path) { Remove-Item -Recurse -Force $path } }
-    Expand-Archive -Path $Zip -DestinationPath $staging -Force
-    Remove-Item -Force $Zip
-    $children = @(Get-ChildItem -Path $staging)
-    $source = $staging
-    if ($children.Count -eq 1 -and $children[0].PSIsContainer) { $source = $children[0].FullName }
-    New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-    Move-Item -Path $source -Destination $target
-    if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
+    $staging = Join-Path $env:LOCALAPPDATA ("Programs\Getzilla\.staging-" + [guid]::NewGuid().ToString('N'))
+    $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
+    try {
+        if ($archive.Entries.Count -gt 16384) { throw 'Runtime ZIP member count exceeds bound.' }
+        $total = 0L; $files = @{}
+        foreach ($entry in $archive.Entries) {
+            $nameInZip = $entry.FullName.Replace('\','/')
+            if ($nameInZip -match '(^/|:|(^|/)\.\.?(/|$))' -or ($entry.ExternalAttributes -shr 16 -band 61440) -eq 40960) { throw 'Unsafe runtime ZIP member.' }
+            $total += $entry.Length
+            if ($total -gt 536870912 -or $entry.Length -gt 134217728) { throw 'Runtime ZIP byte bound exceeded.' }
+            if (-not $entry.Name) { continue }
+            if ($files.ContainsKey($nameInZip)) { throw 'Duplicate runtime ZIP member.' }
+            $files[$nameInZip] = $entry
+        }
+        $prefix = ''
+        $roots = @($files.Keys | ForEach-Object { ($_ -split '/')[0] } | Select-Object -Unique)
+        if ($roots.Count -eq 1 -and @($files.Keys | Where-Object { $_ -notmatch '/' }).Count -eq 0) { $prefix = $roots[0] + '/' }
+        $existing = Test-Path -LiteralPath $target
+        if (-not $existing) { New-Item -ItemType Directory -Path $staging -Force | Out-Null }
+        foreach ($key in $files.Keys) {
+            $relative = $key.Substring($prefix.Length)
+            $destination = Join-Path $(if ($existing) { $target } else { $staging }) $relative
+            $stream = $files[$key].Open()
+            try {
+                if ($existing) {
+                    if (-not (Test-Path -LiteralPath $destination -PathType Leaf) -or (Get-Item -LiteralPath $destination).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Runtime/user conflict: $destination" }
+                    $sha = [Security.Cryptography.SHA256]::Create()
+                    try { $expected = ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
+                    if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Runtime/user byte conflict: $destination" }
+                } else {
+                    New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
+                    $output = [IO.File]::Create($destination)
+                    try { $stream.CopyTo($output) } finally { $output.Dispose() }
+                }
+            } finally { $stream.Dispose() }
+        }
+        if (-not $existing) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+            Move-Item -LiteralPath $staging -Destination $target
+        }
+    } finally {
+        $archive.Dispose()
+        Remove-Item -LiteralPath $Zip -Force
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    }
     return $target
 }
 
 function Get-Download([string]$Url, [string]$FileName) {
-    $path = Join-Path ([System.IO.Path]::GetTempPath()) $FileName
-    Invoke-WebRequest -Uri $Url -OutFile $path -UseBasicParsing
+    if ($FileName -match '[/\\:]' -or $FileName -in @('.', '..')) { throw 'Unsafe download filename.' }
+    $directory = Join-Path $env:LOCALAPPDATA ('Getzilla\downloads\' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    $path = Join-Path $directory $FileName
+    Invoke-WebRequest -Uri $Url -OutFile $path -UseBasicParsing -TimeoutSec 120
     return $path
 }
 
@@ -341,7 +392,7 @@ $PinnedDownloads = @{
 }
 
 function Get-PinnedDownload([string]$Key) {
-    $pin = $PinnedDownloads[$Key]
+    $pin = if ($Key -match '^(git|python|pwsh|node)-') { Get-CurrentRuntimeTarget $Key } else { $PinnedDownloads[$Key] }
     if (-not $pin) { throw "No pinned download for '$Key' on this machine. Install it manually and run this installer again." }
     $name = Split-Path $pin.Url -Leaf
     $path = Get-Download $pin.Url $name
@@ -353,21 +404,7 @@ function Get-PinnedDownload([string]$Key) {
     return $path
 }
 
-function Install-Git {
-    Write-Step 'Installing Git...'
-    if ((Test-WingetInstalls) -and (Invoke-Winget 'Git.Git' @())) {
-        Update-SessionPath
-        if (Get-Command git -ErrorAction SilentlyContinue) { return }
-    }
-    # No winget (for example in Windows Sandbox): portable MinGit for the current user.
-    $zip = Get-PinnedDownload ('git-' + (Get-WindowsArchitecture))
-    $target = Join-Path $env:LOCALAPPDATA 'Programs\MinGit'
-    if (Test-Path $target) { Remove-Item -Recurse -Force $target }
-    Expand-Archive -Path $zip -DestinationPath $target -Force
-    Remove-Item -Force $zip
-    Add-UserPath (Join-Path $target 'cmd')
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git was installed but is not on PATH. Open a new PowerShell window and run this installer again.' }
-}
+function Install-Git { Install-CurrentRuntime 'git' | Out-Null }
 
 function Test-PythonCommand([string[]]$Command) {
     try {
@@ -401,44 +438,7 @@ function Invoke-Python([string[]]$Python, [string[]]$Arguments) {
     & $exe @prefix @Arguments
 }
 
-function Install-Python {
-    Write-Step 'Installing Python 3.13 for the current user...'
-    # Not winget: on a clean Windows (Windows Sandbox) its Python.Python.3.13 install waited on an
-    # elevation prompt nobody could see, even with --scope user and per-user --override switches.
-    # The pinned python.org installer with these per-user switches needs no administrator.
-    $installer = Get-PinnedDownload ('python-' + (Get-WindowsArchitecture))
-    # Not Start-Process -Wait: Windows PowerShell then waits for the whole process tree, and the
-    # Python installer leaves a background child running, so the installer hung after Python was in.
-    $log = Join-Path (Get-InstallLogDir) 'python-install.log'
-    Write-Step "Python installer log: $log"
-    # Only the packages Getzilla needs: every MSI's signature check can wait about two minutes on a
-    # fresh Windows without cached revocation data (seen in Windows Sandbox), the py launcher
-    # is not needed because PrependPath puts python.exe on PATH, and the C headers (dev) are not
-    # needed because every package in Getzilla's environment installs as a wheel.
-    # Start-Process joins arguments with spaces and does not quote them in Windows PowerShell.
-    $process = Start-Process -FilePath $installer -PassThru -ArgumentList @(
-        '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=0', 'InstallLauncherAllUsers=0',
-        'Include_tcltk=0', 'Include_test=0', 'Include_doc=0', 'Include_dev=0', '/log', ('"' + $log + '"')
-    )
-    $null = $process.Handle  # keeps ExitCode readable after exit in Windows PowerShell
-    $started = Get-Date
-    $limit = New-TimeSpan -Minutes 30
-    while (-not $process.WaitForExit(30000)) {
-        $elapsed = (Get-Date) - $started
-        if ($elapsed -gt $limit) {
-            try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
-            Remove-Item -Force $installer -ErrorAction SilentlyContinue
-            throw "The Python installer did not finish within 30 minutes; see $log and the python-install_*.log files next to it. Install Python 3.13 for the current user from https://www.python.org/downloads/ and run this installer again."
-        }
-        $current = Select-String -Path $log -Pattern 'Applying execute package: (\w+?)_' -ErrorAction SilentlyContinue |
-            Select-Object -Last 1
-        $component = if ($current) { $current.Matches[0].Groups[1].Value } else { 'preparing' }
-        Write-Step ("Python: installing {0} ({1:N0} min so far; slow signature checks are normal on a fresh Windows)" -f $component, $elapsed.TotalMinutes)
-    }
-    Remove-Item -Force $installer
-    if ($process.ExitCode -ne 0) { throw "The Python installer failed with exit code $($process.ExitCode); see $log." }
-    Update-SessionPath
-}
+function Install-Python { return (Install-CurrentRuntime 'python') }
 
 $MinimumPowerShell = [version]'7.4'
 
@@ -447,6 +447,7 @@ function Get-Pwsh {
     if (-not $command) { return $null }
     try {
         $text = (& $command.Source -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -ne 0 -or "$text".Trim() -notmatch '^\d+\.\d+\.\d+$') { return $null }
         $version = [version](("$text".Trim()) -replace '[^0-9.].*$', '')
     } catch {
         return $null
@@ -454,54 +455,18 @@ function Get-Pwsh {
     return [pscustomobject]@{ Path = $command.Source; Version = $version }
 }
 
-function Install-PowerShell7 {
-    $pwsh = Get-Pwsh
-    if ($pwsh -and $pwsh.Version -ge $MinimumPowerShell) {
-        Write-Step ("PowerShell: " + $pwsh.Version)
-        return
-    }
-    Write-Step "Installing PowerShell $MinimumPowerShell or newer (Getzilla's minimum)..."
-    if ((Test-WingetInstalls) -and (Invoke-Winget 'Microsoft.PowerShell' @())) { Update-SessionPath }
-    $pwsh = Get-Pwsh
-    if (-not ($pwsh -and $pwsh.Version -ge $MinimumPowerShell)) {
-        try {
-            $folder = Expand-ToUserPrograms (Get-PinnedDownload ('pwsh-' + (Get-WindowsArchitecture))) 'PowerShell7'
-            Add-UserPath $folder
-        } catch {
-            Write-Verbose $_.Exception.Message
-        }
-        $pwsh = Get-Pwsh
-    }
-    if ($pwsh -and $pwsh.Version -ge $MinimumPowerShell) {
-        Write-Step ("PowerShell: " + $pwsh.Version)
-    } else {
-        Write-Step "PowerShell $MinimumPowerShell or newer is still missing. Install it from https://aka.ms/powershell-release?tag=lts and open agents from a PowerShell 7 window."
-    }
-}
+function Install-PowerShell7 { Install-CurrentRuntime 'pwsh' | Out-Null }
 
 function Initialize-PythonEnvironment([string[]]$Python, [string]$GetzillaHome) {
-    # Getzilla's own environment with the pinned test and quality tools (coverage, pytest-xdist,
-    # ruff, bandit); getzilla and getzilla_verify run under it.
-    Write-Step "Creating Getzilla's Python environment with the pinned test and quality tools..."
-    $venv = Join-Path $GetzillaHome '.venv'
-    Invoke-Python $Python @('-m', 'venv', $venv)
-    $venvPython = Join-Path $venv 'Scripts\python.exe'
-    if ($LASTEXITCODE -eq 0 -and (Test-Path $venvPython)) {
-        & $venvPython -m pip install --disable-pip-version-check -q `
-            -r (Join-Path $GetzillaHome '.getzilla\config\python-test-requirements.txt') `
-            -r (Join-Path $GetzillaHome '.getzilla\config\python-quality-requirements.txt')
-    }
-    if ($LASTEXITCODE -eq 0 -and (Test-Path $venvPython)) {
-        Write-Step "Python environment: $venv"
-    } else {
-        Write-Host "WARNING: could not create $venv; verify will report missing coverage, ruff and bandit." -ForegroundColor Yellow
-    }
+    Write-Step "Resolving current test/quality tools and verifying their complete wheel closure..."
+    Invoke-Python $Python @((Join-Path $GetzillaHome 'scripts/getzilla_install_managed.py'), '--environment-only', '--home', $GetzillaHome)
+    if ($LASTEXITCODE -ne 0) { throw 'Current managed Python environment is incomplete; no historical pins were used.' }
 }
 
 function Update-SecurityData([string[]]$Python, [string]$GetzillaHome) {
     # Not optional: without vulnerability data the gates would scan against an empty CVE
     # database, so a failure stops the install instead of warning.
-    Write-Step 'Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner...'
+    Write-Step 'Updating vulnerability data (OSV CVE database) and current verified OpenGrep...'
     Push-Location $GetzillaHome
     try {
         Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'osv', '--only', 'opengrep')
@@ -517,17 +482,12 @@ function Update-SecurityData([string[]]$Python, [string]$GetzillaHome) {
 function Install-WorkflowBaseline([string[]]$Python, [string]$GetzillaHome) {
     # Not optional: Superpowers, BMAD and Spec Kit at the pinned, commit-verified versions.
     # BMAD runs on Node.js; Spec Kit installs through uv, which brings its own Python 3.11+.
-    if (-not (Install-Node 20)) { throw 'Node.js 20 or newer is required for the BMAD installer and could not be installed.' }
+    if (-not (Test-Node 20)) { throw 'The verified current Node runtime is unavailable/incompatible.' }
     $venvPython = Join-Path $GetzillaHome '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $venvPython)) {
-        throw "Getzilla's Python environment ($GetzillaHome\.venv) is missing; it is needed for the Spec Kit installer."
+        throw "Getzilla's Python environment ($GetzillaHome\.venv) is missing; it is needed by the workflow source/data adapter."
     }
-    $uvCommand = Get-Command uv -ErrorAction SilentlyContinue
-    if (-not ($uvCommand -and ((& $uvCommand.Source --version 2>$null) -match '^uv 0\.11\.12\b'))) {
-        & $venvPython -m pip install --disable-pip-version-check --quiet 'uv==0.11.12'
-        if ($LASTEXITCODE -ne 0) { throw 'Installing uv 0.11.12 (needed for the pinned Spec Kit CLI) failed.' }
-    }
-    Write-Step 'Installing the pinned workflow baseline (Superpowers, BMAD, Spec Kit)...'
+    Write-Step 'Resolving the current verified workflow baseline (Superpowers, BMAD, Spec Kit)...'
     $previousPath = $env:Path
     $env:Path = (Join-Path $GetzillaHome '.venv\Scripts') + ';' + $env:Path
     Push-Location $GetzillaHome
@@ -636,21 +596,14 @@ function Get-AgentCommand([string]$Agent) {
     }
 }
 
-function Install-Agent([string]$Agent) {
-    switch ($Agent) {
-        'qwen' { Install-NpmAgent 'qwen' '@qwen-code/qwen-code@latest' 'Qwen Code' }
-        'codex' { Install-NpmAgent 'codex' '@openai/codex@latest' 'Codex CLI' }
-        'gemini' { Install-NpmAgent 'gemini' '@google/gemini-cli@latest' 'Gemini CLI' }
-        'copilot' { Install-NpmAgent 'copilot' '@github/copilot@latest' 'Copilot CLI' 22 }
-        'claude' { Install-Claude }
-        'grok' {
-            if ($env:GETZILLA_SKIP_GROK -eq '1') {
-                Write-Step 'Skipping the Grok Build CLI (GETZILLA_SKIP_GROK=1).'
-            } else {
-                Install-Grok
-            }
-        }
-    }
+function Install-Agent([string]$Agent, [string[]]$Python, [string]$GetzillaHome) {
+    $arguments = @((Join-Path $GetzillaHome 'scripts/getzilla_install_managed.py'), '--home', $GetzillaHome)
+    if ($env:GETZILLA_SKIP_AGENT -ne '1') { $arguments += @('--agent', $Agent) }
+    foreach ($tool in @($env:GETZILLA_TOOLS -split ',' | Where-Object { $_ })) { $arguments += @('--tool', $tool.Trim()) }
+    Invoke-Python $Python $arguments
+    if ($LASTEXITCODE -ne 0) { throw 'Current selected managed software is incomplete; see exact target/path/error above.' }
+    $state = if ($env:GETZILLA_STATE_HOME) { $env:GETZILLA_STATE_HOME } else { Join-Path $HOME '.getzilla' }
+    Add-UserPath (Join-Path $state 'bin')
 }
 
 function Test-Node([int]$Minimum = 20) {
@@ -660,6 +613,7 @@ function Test-Node([int]$Minimum = 20) {
         # strips the double quotes inside native arguments, and with ErrorActionPreference Stop
         # any stderr line from such a broken call would abort the whole installer.
         $text = (& node --version 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -ne 0 -or "$text".Trim() -notmatch '^v\d+\.\d+\.\d+$') { return $false }
         return ([int](("$text".Trim()) -replace '^v(\d+).*$', '$1') -ge $Minimum)
     } catch {
         return $false
@@ -667,53 +621,12 @@ function Test-Node([int]$Minimum = 20) {
 }
 
 function Install-Node([int]$Minimum = 20) {
-    if (Test-Node $Minimum) { return $true }
-    Write-Step "Installing Node.js LTS ($Minimum or newer is needed)..."
-    if ((Test-WingetInstalls) -and (Invoke-Winget 'OpenJS.NodeJS.LTS' @())) { Update-SessionPath }
-    if (Test-Node $Minimum) { return $true }
-    try {
-        $folder = Expand-ToUserPrograms (Get-PinnedDownload ('node-' + (Get-WindowsArchitecture))) 'nodejs'
-        Add-UserPath $folder
-        Add-UserPath (Join-Path $env:APPDATA 'npm')
-    } catch {
-        Write-Verbose $_.Exception.Message
-    }
-    if (Test-Node $Minimum) { return $true }
-    Write-Step "Node.js $Minimum or newer is still missing. Install it from https://nodejs.org and run this installer again."
-    return $false
+    Install-CurrentRuntime 'node' | Out-Null
+    if (-not (Test-Node $Minimum)) { throw 'Latest stable Node is incompatible with the selected component minimum.' }
+    return $true
 }
 
-function Install-NpmAgent([string]$Command, [string]$Package, [string]$Label, [int]$NodeMinimum = 20) {
-    if (Get-Command $Command -ErrorAction SilentlyContinue) {
-        Write-Step "${Label}: already installed."
-        return
-    }
-    if (-not (Install-Node $NodeMinimum)) { return }
-    Write-Step "Installing $Label..."
-    & npm install -g $Package | Out-Null
-    Update-SessionPath
-    if (Get-Command $Command -ErrorAction SilentlyContinue) {
-        Write-Step "$Label installed."
-    } else {
-        Write-Step "Could not install $Label now. Later run: npm install -g $Package"
-    }
-}
 
-function Install-Claude {
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        Write-Step 'Claude Code: already installed.'
-        return
-    }
-    Write-Step 'Installing Claude Code...'
-    $shell = (Get-Process -Id $PID).Path
-    & $shell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://claude.ai/install.ps1 | iex' | Out-Null
-    Add-UserPath (Join-Path $HOME '.local\bin')
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        Write-Step 'Claude Code installed.'
-    } else {
-        Write-Step 'Claude Code: if it is not found, open a new PowerShell window. To retry: irm https://claude.ai/install.ps1 | iex'
-    }
-}
 
 function Set-AgentConfiguration([string[]]$Python, [string]$Agent, [string]$Provider) {
     $arguments = @('scripts/getzilla_setup_agent.py', '--agent', $Agent, '--provider', $Provider)
@@ -765,25 +678,6 @@ function Set-AgentConfiguration([string[]]$Python, [string]$Agent, [string]$Prov
     }
 }
 
-function Install-Grok {
-    if (Get-Command grok -ErrorAction SilentlyContinue) {
-        Write-Step 'Grok Build CLI: already installed.'
-        return
-    }
-    Write-Step 'Installing the Grok Build CLI...'
-    # Run the vendor installer in its own process so it cannot end this session.
-    $shell = (Get-Process -Id $PID).Path
-    & $shell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://x.ai/cli/install.ps1 | iex' |
-        ForEach-Object { "$_" -split "`r" } |
-        Where-Object { $_.Trim() -and $_ -notmatch '^\s*[#=>\-\s]*\d{1,3}(\.\d+)?\s*%' } |
-        Out-Host
-    Update-SessionPath
-    if (Get-Command grok -ErrorAction SilentlyContinue) {
-        Write-Step 'Grok Build CLI installed.'
-    } else {
-        Write-Step 'Grok Build CLI: if it is not found, open a new PowerShell window. To retry: irm https://x.ai/cli/install.ps1 | iex'
-    }
-}
 
 function Get-GetzillaSource([string]$Repo, [string]$Ref, [string]$Destination) {
     if (Test-Path (Join-Path $Destination '.git')) {
@@ -801,8 +695,131 @@ function Get-GetzillaSource([string]$Repo, [string]$Ref, [string]$Destination) {
     }
 }
 
+function Get-CurrentGithubRelease([string]$Repository, [switch]$WindowsGit) {
+    $base = 'https://api.github.com/repos/' + $Repository
+    $release = Invoke-RestMethod -Uri "$base/releases/latest" -UseBasicParsing -TimeoutSec 20
+    $pattern = if ($WindowsGit) { '^v(\d+\.\d+\.\d+)\.windows\.(\d+)$' } else { '^v(\d+\.\d+\.\d+)$' }
+    if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch $pattern) { throw 'Official current release identity is invalid.' }
+    $current = if ($WindowsGit) { [version]($Matches[1] + '.' + $Matches[2]) } else { [version]$Matches[1] }
+    $refs = @(Invoke-RestMethod -Uri "$base/git/matching-refs/tags/" -UseBasicParsing -TimeoutSec 20)
+    if (-not $refs.Count -or $refs.Count -gt 4096) { throw 'Complete official tag index is unavailable or exceeds bounds.' }
+    $seen = @{}; $higher = @()
+    foreach ($row in $refs) {
+        if (-not $row.ref.StartsWith('refs/tags/') -or $seen.ContainsKey($row.ref)) { throw 'Invalid or duplicate official tag.' }
+        $seen[$row.ref] = $true
+        $tag = $row.ref.Substring(10)
+        if ($tag -match $pattern) {
+            $version = if ($WindowsGit) { [version]($Matches[1] + '.' + $Matches[2]) } else { [version]$Matches[1] }
+            if ($version -gt $current) { $higher += @{ Tag=$tag; Version=$version } }
+        }
+    }
+    if ($higher.Count -gt 16) { throw 'Higher stable release lookup exceeds bounds.' }
+    foreach ($candidate in @($higher | Sort-Object { $_.Version } -Descending)) {
+        try { $item = Invoke-RestMethod -Uri "$base/releases/tags/$($candidate.Tag)" -UseBasicParsing -TimeoutSec 20 }
+        catch {
+            if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { continue }
+            throw
+        }
+        if ($item.tag_name -cne $candidate.Tag) { throw 'Higher release identity differs.' }
+        if (-not $item.draft -and -not $item.prerelease) { return $item }
+    }
+    return $release
+}
+
+function Get-CurrentRuntimeTarget([string]$Key) {
+    if (-not $script:ResolvedRuntimeTargets) { $script:ResolvedRuntimeTargets = @{} }
+    if ($script:ResolvedRuntimeTargets.ContainsKey($Key)) { return $script:ResolvedRuntimeTargets[$Key] }
+    $component, $arch = $Key -split '-', 2
+    $metadataUrl = $null
+    switch ($component) {
+        'git' {
+            $metadataUrl = 'https://api.github.com/repos/git-for-windows/git/releases/latest'
+            $release = Get-CurrentGithubRelease 'git-for-windows/git' -WindowsGit
+            if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch '^v(\d+\.\d+\.\d+\.windows\.\d+)$') { throw 'Git for Windows current stable identity is invalid.' }
+            $version = $Matches[1]
+            $base = $version -replace '\.windows\.\d+$', ''
+            $suffix = if ($arch -eq 'x64') { '64-bit' } elseif ($arch -eq 'arm64') { 'arm64' } else { throw 'Unsupported native Git architecture.' }
+            $build = ($version -split '\.')[-1]
+            $asset = @($release.assets | Where-Object { $_.name -match ('^MinGit-' + [regex]::Escape($base) + '(?:\.' + $build + ')?-' + $suffix + '\.zip$') })
+            $name = if ($asset.Count -eq 1) { $asset[0].name } else { 'unavailable/ambiguous native ZIP' }
+            if ($asset.Count -ne 1 -or $asset[0].digest -notmatch '^sha256:([a-f0-9]{64})$') { throw "Git $version has no verified $name asset." }
+            $sha = $Matches[1]
+            $url = "https://github.com/git-for-windows/git/releases/download/$($release.tag_name)/$name"
+            if ($asset[0].browser_download_url -cne $url) { throw 'Git release URL differs from official identity.' }
+        }
+        'python' {
+            $metadataUrl = 'https://www.python.org/ftp/python/index-windows.json'
+            $next = $metadataUrl; $all = @(); $seen = @{}
+            for ($page = 0; $page -lt 16 -and $next; $page++) {
+                if ($seen.ContainsKey($next) -or $next -notmatch '^https://www\.python\.org/ftp/python/index-[A-Za-z0-9_.-]+\.json$') { throw 'Unsafe or cyclic Python index pagination.' }
+                $seen[$next] = $true
+                $index = Invoke-RestMethod -Uri $next -UseBasicParsing -TimeoutSec 20
+                $all += @($index.versions)
+                $next = if ($index.next) { ([uri]::new([uri]$next, [string]$index.next)).AbsoluteUri } else { $null }
+            }
+            if ($next) { throw 'Python catalog pagination exhausted; latest stable is unproved.' }
+            $stable = @($all | Where-Object { $_.'sort-version' -match '^\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.'sort-version' } -Descending)
+            if (-not $stable.Count) { throw 'Python current stable metadata is absent.' }
+            $version = $stable[0].'sort-version'
+            $suffix = if ($arch -eq 'x64') { '64' } elseif ($arch -eq 'arm64') { 'arm64' } else { throw 'Unsupported Python architecture.' }
+            $runtime = @($stable | Where-Object { $_.'sort-version' -ceq $version -and $_.id -match ("^pythoncore-\d+\.\d+-$suffix`$") })
+            if ($runtime.Count -ne 1 -or $runtime[0].executable -cne '.\python.exe') { throw "Python $version has no ordinary $arch runtime; no old-family fallback." }
+            $url = $runtime[0].url; $sha = $runtime[0].hash.sha256
+            if (-not $url.StartsWith("https://www.python.org/ftp/python/$version/python-$version-") -or -not $url.EndsWith('.zip')) { throw 'Python official ZIP identity is invalid.' }
+        }
+        'pwsh' {
+            $metadataUrl = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest'
+            $release = Get-CurrentGithubRelease 'PowerShell/PowerShell'
+            if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch '^v(\d+\.\d+\.\d+)$') { throw 'PowerShell current stable identity is invalid.' }
+            $version = $Matches[1]
+            if ([version]$version -lt $MinimumPowerShell) { throw "Current PowerShell $version is below required $MinimumPowerShell; no download or older fallback." }
+            $name = "PowerShell-$version-win-$arch.zip"
+            $asset = @($release.assets | Where-Object { $_.name -ceq $name })
+            if ($asset.Count -ne 1 -or $asset[0].digest -notmatch '^sha256:([a-f0-9]{64})$') { throw "PowerShell $version has no verified $name asset." }
+            $sha = $Matches[1]; $url = "https://github.com/PowerShell/PowerShell/releases/download/v$version/$name"
+            if ($asset[0].browser_download_url -cne $url) { throw 'PowerShell official asset identity differs.' }
+        }
+        'node' {
+            $metadataUrl = 'https://nodejs.org/dist/index.json'
+            $rows = Invoke-RestMethod -Uri $metadataUrl -UseBasicParsing -TimeoutSec 20
+            $stable = @($rows | Where-Object { $_.version -match '^v\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.version.TrimStart('v') } -Descending)
+            if (-not $stable.Count) { throw 'Node current stable metadata is absent.' }
+            $version = $stable[0].version.TrimStart('v'); $name = "node-v$version-win-$arch.zip"
+            if ($stable[0].files -notcontains "win-$arch-zip") { throw "Node $version has no Windows $arch ZIP; no older compatible fallback." }
+            $sums = (Invoke-WebRequest -Uri "https://nodejs.org/dist/v$version/SHASUMS256.txt" -UseBasicParsing -TimeoutSec 20).Content
+            $line = @(([string]$sums -split "`n") | Where-Object { $_ -match ('^([a-f0-9]{64})  ' + [regex]::Escape($name) + '\r?$') })
+            if ($line.Count -ne 1 -or $line[0] -notmatch '^([a-f0-9]{64})  ') { throw 'Node exact versioned SHA256 is absent.' }
+            $sha = $Matches[1]; $url = "https://nodejs.org/dist/v$version/$name"
+        }
+        default { throw "No current release resolver for $Key." }
+    }
+    if ($sha -notmatch '^[a-f0-9]{64}$') { throw "$component $version has no official SHA256." }
+    $target = @{ Url = $url; Sha256 = $sha; Version = $version; Metadata = $metadataUrl }
+    $script:ResolvedRuntimeTargets[$Key] = $target
+    return $target
+}
+
+function Install-CurrentRuntime([string]$Component) {
+    $arch = Get-WindowsArchitecture
+    $target = Get-CurrentRuntimeTarget "$Component-$arch"
+    $name = "Getzilla\runtimes\$Component-$($target.Version)-$($target.Sha256.Substring(0,16))"
+    $folder = Expand-ToUserPrograms (Get-PinnedDownload "$Component-$arch") $name
+    $relative = switch ($Component) { 'git' { 'cmd\git.exe' } 'python' { 'python.exe' } 'pwsh' { 'pwsh.exe' } 'node' { 'node.exe' } }
+    $binary = Join-Path $folder $relative
+    if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "$Component current archive has no $relative." }
+    $text = & $binary --version 2>$null
+    if ($LASTEXITCODE -ne 0 -or "$text" -notmatch ('(?<![\w.])' + [regex]::Escape($target.Version) + '(?![\w.])')) { throw "$Component target=$($target.Version) path=$binary actual version probe failed." }
+    Add-UserPath (Split-Path $binary)
+    $command = if ($Component -eq 'pwsh') { 'pwsh' } elseif ($Component -eq 'python') { 'python' } else { $Component }
+    $active = Get-Command $command -ErrorAction SilentlyContinue
+    if (-not $active -or $active.Source -ine $binary) { throw "$Component PATH conflict: expected $binary; actual $($active.Source)." }
+    Write-Step "$Component target=$($target.Version) actual=$($target.Version) path=$binary (official SHA256 verified)"
+    return $binary
+}
+
 try {
     Install-Getzilla
 } catch {
     Write-Host ("ERROR: " + $_.Exception.Message) -ForegroundColor Red
+    throw
 }

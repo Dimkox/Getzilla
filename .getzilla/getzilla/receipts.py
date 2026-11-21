@@ -8,7 +8,7 @@ import re
 import secrets
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 from . import fsx
 from .review_source import review_source_binding
+from .git_ranges import _qualified_architecture_comparison  # noqa: F401 compatibility
 from .state import serialized_task, require_route_owner
 from .architecture import (
     ArchitectureError,
@@ -29,7 +30,7 @@ from .architecture import (
     load_architecture,
     parse_adoption_marker,
 )
-from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
+from .architecture_diff import _exact_commit, _git, _git_blob, git_binding_scope, select_architecture_comparison_base
 from .governance import (
     DEBT_PATH,
     EXAMPLES_PATH,
@@ -57,6 +58,9 @@ RECEIPT_KINDS = frozenset(
         "release_review",
     }
 )
+# Factual publications share storage but can never satisfy required merge evidence.
+PUBLIC_REVIEW_OBSERVATION_KINDS = frozenset({'retrieval-public-witness-a', 'retrieval-public-witness-b', 'retrieval-public-producer-reference',
+    'retrieval-public-inspect-operation', 'retrieval-public-rank-operation', 'retrieval-public-inspection-outcome'})
 MAX_RECEIPT_BYTES = 262_144
 MAX_VERIFICATION_REPORT_BYTES = 8_388_608
 VERIFICATION_REPORT_CONTRACT = 'adaptive-grok.verification-report/v1'
@@ -136,7 +140,23 @@ def _open_receipt_directory(root: Path, route_id: str, *, create: bool = False) 
         raise
 
 
-def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str) -> tuple[dict[str, Any], bytes]:
+def _decode_receipt_bytes(content: bytes, label: str) -> dict[str, Any]:
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in items:
+            if key in value:
+                raise RuntimeError(f'{label} contains a duplicate JSON key')
+            value[key] = item
+        return value
+    data = json.loads(content.decode('utf-8', 'strict'), object_pairs_hook=pairs,
+                      parse_constant=lambda token: (_ for _ in ()).throw(RuntimeError(f'invalid {label} value: {token}')))
+    if not isinstance(data, dict):
+        raise RuntimeError(f'{label} must be a JSON object')
+    return data
+
+
+def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str,
+                       *, _observation: list | None = None) -> tuple[dict[str, Any], bytes]:
     if fsx.WINDOWS:
         opened = _windows_open_regular(directory_fd, name, os.O_RDONLY)
         if opened is None:
@@ -165,19 +185,17 @@ def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label
         if fsx.WINDOWS:
             _windows_confirm_directories([directory_fd])
 
-        def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
-            value: dict[str, Any] = {}
-            for key, item in items:
-                if key in value:
-                    raise RuntimeError(f'{label} contains a duplicate JSON key')
-                value[key] = item
-            return value
-
         content = b''.join(chunks)
-        data = json.loads(content.decode('utf-8', 'strict'), object_pairs_hook=pairs,
-                          parse_constant=lambda token: (_ for _ in ()).throw(RuntimeError(f'invalid {label} value: {token}')))
-        if not isinstance(data, dict):
-            raise RuntimeError(f'{label} must be a JSON object')
+        data = _decode_receipt_bytes(content, label)
+        if _observation is not None:
+            named = fsx.lstat_at(directory_fd, name)
+            fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns')
+            if any(getattr(named, key) != getattr(after, key) for key in fields):
+                raise RuntimeError(f'{label} name changed while being read')
+            directory = fsx.fstat_dir(directory_fd)
+            _observation.append((label, name, directory.st_dev, directory.st_ino,
+                _metadata_identity(after), after.st_size, after.st_uid, after.st_nlink,
+                hashlib.sha256(content).hexdigest()))
         return data, content
     finally:
         os.close(descriptor)
@@ -303,7 +321,8 @@ def _publish_verification_report(root: Path, route_id: str, receipt: dict[str, A
                 fsx.close_dir(route_fd)
 
 
-def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, receipt: dict[str, Any]) -> None:
+def _hydrate_verification_report(directory_fd: fsx.DirHandle | None, route_id: str, receipt: dict[str, Any],
+                                  *, _observation: list | None = None, anchor=None) -> None:
     details = receipt.get('details')
     if not isinstance(details, dict) or '_verification_report' not in details:
         return
@@ -319,8 +338,12 @@ def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, rec
         raise RuntimeError('verification report reference is outside the closed contract')
     reports_fd = None
     try:
-        reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
-        artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report')
+        if anchor is not None:
+            content = anchor.read(reference['path'], MAX_VERIFICATION_REPORT_BYTES)
+            artifact = _decode_receipt_bytes(content, 'verification report')
+        else:
+            reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
+            artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report', _observation=_observation)
     except FileNotFoundError as exc:
         raise RuntimeError('referenced verification report is missing') from exc
     finally:
@@ -356,8 +379,35 @@ class _AuthorityState:
     architecture_identity: tuple[int, int, int, int, int] | None
 
 
-def _authority_presence(root: Path, *, root_fd: int | None = None) -> _AuthorityState:
+def _authority_presence(root: Path, *, root_fd: int | None = None, anchor=None) -> _AuthorityState:
     """Establish stable fixed-entry absence without requiring byte-read primitives."""
+    if anchor is not None:
+        anchor.check_root(root)
+        before_root = _metadata_identity(anchor.root_info())
+        try:
+            before = anchor.stat('architecture', private=False, source=True)
+        except FileNotFoundError:
+            try:
+                anchor.stat('architecture', private=False, source=True)
+            except FileNotFoundError:
+                if _metadata_identity(anchor.root_info()) != before_root:
+                    raise ArchitectureError('repository root changed during authority inspection',code='io')
+                return _AuthorityState((False,False,False),before_root,None)
+            raise ArchitectureError('architecture authority appeared during absence inspection',code='io')
+        if not stat.S_ISDIR(before.st_mode):
+            raise ArchitectureError('architecture authority directory is unsafe',code='io')
+        present = []
+        for relative in (ADOPTION_PATH,SYSTEM_PATH,RULES_PATH):
+            try:
+                anchor.stat(relative.as_posix(),private=False,source=True)
+            except FileNotFoundError:
+                present.append(False)
+            else:
+                present.append(True)
+        if (_metadata_identity(anchor.stat('architecture',private=False,source=True)) != _metadata_identity(before)
+                or _metadata_identity(anchor.root_info()) != before_root):
+            raise ArchitectureError('architecture authority changed during inspection',code='io')
+        return _AuthorityState(tuple(present),before_root,_metadata_identity(before))
     resolved = root.resolve(strict=True)
     architecture = resolved / "architecture"
     try:
@@ -430,21 +480,23 @@ def _confirm_legacy_absence(
     root: Path,
     root_fd: int | None,
     initial: _AuthorityState,
+    *, anchor=None,
 ) -> None:
-    current = _authority_presence(root, root_fd=root_fd)
+    current = _authority_presence(root, root_fd=root_fd, anchor=anchor)
     if current != initial or current.entries != (False, False, False):
         raise RuntimeError("architecture authority appeared during legacy detection")
 
 
-def _architecture_adoption(root: Path, *, present: bool | None = None) -> dict[str, str] | None:
+def _architecture_adoption(root: Path, *, present: bool | None = None, anchor=None) -> dict[str, str] | None:
     if present is None:
-        present = _authority_presence(root).entries[0]
+        present = _authority_presence(root,anchor=anchor).entries[0]
     if not present:
         return None
     data = _read_regular_bytes(
         root,
         ADOPTION_PATH.as_posix(),
         label="architecture adoption",
+        anchor=anchor,
     )
     return parse_adoption_marker(data)
 
@@ -489,10 +541,13 @@ def _history_is_shallow(root: Path) -> bool:
     return raw == b"true\n"
 
 
+@git_binding_scope()
 def _active_architecture_binding(
     root: Path,
     route: dict[str, Any],
     root_fd: int | None,
+    *,
+    _trusted_ranges: Any = None,
 ) -> dict[str, Any] | None:
     authority = _authority_presence(root, root_fd=root_fd)
     adoption = _architecture_adoption(root, present=authority.entries[0])
@@ -504,9 +559,9 @@ def _active_architecture_binding(
         if head is None:
             _confirm_legacy_absence(root, root_fd, authority)
             return None
-        base_selection = select_architecture_comparison_base(root, route)
+        route_base = _exact_commit(root, route.get('base_commit', head), label='architecture_route_base_sha')
         exact_evidence = _exact_tree_has_architecture(root, head) or _exact_tree_has_architecture(
-            root, base_selection.route_base_sha
+            root, route_base
         )
         if not exact_evidence:
             exact_evidence = _exact_history_has_architecture(root, head)
@@ -530,7 +585,7 @@ def _active_architecture_binding(
     head = _exact_head(root)
     if head is None:
         raise RuntimeError("architecture binding requires an exact Git HEAD")
-    base_selection = select_architecture_comparison_base(root, route)
+    base_selection = select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges)
     fingerprint = architecture_fingerprint(
         root,
         snapshot,
@@ -538,6 +593,8 @@ def _active_architecture_binding(
         head_sha=f"worktree:{head}",
         contract_digests={record.path: record.digest for record in records},
     )
+    if select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges) != base_selection:
+        raise RuntimeError('architecture comparison changed during binding')
     return {
         "architecture_adoption_digest": adoption["digest"],
         "architecture_base_sha": base_selection.comparison_base_sha,
@@ -549,16 +606,19 @@ def _active_architecture_binding(
         "architecture_fingerprint": fingerprint,
         "architecture_head_commit": head,
         "architecture_head_kind": "worktree",
+        "architecture_range_mode": base_selection.range_mode,
         "architecture_route_base_sha": base_selection.route_base_sha,
         "architecture_rules_digest": digests["rules_digest"],
         "architecture_schema_digest": digests["schema_digest"],
         "architecture_system_digest": digests["system_digest"],
+        **({'architecture_comparison_witness': asdict(base_selection)}
+           if base_selection.base_kind == 'accepted_target' else {}),
     }
 
 
-def active_architecture_binding(root: Path, route: dict[str, Any]) -> dict[str, Any] | None:
+def active_architecture_binding(root: Path, route: dict[str, Any], *, _trusted_ranges: Any = None) -> dict[str, Any] | None:
     try:
-        return _active_architecture_binding(root, route, None)
+        return _active_architecture_binding(root, route, None, _trusted_ranges=_trusted_ranges)
     except NotImplementedError as exc:
         raise ArchitectureError(
             f"architecture authority metadata is unavailable: {exc}", code="io"
@@ -687,19 +747,26 @@ def active_governance_binding(
     root: Path,
     route: dict[str, Any],
     architecture: dict[str, Any] | None = None,
+    *,
+    _trusted_ranges: Any = None,
 ) -> dict[str, Any] | None:
     if not _governance_is_configured(root):
         return None
     try:
-        current_architecture = active_architecture_binding(root, route)
+        current_architecture = (active_architecture_binding(root, route) if _trusted_ranges is None else
+                                active_architecture_binding(root, route, _trusted_ranges=_trusted_ranges))
         if current_architecture is None:
             raise RuntimeError("governance requires adopted executable architecture")
         if architecture is not None and any(
-            architecture.get(field) != current_architecture[field]
+            architecture.get(field) != current_architecture.get(field)
             for field in (
                 "architecture_digest",
                 "architecture_base_sha",
                 "architecture_head_commit",
+                "architecture_route_base_sha",
+                "architecture_base_kind",
+                "architecture_comparison_witness",
+                "architecture_range_mode",
             )
         ):
             raise RuntimeError(
@@ -755,16 +822,24 @@ def receipt_dir(root: Path, route_id: str) -> Path:
     return path
 
 
-def _active_spec_binding(root: Path, route: dict[str, Any], kind: str) -> dict[str, Any] | None:
-    active = get_active_change(root) or {}
+def _active_spec_binding(root: Path, route: dict[str, Any], kind: str, *, anchor=None) -> dict[str, Any] | None:
+    active = get_active_change(root, anchor=anchor) or {}
     rel = active.get('path')
     if not rel:
         return None
     path = root / str(rel) / 'change-spec.yaml'
-    if not path.is_file():
-        return None
-    spec = load_spec(path, allow_legacy=False)
-    errors = validate_spec(root, path, gate=False, route=route)
+    if anchor is not None:
+        from .spec import MAX_SPEC_BYTES, _parse_canonical_json
+        try:
+            content = anchor.read(str(rel) + '/change-spec.yaml', MAX_SPEC_BYTES)
+        except FileNotFoundError:
+            return None
+        spec = _parse_canonical_json(content, path)
+    else:
+        if not path.is_file():
+            return None
+        spec = load_spec(path, allow_legacy=False)
+    errors = validate_spec(root, path, gate=False, route=route, anchor=anchor)
     if errors:
         raise RuntimeError('active change spec is invalid: ' + '; '.join(errors))
     criterion_ids = sorted({
@@ -775,7 +850,7 @@ def _active_spec_binding(root: Path, route: dict[str, Any], kind: str) -> dict[s
     return {
         'criterion_ids': criterion_ids,
         'spec_digest': canonical_spec_digest(spec),
-        'spec_fingerprint': spec_fingerprint(root, path, spec, route),
+        'spec_fingerprint': spec_fingerprint(root, path, spec, route, anchor=anchor),
     }
 
 
@@ -825,6 +900,15 @@ def _publish_receipt(path: Path, data: dict[str, Any], interrupt_check: Callable
                 pass
 
 
+def _verification_architecture_options(root: Path, route: dict[str, Any], kind: str, details: Any) -> dict[str, Any]:
+    if kind != 'verification' or not isinstance(details, dict) or 'mode' not in details:
+        return {}
+    from .git_ranges import _git_range_selection, _RANGE_MODES
+    if type(details['mode']) is not str or details['mode'] not in {'fast', *_RANGE_MODES}:
+        raise RuntimeError('verification invocation mode is unavailable')
+    return {'_trusted_ranges': _git_range_selection(root, route, details['mode'])}
+
+
 @serialized_task
 def write_receipt(
     root: Path,
@@ -842,6 +926,8 @@ def write_receipt(
     reviewed_context: str | None = None,
     expected_context: dict[str, Any] | None = None,
 ) -> Path:
+    if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and status != 'observed':
+        raise ValueError('public witness publication must remain observed')
     route = get_active_route(root)
     if not route:
         raise RuntimeError('no active route')
@@ -886,9 +972,10 @@ def write_receipt(
     ):
         raise RuntimeError("repository changed after verification checks")
     current = _active_spec_binding(root, route, kind)
-    current_architecture = active_architecture_binding(root, route)
+    architecture_options = _verification_architecture_options(root, route, kind, details)
+    current_architecture = active_architecture_binding(root, route, **architecture_options)
     current_governance = active_governance_binding(
-        root, route, current_architecture
+        root, route, current_architecture, **architecture_options
     )
     explicit = {
         'criterion_ids': sorted({str(item) for item in (criterion_ids or [])}),
@@ -922,8 +1009,8 @@ def write_receipt(
     }
     after_tree = tree_fingerprint(root)
     after_binding = _active_spec_binding(root, route, kind)
-    after_architecture = active_architecture_binding(root, route)
-    after_governance = active_governance_binding(root, route, after_architecture)
+    after_architecture = active_architecture_binding(root, route, **architecture_options)
+    after_governance = active_governance_binding(root, route, after_architecture, **architecture_options)
     if (
         (review_source is not None and review_source_binding(root, reviewed_commit, report, reviewed_context=reviewed_context) != review_source)
         or after_tree != before_tree
@@ -944,11 +1031,11 @@ def write_receipt(
         if spill:
             publication = _publish_verification_report(root, route['route_id'], data, interrupt_check)
             assert_context()
-            report_architecture = active_architecture_binding(root, route)
+            report_architecture = active_architecture_binding(root, route, **architecture_options)
             if (tree_fingerprint(root) != before_tree or _exact_head(root) != before_head
                     or _active_spec_binding(root, route, kind) != current
                     or report_architecture != current_architecture
-                    or active_governance_binding(root, route, report_architecture) != current_governance):
+                    or active_governance_binding(root, route, report_architecture, **architecture_options) != current_governance):
                 raise RuntimeError('repository or authority changed while verification report was written')
             data['details'] = {'_verification_report': publication.reference}
         assert_context()
@@ -973,27 +1060,50 @@ def write_receipt(
     finally:
         if publication is not None:
             publication.close()
-    from .route_metrics import record_receipt
+    if kind in PUBLIC_REVIEW_OBSERVATION_KINDS:
+        # A data witness is not an ordinary review attempt or failed review.
+        return path
+    from .metrics_journal import record_receipt
     from .metrics_journal import digest
     record_receipt(root, route.get('route_id'), kind, status, identity=digest(data))
     return path
 
 
-def get_receipt(root: Path, route_id: str, kind: str) -> dict[str, Any] | None:
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS:
+def get_receipt(root: Path, route_id: str, kind: str, *, anchor=None) -> dict[str, Any] | None:
+    return _read_receipt(root, route_id, kind, anchor=anchor)
+
+
+def _receipt_storage_identity(root: Path, route_id: str) -> tuple | None:
+    """Observe the bounded envelope and immutable artifact through pinned readers."""
+    observation: list = []
+    data = _read_receipt(root, route_id, 'verification', _observation=observation)
+    return tuple(observation) if data is not None else None
+
+
+def _read_receipt(root: Path, route_id: str, kind: str, *, _observation: list | None = None, anchor=None) -> dict[str, Any] | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS | PUBLIC_REVIEW_OBSERVATION_KINDS:
         raise RuntimeError("receipt route or kind is outside the closed set")
     directory_fd: fsx.DirHandle | None = None
     try:
-        directory_fd = _open_receipt_directory(root, route_id)
-        data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt')
+        if anchor is not None:
+            anchor.check_root(root)
+            content = anchor.read(f'.getzilla/runtime/receipts/{route_id}/{kind}.json', MAX_RECEIPT_BYTES)
+            data = _decode_receipt_bytes(content, 'receipt')
+        else:
+            directory_fd = _open_receipt_directory(root, route_id)
+            data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt', _observation=_observation)
+        if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and data.get('status') != 'observed':
+            raise RuntimeError('public witness publication must remain observed')
+        if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and (data.get('kind') != kind or data.get('route_id') != route_id):
+            raise RuntimeError('public witness publication binding mismatch')
         if kind == 'verification':
-            _hydrate_verification_report(directory_fd, route_id, data)
+            _hydrate_verification_report(directory_fd, route_id, data, anchor=anchor, _observation=_observation)
         return data
     except FileNotFoundError:
         return None
     except RuntimeError:
         raise
-    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise RuntimeError(f"receipt cannot be read safely: {exc}") from exc
     finally:
         if directory_fd is not None:
@@ -1043,6 +1153,7 @@ def validate_evidence(
     waived = _waived_evidence(root, route_id, required, current)
     for kind in [*[item for item in required if item not in waived], *escalated]:
         try:
+            receipt_identity = _receipt_storage_identity(root, route_id) if kind == 'verification' else None
             receipt = get_receipt(root, route_id, kind)
         except RuntimeError as exc:
             missing.append(f'{kind}: unsafe receipt: {exc}')
@@ -1065,6 +1176,10 @@ def validate_evidence(
             missing.append(f'{kind}: malformed receipt envelope')
         if receipt.get('status') != 'pass':
             missing.append(f'{kind}: status={receipt.get("status")}')
+        elif kind == 'verification':
+            from .verification_plan import report_gaps
+            missing.extend(f"verification: {item['code']}: {item['path']}: {item['message']}"
+                           for item in report_gaps(root, receipt.get('details')))
         if receipt.get('stale') is True:
             missing.append(f'{kind}: explicitly invalidated')
         plan_digest = (route.get('review_plan') or {}).get('digest')
@@ -1092,7 +1207,8 @@ def validate_evidence(
             if receipt.get('criterion_ids') != binding['criterion_ids']:
                 missing.append(f'{kind}: criterion binding stale')
         try:
-            architecture = active_architecture_binding(root, route)
+            architecture_options = _verification_architecture_options(root, route, kind, receipt.get('details'))
+            architecture = active_architecture_binding(root, route, **architecture_options)
         except (RuntimeError, ValueError) as exc:
             missing.append(f'{kind}: architecture binding stale: {exc}')
             continue
@@ -1102,7 +1218,7 @@ def validate_evidence(
         elif "architecture_digest" in receipt or "architecture_fingerprint" in receipt:
             missing.append(f'{kind}: architecture binding stale')
         try:
-            governance = active_governance_binding(root, route, architecture)
+            governance = active_governance_binding(root, route, architecture, **architecture_options)
         except (RuntimeError, ValueError) as exc:
             missing.append(f'{kind}: governance binding stale: {exc}')
             continue
@@ -1111,6 +1227,13 @@ def validate_evidence(
                 missing.append(f'{kind}: governance binding stale')
         elif "governance_digest" in receipt or "governance_evidence_digest" in receipt:
             missing.append(f'{kind}: governance binding stale')
+        if kind == 'verification':
+            try:
+                if (receipt_identity is None or get_receipt(root, route_id, kind) != receipt
+                        or _receipt_storage_identity(root, route_id) != receipt_identity):
+                    missing.append('verification: receipt changed during evidence validation')
+            except RuntimeError as exc:
+                missing.append(f'verification: unsafe receipt after evidence validation: {exc}')
     if escalated:
         missing = [f'{item} (required by exact-head diff risk)' if item.split(':', 1)[0] in escalated else item
                    for item in missing]

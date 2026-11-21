@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -9,9 +10,9 @@ import math
 import time
 import uuid
 
-from .contracts import HEX64, TaskIntakeV1, canonical_digest, canonical_json
+from .contracts import HEX64, ContractError, TaskIntakeV1, canonical_digest, canonical_json
 from .decision_contracts import DecisionRecordV1
-from .result_contracts import ResultEnvelopeV2
+from .result_contracts import ResultEnvelopeV2, ordinary_result_wire
 from .result_dispatch import DispatchClaim, DispatchOutcome
 from .brokers import (
     ArtifactProposal,
@@ -91,6 +92,10 @@ class StoreError(RuntimeError):
     pass
 
 
+class ResultReadUnavailable(StoreError):
+    """Protected/unknown source facts cannot enter the legacy read DTO."""
+
+
 class FenceError(StoreError):
     pass
 
@@ -127,47 +132,74 @@ class ResultAdmission:
 
 
 def _validate_capability_session(cursor, capability_role: str, label: str) -> None:
-    cursor.execute(
+    checks = _capability_session_checks(cursor.connection.info.server_version, capability_role, label)
+    rows = None
+    while True:
+        try:
+            query, parameters = checks.send(rows)
+        except StopIteration:
+            return
+        cursor.execute(query, parameters)
+        rows = cursor.fetchall()
+
+
+async def _validate_capability_session_async(cursor, capability_role: str, label: str) -> None:
+    checks = _capability_session_checks(cursor.connection.info.server_version, capability_role, label)
+    rows = None
+    while True:
+        try:
+            query, parameters = checks.send(rows)
+        except StopIteration:
+            return
+        await cursor.execute(query, parameters)
+        rows = await cursor.fetchall()
+
+
+def _capability_session_checks(server_version, capability_role: str, label: str):
+    rows = yield (
         """SELECT rolcanlogin,rolinherit,rolsuper,rolcreaterole,rolcreatedb,
         rolreplication,rolbypassrls,COALESCE(rolconfig,ARRAY[]::text[])
-        FROM pg_roles WHERE rolname=session_user"""
+        FROM pg_roles WHERE rolname=session_user""",
+        None,
     )
-    identity = cursor.fetchone()
+    identity = (rows[0] if rows else None)
     if identity is None or identity[:7] != (True, False, False, False, False, False, False) \
             or tuple(identity[7]) != ():
         raise StoreError(f"{label} login is not least privilege")
-    if cursor.connection.info.server_version >= 160000:
-        cursor.execute(
+    if server_version >= 160000:
+        rows = yield (
             """SELECT r.rolname,m.admin_option,m.inherit_option,m.set_option
             FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid
-            JOIN pg_roles u ON u.oid=m.member WHERE u.rolname=session_user"""
+            JOIN pg_roles u ON u.oid=m.member WHERE u.rolname=session_user""",
+            None,
         )
-        membership = cursor.fetchall()
+        membership = rows
         expected_membership = [(capability_role, False, False, True)]
     else:
-        cursor.execute(
+        rows = yield (
             """SELECT r.rolname,m.admin_option FROM pg_auth_members m
             JOIN pg_roles r ON r.oid=m.roleid JOIN pg_roles u ON u.oid=m.member
-            WHERE u.rolname=session_user"""
+            WHERE u.rolname=session_user""",
+            None,
         )
-        membership = cursor.fetchall()
+        membership = rows
         expected_membership = [(capability_role, False)]
     if membership != expected_membership:
         raise StoreError(f"{label} login has excess role membership")
-    cursor.execute(
+    rows = yield (
         """SELECT rolcanlogin,rolinherit,rolsuper,rolcreaterole,rolcreatedb,
         rolreplication,rolbypassrls,COALESCE(rolconfig,ARRAY[]::text[])
         FROM pg_roles WHERE rolname=%s""",
         (capability_role,),
     )
-    capability = cursor.fetchone()
+    capability = (rows[0] if rows else None)
     expected_config = (
         ("search_path=factory, pg_catalog",) if capability_role == "factory_runtime" else ()
     )
     if capability is None or capability[:7] != (False, False, False, False, False, False, False) \
             or tuple(capability[7]) != expected_config:
         raise StoreError(f"{label} capability role is not isolated")
-    cursor.execute(
+    rows = yield (
         """SELECT
         EXISTS(SELECT 1 FROM pg_auth_members membership
           JOIN pg_roles member ON member.oid=membership.member
@@ -179,10 +211,10 @@ def _validate_capability_session(cursor, capability_role: str, label: str) -> No
         session_user""",
         (capability_role, capability_role),
     )
-    outbound_membership, inbound_members, session_user = cursor.fetchone()
+    outbound_membership, inbound_members, session_user = (rows[0] if rows else None)
     if outbound_membership or tuple(inbound_members) != (session_user,):
         raise StoreError(f"{label} capability role is not isolated")
-    cursor.execute(
+    rows = yield (
         """WITH login AS (SELECT oid FROM pg_roles WHERE rolname=session_user)
         SELECT
           (SELECT datdba=(SELECT oid FROM login) FROM pg_database WHERE datname=current_database())
@@ -214,9 +246,10 @@ def _validate_capability_session(cursor, capability_role: str, label: str) -> No
             WHERE t.typacl IS NOT NULL AND a.grantee=(SELECT oid FROM login))
           OR EXISTS(SELECT 1 FROM pg_default_acl d
             CROSS JOIN LATERAL aclexplode(d.defaclacl) a
-            WHERE d.defaclrole=(SELECT oid FROM login) OR a.grantee=(SELECT oid FROM login))"""
+            WHERE d.defaclrole=(SELECT oid FROM login) OR a.grantee=(SELECT oid FROM login))""",
+        None,
     )
-    if cursor.fetchone()[0]:
+    if (rows[0] if rows else None)[0]:
         raise StoreError(f"{label} login has direct database authority")
 
 
@@ -1208,10 +1241,18 @@ class PostgresFactoryStore:
             raise StoreError("locked task state changed during transition")
         return current
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, workflow_boundary=None, workflow_root=None, workflow_repository=None) -> None:
         if not database_url:
             raise StoreError("database URL is required")
         self.database_url = database_url
+        if workflow_root is not None:
+            from .workflow import NativeWorkflowBoundary
+            if workflow_boundary is not None or not workflow_repository:
+                raise StoreError("workflow native configuration is ambiguous")
+            workflow_boundary = NativeWorkflowBoundary(
+                workflow_root, workflow_repository, verify_authority=self._verify_m0_authority
+            )
+        self.workflow_boundary = workflow_boundary
 
     def _connect(
         self,
@@ -2721,30 +2762,121 @@ class PostgresFactoryStore:
     def _is_killed(self, cursor, repositories: tuple[str, ...]) -> bool:
         scopes = ("global",) + tuple(f"repository:{item}" for item in repositories)
         cursor.execute(
-            "SELECT bool_or(enabled) FROM (SELECT DISTINCT ON (scope_key) scope_key,enabled FROM factory.kill_switches WHERE scope_key=ANY(%s) ORDER BY scope_key,created_at DESC,switch_id DESC) current",
+            "SELECT bool_or(enabled) FROM (SELECT DISTINCT ON (scope_key) scope_key,enabled FROM factory.kill_switches WHERE scope_key=ANY(%s) ORDER BY scope_key,revision DESC) current",
             (list(scopes),),
         )
         return bool(cursor.fetchone()[0])
 
-    def claim(self, request, actor: Actor, now: datetime, *, idempotency_key: str | None = None, correlation_id: str | None = None) -> LeaseGrant | None:
+    async def landing_stop_snapshot(self, source, actor):
+        """Bound connect, role checks and the canonical snapshot by one deadline."""
+        import psycopg
+        connection = None
+        async def observe():
+            nonlocal connection
+            connection = await psycopg.AsyncConnection.connect(
+                self.database_url, connect_timeout=1, autocommit=True,
+                options='-c lock_timeout=200ms -c statement_timeout=200ms',
+            )
+            if connection.info.server_version < 170000:
+                raise StoreError('Factory stop observation requires PostgreSQL 17')
+            async with connection.cursor() as cursor:
+                await cursor.execute('SET search_path=pg_catalog')
+                await _validate_capability_session_async(cursor, self._CAPABILITY_ROLE, self._CAPABILITY_LABEL)
+                if self._CAPABILITY_ROLE != 'factory_runtime':
+                    raise StoreError('unknown database capability')
+                await cursor.execute('SET ROLE factory_runtime')
+                await cursor.execute('SET search_path=pg_catalog,factory')
+                await cursor.execute("SELECT current_user,current_setting('search_path')")
+                if await cursor.fetchone() != (self._CAPABILITY_ROLE, 'pg_catalog, factory'):
+                    raise StoreError('Factory stop capability unavailable')
+                return await self._landing_stop_snapshot_query(cursor, source, actor)
+        task = asyncio.create_task(observe())
+        try:
+            done, _ = await asyncio.wait((task,), timeout=.75)
+            if task not in done:
+                raise StoreUnavailable('database unavailable')
+            return task.result()
+        finally:
+            # Close before cancellation: psycopg otherwise tries a separate
+            # server cancellation request, which itself can wait on an outage.
+            if connection is not None:
+                await connection.close()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _landing_stop_snapshot_query(self, cursor, source, actor):
+        """One statement reads the actual task/creator and both canonical heads."""
+        from .factory_stop import FactoryStopError, FactoryStopSnapshot, landing_source_id
+        repository_scope = f"repository:{source.repository_id}"
+        await cursor.execute(
+                """WITH heads AS (
+                  SELECT DISTINCT ON (scope_key) scope_key,enabled,revision
+                  FROM factory.kill_switches WHERE scope_key=ANY(%s)
+                  ORDER BY scope_key,revision DESC
+                )
+                SELECT t.task_id::text,t.packet_digest,t.repository_id,t.intake_actor_id,t.intake_actor_kind,
+                  COALESCE((SELECT revision FROM heads WHERE scope_key='global'),0),
+                  COALESCE((SELECT revision FROM heads WHERE scope_key=%s),0),
+                  COALESCE((SELECT enabled FROM heads WHERE scope_key='global'),false)
+                    OR COALESCE((SELECT enabled FROM heads WHERE scope_key=%s),false)
+                FROM factory.tasks t JOIN factory.accepted_intents i ON i.intent_id=t.intent_id
+                WHERE t.repository_id=%s AND i.repository_id=t.repository_id
+                  AND t.source_type='api' AND i.source_type=t.source_type AND i.source_id=t.source_id
+                  AND t.source_id=%s AND i.source_digest=%s AND i.exact_base_sha=%s
+                  AND t.intake_actor_id=%s AND t.intake_actor_kind=%s
+                  AND t.deadline_at>clock_timestamp()
+                  AND t.state IN ('queued','retry','leased','analyzing','implementing','verifying','reviewing')
+                ORDER BY t.generation DESC LIMIT 2""",
+                (['global', repository_scope], repository_scope, repository_scope, source.repository_id,
+                 landing_source_id(source.job_id), source.content_sha256, source.exact_base_sha,
+                 actor.actor_id, actor.kind),
+            )
+        rows = await cursor.fetchall()
+        if len(rows) != 1:
+            raise FactoryStopError('factory_stop_binding_required')
+        task, packet, repository, owner, kind, global_revision, repository_revision, stopped = rows[0]
+        return FactoryStopSnapshot(task, packet, repository, owner, kind, source.job_id, source.input_digest,
+                                   source.content_sha256, source.exact_base_sha, source.exact_base_tree,
+                                   global_revision, repository_revision, stopped)
+
+    def claim(self, request, actor: Actor, now: datetime, *, idempotency_key: str | None = None, correlation_id: str | None = None, workflow_candidate=None) -> LeaseGrant | None:
         if actor.kind != "worker" or request.owner != actor.actor_id:
             raise StoreError("claim owner must match worker actor")
-        with self._transaction() as cursor:
+        from .workflow import WorkflowCandidate, WorkflowRejected
+        if workflow_candidate is not None and not isinstance(workflow_candidate, WorkflowCandidate):
+            raise WorkflowRejected("candidate-invalid")
+        if workflow_candidate is not None and self.workflow_boundary is None:
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        from contextlib import nullcontext
+        authority_lock = (self.workflow_boundary.locked() if workflow_candidate is not None
+                          and hasattr(self.workflow_boundary, 'locked') else nullcontext())
+        with authority_lock, self._transaction() as cursor:
+            if workflow_candidate is not None:
+                # The trusted boundary locks current authority and prerequisites here.
+                # This is before replay, so a handoff also invalidates cached grants.
+                self.workflow_boundary.validate(
+                    cursor, workflow_candidate, request.owner, workflow_candidate.factory_task_id
+                )
             command = {
                 "owner": request.owner,
                 "role": request.role.value,
                 "repositories": list(request.repositories),
                 "lease_seconds": request.lease_seconds,
+                **({"workflow_candidate": workflow_candidate.to_dict()} if workflow_candidate is not None else {}),
             }
             replay, prior, request_digest = self._command_replay(cursor, idempotency_key, actor, "claim", command)
             if replay:
                 value = prior["grant"]
                 if value is None:
                     return None
-                return LeaseGrant(
+                grant = LeaseGrant(
                     value["task_id"], value["run_id"], value["owner"], RunRole(value["role"]), value["fence"],
                     datetime.fromisoformat(value["expires_at"].replace("Z", "+00:00")), value["packet_digest"]
                 )
+                if workflow_candidate is not None:
+                    self._lock_grant(cursor, grant)
+                return grant
             def no_grant() -> None:
                 self._record_command(
                     cursor, idempotency_key, actor, "claim", request_digest, correlation_id, {"grant": None}
@@ -2762,6 +2894,9 @@ class PostgresFactoryStore:
             cursor.execute(
                 """SELECT t.task_id,t.repository_id,t.packet_digest,t.deadline_at,t.infrastructure_retries,t.state
                 FROM factory.tasks t WHERE t.state IN ('queued','retry') AND t.repository_id=ANY(%s)
+                AND (%s::uuid IS NULL OR t.task_id=%s::uuid)
+                AND (%s OR NOT EXISTS (SELECT 1 FROM factory.accepted_intents wi
+                    WHERE wi.intent_id=t.intent_id AND wi.source_id LIKE 'workflow:v1:%%'))
                 AND t.deadline_at>clock_timestamp() AND NOT t.accounting_blocked
                 AND t.cost_reserved_micros=0 AND t.tokens_reserved=0 AND t.wall_reserved_seconds=0
                 AND NOT EXISTS (SELECT 1 FROM factory.budget_reservations b
@@ -2771,12 +2906,18 @@ class PostgresFactoryStore:
                   %s,%s
                 )
                 ORDER BY t.created_at,t.task_id FOR UPDATE SKIP LOCKED LIMIT 1""",
-                (list(eligible_repositories), request.owner, request.role.value),
+                (list(eligible_repositories),
+                 workflow_candidate.factory_task_id if workflow_candidate else None,
+                 workflow_candidate.factory_task_id if workflow_candidate else None,
+                 workflow_candidate is not None,
+                 request.owner, request.role.value),
             )
             row = cursor.fetchone()
             if not row:
                 return no_grant()
             task_id, repository_id, packet_digest, deadline, infrastructure_retries, task_state = row
+            if workflow_candidate is not None:
+                self.workflow_boundary.validate(cursor, workflow_candidate, request.owner, str(task_id))
             current = TaskStatus(task_state)
             cursor.execute("SELECT COALESCE(max(attempt_no),0)+1 FROM factory.attempts WHERE task_id=%s", (task_id,))
             attempt_no = cursor.fetchone()[0]
@@ -2905,8 +3046,46 @@ class PostgresFactoryStore:
             )
             return grant
 
-    def execution_material(self, grant: LeaseGrant) -> dict[str, object]:
-        with self._transaction() as cursor:
+    def workflow_intake_bindings(self, *, owner: str):
+        from .workflow import WorkflowRejected
+        if self.workflow_boundary is None:
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        with self.workflow_boundary.locked():
+            result = self.workflow_boundary.describe()
+            if result['owner'] != owner:
+                raise WorkflowRejected("owner")
+            return result
+
+    def workflow_ready(self, *, owner: str, node_key: str | None = None):
+        from .workflow import WorkflowRejected
+        if self.workflow_boundary is None:
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        with self.workflow_boundary.locked(), self._transaction() as cursor:
+            state, _ = self.workflow_boundary._snapshot(cursor)
+            if state['owner'] != owner:
+                raise WorkflowRejected("owner")
+            if node_key is None:
+                return self.workflow_boundary.ready(cursor)
+            return self.workflow_boundary.candidate(cursor, node_key)
+
+    def workflow_context(self, grant):
+        from .workflow import WorkflowRejected
+        if self.workflow_boundary is None:
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        with self.workflow_boundary.locked(), self._transaction() as cursor:
+            state, _ = self.workflow_boundary._snapshot(cursor)
+            self._lock_grant(cursor, grant)
+            if state['owner'] != grant.owner or grant.task_id not in state['bindings'].values():
+                raise WorkflowRejected("owner")
+            return state['context']
+
+    def execution_material(self, grant: LeaseGrant, *, workflow_candidate=None) -> dict[str, object]:
+        from contextlib import nullcontext
+        authority_lock = (self.workflow_boundary.locked() if workflow_candidate is not None
+                          and hasattr(self.workflow_boundary, 'locked') else nullcontext())
+        with authority_lock, self._transaction() as cursor:
+            if workflow_candidate is not None:
+                self.workflow_boundary.validate(cursor, workflow_candidate, grant.owner, grant.task_id)
             self._lock_grant(cursor, grant)
             cursor.execute(
                 """SELECT t.repository_id,t.packet_digest,t.deadline_at,i.body
@@ -2948,8 +3127,14 @@ class PostgresFactoryStore:
         *,
         idempotency_key: str | None = None,
         correlation_id: str | None = None,
+        workflow_candidate=None,
     ) -> ExecutionGrant:
-        with self._transaction() as cursor:
+        from contextlib import nullcontext
+        authority_lock = (self.workflow_boundary.locked() if workflow_candidate is not None
+                          and hasattr(self.workflow_boundary, 'locked') else nullcontext())
+        with authority_lock, self._transaction() as cursor:
+            if workflow_candidate is not None:
+                self.workflow_boundary.validate(cursor, workflow_candidate, grant.owner, grant.task_id)
             cursor.execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='5s'")
             self._lock_grant(cursor, grant)
             command = {
@@ -3100,6 +3285,7 @@ class PostgresFactoryStore:
             limits["max_cost_usd_micros"],
             limits["max_token_units"],
             tuple(body["provider"]["capabilities"]),
+            allowed_tools=tuple(body["capability_policy"]["allowed_tools"]),
         )
 
     def proposal_context(self, grant: LeaseGrant, packet_digest: str) -> ProposalContext:
@@ -4381,15 +4567,25 @@ class PostgresFactoryStore:
     ) -> ResultEnvelopeV2:
         with self._transaction() as cursor:
             cursor.execute(
-                "SELECT envelope FROM factory.result_sources_v1 "
-                "WHERE repository_id=%s AND task_id=%s AND envelope_digest=%s",
+                "SELECT s.envelope,s.access_grade,EXISTS("
+                "SELECT 1 FROM factory.next_model_request_outbox_v1 o "
+                "WHERE o.envelope_digest=s.envelope_digest AND "
+                "(o.source_grade<>'ordinary' OR o.access_binding IS NOT NULL OR o.access_phase IS NOT NULL)) "
+                "FROM factory.result_sources_v1 s "
+                "WHERE s.repository_id=%s AND s.task_id=%s AND s.envelope_digest=%s",
                 (repository_id, task_id, envelope_digest),
             )
             row = cursor.fetchone()
         if row is None:
             raise KeyError(envelope_digest)
         try:
-            result = ResultEnvelopeV2.from_dict(row[0])
+            if len(row) != 3:
+                raise ContractError('protected_result_unavailable')
+            wire = ordinary_result_wire(row[0], grade=row[1], protected_binding=row[2])
+        except ContractError:
+            raise ResultReadUnavailable('protected result unavailable') from None
+        try:
+            result = ResultEnvelopeV2.from_dict(wire)
         except Exception as exc:
             raise StoreError("stored result envelope is corrupt") from exc
         if (

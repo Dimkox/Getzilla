@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import STACK_DIR, state
-from .component_state import BoundRoot, ComponentStateError, component_transaction, mode_matches, path_parts
+from .fsx import ReadOnlyBoundRoot as BoundRoot, ComponentStateError, mode_matches, path_parts
 from .policy import evaluate_pre_tool
 from .skill_preflight import canonical, digest, parse_json
 from .skill_sandbox import MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, OUTPUT_PREFIXES
@@ -23,7 +23,7 @@ BLOB_PREFIX = '.getzilla/templates/baseline/blobs/'
 ARCHIVE_LIMIT = 16 * 1024 * 1024
 
 
-def archive_entries(raw: bytes) -> dict[str, tuple[bytes, int]]:
+def archive_entries(raw: bytes, *, canonical: bool = False) -> dict[str, tuple[bytes, int]]:
     """Decode the existing source container; no extraction or code execution."""
     if type(raw) is not bytes or len(raw) > ARCHIVE_LIMIT:
         raise ValueError('ASSET_ARCHIVE_BOUNDS')
@@ -32,16 +32,25 @@ def archive_entries(raw: bytes) -> dict[str, tuple[bytes, int]]:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             if not 1 <= len(archive.infolist()) <= MAX_FILES:
                 raise ValueError('ASSET_ARCHIVE_BOUNDS')
+            if canonical and (archive.comment or archive.namelist() != sorted(archive.namelist())
+                    or archive.infolist()[0].header_offset != 0 or raw[-22:-18] != b'PK\x05\x06'):
+                raise ValueError('NONCANONICAL_ASSET_ARCHIVE')
             for member in archive.infolist():
+                if canonical and (member.date_time != (1980, 1, 1, 0, 0, 0)
+                        or member.external_attr != 0o644 << 16 or member.compress_type != zipfile.ZIP_DEFLATED
+                        or member.flag_bits or member.extra or member.comment or member.create_system not in (0, 3)):
+                    raise ValueError('NONCANONICAL_ASSET_ARCHIVE')
                 if member.orig_filename != member.filename:
                     raise ValueError('UNSAFE_ASSET_ARCHIVE_MEMBER')
                 name = member.filename
                 path_parts(name)
                 logical = '.getzilla/' + name
                 resource = re.fullmatch(r'templates/baseline/blobs/([a-f0-9]{64})\.txt', name)
+                data = name in {'getzilla/research_conditions_v1.json',
+                                'getzilla/research_image_conditions_v1.json'}
                 code = re.fullmatch(r'getzilla/(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.py', name)
                 mode = member.external_attr >> 16
-                if (not (resource or code) or '\\' in name or logical in result or member.is_dir()
+                if (not (resource or code or data) or '\\' in name or logical in result or member.is_dir()
                         or stat.S_IFMT(mode) not in (0, stat.S_IFREG) or stat.S_IMODE(mode) != 0o644
                         or member.flag_bits & 1 or member.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
                         or member.file_size > MAX_FILE_BYTES):
@@ -250,31 +259,36 @@ def _intent_path(payload, *, agent=None):
     return '.getzilla/runtime/baseline-assets/' + payload.component + '-' + (agent or payload.agent) + '.json'
 
 
+def render_for_project(project: Path, payload: AssetPayload):
+    prepared = []
+    for name, content, mode in payload.files:
+        if payload.component == 'bmad' and name in {'_bmad/core/config.yaml', '_bmad/bmm/config.yaml'}:
+            content = re.sub(rb'(?m)^project_name: work$',
+                             lambda _match: b'project_name: ' + json.dumps(project.name, ensure_ascii=True).encode(), content)
+        prepared.append((name, content, mode))
+    if payload.component == 'bmad':
+        rendered_hashes = {name.removeprefix('_bmad/'): digest(content) for name, content, _ in prepared}
+        fixed = []
+        for name, content, mode in prepared:
+            if name == '_bmad/_config/files-manifest.csv':
+                rows = list(csv.reader(io.StringIO(content.decode('utf-8'))))
+                for row in rows:
+                    if len(row) == 5 and row[3] in rendered_hashes:
+                        row[4] = rendered_hashes[row[3]]
+                output = io.StringIO(newline='')
+                csv.writer(output, quoting=csv.QUOTE_ALL, lineterminator='\n').writerows(rows)
+                content = output.getvalue().encode('utf-8')
+            fixed.append((name, content, mode))
+        prepared = fixed
+    return prepared
+
+
 def materialize(project: Path, payload: AssetPayload) -> dict:
     if preflight_destination(project, payload):
         return {'status': 'preserved', 'added': 0, 'marker': '_bmad' if payload.component == 'bmad' else '.specify'}
     try:
         marker = '_bmad' if payload.component == 'bmad' else '.specify' if payload.component == 'spec-kit' else '.agents/skills'
-        prepared = []
-        for name, content, mode in payload.files:
-            if payload.component == 'bmad' and name in {'_bmad/core/config.yaml', '_bmad/bmm/config.yaml'}:
-                content = re.sub(rb'(?m)^project_name: work$',
-                                 lambda _match: b'project_name: ' + json.dumps(project.name, ensure_ascii=True).encode(), content)
-            prepared.append((name, content, mode))
-        if payload.component == 'bmad':
-            rendered_hashes = {name.removeprefix('_bmad/'): digest(content) for name, content, _ in prepared}
-            fixed = []
-            for name, content, mode in prepared:
-                if name == '_bmad/_config/files-manifest.csv':
-                    rows = list(csv.reader(io.StringIO(content.decode('utf-8'))))
-                    for row in rows:
-                        if len(row) == 5 and row[3] in rendered_hashes:
-                            row[4] = rendered_hashes[row[3]]
-                    output = io.StringIO(newline='')
-                    csv.writer(output, quoting=csv.QUOTE_ALL, lineterminator='\n').writerows(rows)
-                    content = output.getvalue().encode('utf-8')
-                fixed.append((name, content, mode))
-            prepared = fixed
+        prepared = render_for_project(project, payload)
 
         def authorize(name):
             # Preserve the existing explicitly invoked unrouted initializer. In an
@@ -329,3 +343,9 @@ def materialize(project: Path, payload: AssetPayload) -> dict:
                 'permissions_granted': False, 'native_execution': False}
     except (ComponentStateError, OSError) as exc:
         raise ValueError('UNSAFE_BASELINE_DESTINATION') from exc
+
+
+def component_transaction(root: Path, *, timeout: float = 5.0):
+    """Legacy publication facade; fixed-asset readers do not load writer state."""
+    from .component_state import component_transaction as transaction
+    return transaction(root, timeout=timeout)

@@ -1,0 +1,1756 @@
+{
+  "symbol_kinds": {
+    "function": 107,
+    "class": 29
+  },
+  "parsed_python_files": 15,
+  "ast_eligible_python_files": 14,
+  "extra_python_file": "docs/conf.py",
+  "unresolved_calls": 250,
+  "unresolved_imports": 73,
+  "overloaded_identity_groups": [
+    {
+      "graph_symbol": {
+        "id": "sym:src/itsdangerous/serializer.py::Serializer.__init__",
+        "kind": "function",
+        "path": "src/itsdangerous/serializer.py",
+        "qualname": "Serializer.__init__",
+        "span": [
+          110,
+          4,
+          122,
+          10
+        ]
+      },
+      "ast_declarations": [
+        {
+          "start": 109,
+          "end": 122,
+          "is_overload": true
+        },
+        {
+          "start": 125,
+          "end": 138,
+          "is_overload": true
+        },
+        {
+          "start": 141,
+          "end": 155,
+          "is_overload": true
+        },
+        {
+          "start": 160,
+          "end": 173,
+          "is_overload": true
+        },
+        {
+          "start": 176,
+          "end": 190,
+          "is_overload": true
+        },
+        {
+          "start": 192,
+          "end": 236,
+          "is_overload": false
+        }
+      ]
+    },
+    {
+      "graph_symbol": {
+        "id": "sym:src/itsdangerous/timed.py::TimestampSigner.unsign",
+        "kind": "function",
+        "path": "src/itsdangerous/timed.py",
+        "qualname": "TimestampSigner.unsign",
+        "span": [
+          57,
+          4,
+          62,
+          19
+        ]
+      },
+      "ast_declarations": [
+        {
+          "start": 56,
+          "end": 62,
+          "is_overload": true
+        },
+        {
+          "start": 64,
+          "end": 70,
+          "is_overload": true
+        },
+        {
+          "start": 72,
+          "end": 158,
+          "is_overload": false
+        }
+      ]
+    },
+    {
+      "graph_symbol": {
+        "id": "sym:tests/test_itsdangerous/test_serializer.py::coerce_str",
+        "kind": "function",
+        "path": "tests/test_itsdangerous/test_serializer.py",
+        "qualname": "coerce_str",
+        "span": [
+          22,
+          0,
+          22,
+          44
+        ]
+      },
+      "ast_declarations": [
+        {
+          "start": 21,
+          "end": 22,
+          "is_overload": true
+        },
+        {
+          "start": 25,
+          "end": 26,
+          "is_overload": true
+        },
+        {
+          "start": 29,
+          "end": 33,
+          "is_overload": false
+        }
+      ]
+    }
+  ],
+  "coverage_complete": false,
+  "symbols": [
+    {
+      "id": "sym:src/itsdangerous/__init__.py::__getattr__",
+      "kind": "function",
+      "path": "src/itsdangerous/__init__.py",
+      "qualname": "__getattr__",
+      "span": [
+        24,
+        0,
+        38,
+        30
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/_json.py::_CompactJSON",
+      "kind": "class",
+      "path": "src/itsdangerous/_json.py",
+      "qualname": "_CompactJSON",
+      "span": [
+        7,
+        0,
+        18,
+        41
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/_json.py::_CompactJSON.dumps",
+      "kind": "function",
+      "path": "src/itsdangerous/_json.py",
+      "qualname": "_CompactJSON.dumps",
+      "span": [
+        15,
+        4,
+        18,
+        41
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/_json.py::_CompactJSON.loads",
+      "kind": "function",
+      "path": "src/itsdangerous/_json.py",
+      "qualname": "_CompactJSON.loads",
+      "span": [
+        11,
+        4,
+        12,
+        35
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/encoding.py::base64_decode",
+      "kind": "function",
+      "path": "src/itsdangerous/encoding.py",
+      "qualname": "base64_decode",
+      "span": [
+        28,
+        0,
+        38,
+        59
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/encoding.py::base64_encode",
+      "kind": "function",
+      "path": "src/itsdangerous/encoding.py",
+      "qualname": "base64_encode",
+      "span": [
+        20,
+        0,
+        25,
+        56
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/encoding.py::bytes_to_int",
+      "kind": "function",
+      "path": "src/itsdangerous/encoding.py",
+      "qualname": "bytes_to_int",
+      "span": [
+        53,
+        0,
+        54,
+        54
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/encoding.py::int_to_bytes",
+      "kind": "function",
+      "path": "src/itsdangerous/encoding.py",
+      "qualname": "int_to_bytes",
+      "span": [
+        49,
+        0,
+        50,
+        45
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/encoding.py::want_bytes",
+      "kind": "function",
+      "path": "src/itsdangerous/encoding.py",
+      "qualname": "want_bytes",
+      "span": [
+        11,
+        0,
+        17,
+        12
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadData",
+      "kind": "class",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadData",
+      "span": [
+        7,
+        0,
+        19,
+        27
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadData.__init__",
+      "kind": "function",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadData.__init__",
+      "span": [
+        14,
+        4,
+        16,
+        30
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadData.__str__",
+      "kind": "function",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadData.__str__",
+      "span": [
+        18,
+        4,
+        19,
+        27
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadHeader",
+      "kind": "class",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadHeader",
+      "span": [
+        66,
+        0,
+        89,
+        62
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadHeader.__init__",
+      "kind": "function",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadHeader.__init__",
+      "span": [
+        74,
+        4,
+        89,
+        62
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadPayload",
+      "kind": "class",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadPayload",
+      "span": [
+        92,
+        0,
+        106,
+        62
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadPayload.__init__",
+      "kind": "function",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadPayload.__init__",
+      "span": [
+        101,
+        4,
+        106,
+        62
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadSignature",
+      "kind": "class",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadSignature",
+      "span": [
+        22,
+        0,
+        33,
+        44
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadSignature.__init__",
+      "kind": "function",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadSignature.__init__",
+      "span": [
+        25,
+        4,
+        33,
+        44
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadTimeSignature",
+      "kind": "class",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadTimeSignature",
+      "span": [
+        36,
+        0,
+        57,
+        38
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::BadTimeSignature.__init__",
+      "kind": "function",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "BadTimeSignature.__init__",
+      "span": [
+        41,
+        4,
+        57,
+        38
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/exc.py::SignatureExpired",
+      "kind": "class",
+      "path": "src/itsdangerous/exc.py",
+      "qualname": "SignatureExpired",
+      "span": [
+        60,
+        0,
+        63,
+        7
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer",
+      "kind": "class",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer",
+      "span": [
+        42,
+        0,
+        406,
+        53
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.__init__",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.__init__",
+      "span": [
+        110,
+        4,
+        122,
+        10
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer._loads_unsafe_impl",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer._loads_unsafe_impl",
+      "span": [
+        369,
+        4,
+        397,
+        34
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.dump",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.dump",
+      "span": [
+        324,
+        4,
+        328,
+        38
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.dump_payload",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.dump_payload",
+      "span": [
+        273,
+        4,
+        278,
+        79
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.dumps",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.dumps",
+      "span": [
+        311,
+        4,
+        322,
+        17
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.iter_unsigners",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.iter_unsigners",
+      "span": [
+        289,
+        4,
+        309,
+        63
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.load",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.load",
+      "span": [
+        347,
+        4,
+        349,
+        41
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.load_payload",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.load_payload",
+      "span": [
+        245,
+        4,
+        271,
+        20
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.load_unsafe",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.load_unsafe",
+      "span": [
+        399,
+        4,
+        406,
+        53
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.loads",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.loads",
+      "span": [
+        330,
+        4,
+        345,
+        50
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.loads_unsafe",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.loads_unsafe",
+      "span": [
+        351,
+        4,
+        367,
+        47
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.make_signer",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.make_signer",
+      "span": [
+        280,
+        4,
+        287,
+        77
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::Serializer.secret_key",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "Serializer.secret_key",
+      "span": [
+        239,
+        4,
+        243,
+        35
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::_PDataSerializer",
+      "kind": "class",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "_PDataSerializer",
+      "span": [
+        26,
+        0,
+        31,
+        55
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::_PDataSerializer.dumps",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "_PDataSerializer.dumps",
+      "span": [
+        31,
+        4,
+        31,
+        55
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::_PDataSerializer.loads",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "_PDataSerializer.loads",
+      "span": [
+        27,
+        4,
+        27,
+        59
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/serializer.py::is_text_serializer",
+      "kind": "function",
+      "path": "src/itsdangerous/serializer.py",
+      "qualname": "is_text_serializer",
+      "span": [
+        35,
+        0,
+        39,
+        48
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::HMACAlgorithm",
+      "kind": "class",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "HMACAlgorithm",
+      "span": [
+        48,
+        0,
+        64,
+        27
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::HMACAlgorithm.__init__",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "HMACAlgorithm.__init__",
+      "span": [
+        56,
+        4,
+        60,
+        49
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::HMACAlgorithm.get_signature",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "HMACAlgorithm.get_signature",
+      "span": [
+        62,
+        4,
+        64,
+        27
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::NoneAlgorithm",
+      "kind": "class",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "NoneAlgorithm",
+      "span": [
+        31,
+        0,
+        37,
+        18
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::NoneAlgorithm.get_signature",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "NoneAlgorithm.get_signature",
+      "span": [
+        36,
+        4,
+        37,
+        18
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer",
+      "kind": "class",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer",
+      "span": [
+        76,
+        0,
+        266,
+        24
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer.__init__",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer.__init__",
+      "span": [
+        129,
+        4,
+        173,
+        52
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer.derive_key",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer.derive_key",
+      "span": [
+        182,
+        4,
+        213,
+        60
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer.get_signature",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer.get_signature",
+      "span": [
+        215,
+        4,
+        220,
+        33
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer.secret_key",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer.secret_key",
+      "span": [
+        176,
+        4,
+        180,
+        35
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer.sign",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer.sign",
+      "span": [
+        222,
+        4,
+        225,
+        59
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer.unsign",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer.unsign",
+      "span": [
+        244,
+        4,
+        256,
+        78
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer.validate",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer.validate",
+      "span": [
+        258,
+        4,
+        266,
+        24
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::Signer.verify_signature",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "Signer.verify_signature",
+      "span": [
+        227,
+        4,
+        242,
+        20
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::SigningAlgorithm",
+      "kind": "class",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "SigningAlgorithm",
+      "span": [
+        15,
+        0,
+        28,
+        71
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::SigningAlgorithm.get_signature",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "SigningAlgorithm.get_signature",
+      "span": [
+        20,
+        4,
+        22,
+        35
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::SigningAlgorithm.verify_signature",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "SigningAlgorithm.verify_signature",
+      "span": [
+        24,
+        4,
+        28,
+        71
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::_lazy_sha1",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "_lazy_sha1",
+      "span": [
+        40,
+        0,
+        45,
+        31
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/signer.py::_make_keys_list",
+      "kind": "function",
+      "path": "src/itsdangerous/signer.py",
+      "qualname": "_make_keys_list",
+      "span": [
+        67,
+        0,
+        73,
+        46
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimedSerializer",
+      "kind": "class",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimedSerializer",
+      "span": [
+        170,
+        0,
+        228,
+        81
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimedSerializer.iter_unsigners",
+      "kind": "function",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimedSerializer.iter_unsigners",
+      "span": [
+        177,
+        4,
+        180,
+        85
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimedSerializer.loads",
+      "kind": "function",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimedSerializer.loads",
+      "span": [
+        185,
+        4,
+        220,
+        50
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimedSerializer.loads_unsafe",
+      "kind": "function",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimedSerializer.loads_unsafe",
+      "span": [
+        222,
+        4,
+        228,
+        81
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimestampSigner",
+      "kind": "class",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimestampSigner",
+      "span": [
+        22,
+        0,
+        167,
+        24
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimestampSigner.get_timestamp",
+      "kind": "function",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimestampSigner.get_timestamp",
+      "span": [
+        29,
+        4,
+        33,
+        31
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimestampSigner.sign",
+      "kind": "function",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimestampSigner.sign",
+      "span": [
+        45,
+        4,
+        51,
+        54
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimestampSigner.timestamp_to_datetime",
+      "kind": "function",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimestampSigner.timestamp_to_datetime",
+      "span": [
+        35,
+        4,
+        43,
+        58
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimestampSigner.unsign",
+      "kind": "function",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimestampSigner.unsign",
+      "span": [
+        57,
+        4,
+        62,
+        19
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/timed.py::TimestampSigner.validate",
+      "kind": "function",
+      "path": "src/itsdangerous/timed.py",
+      "qualname": "TimestampSigner.validate",
+      "span": [
+        160,
+        4,
+        167,
+        24
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/url_safe.py::URLSafeSerializer",
+      "kind": "class",
+      "path": "src/itsdangerous/url_safe.py",
+      "qualname": "URLSafeSerializer",
+      "span": [
+        72,
+        0,
+        76,
+        7
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/url_safe.py::URLSafeSerializerMixin",
+      "kind": "class",
+      "path": "src/itsdangerous/url_safe.py",
+      "qualname": "URLSafeSerializerMixin",
+      "span": [
+        15,
+        0,
+        69,
+        22
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/url_safe.py::URLSafeSerializerMixin.dump_payload",
+      "kind": "function",
+      "path": "src/itsdangerous/url_safe.py",
+      "qualname": "URLSafeSerializerMixin.dump_payload",
+      "span": [
+        55,
+        4,
+        69,
+        22
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/url_safe.py::URLSafeSerializerMixin.load_payload",
+      "kind": "function",
+      "path": "src/itsdangerous/url_safe.py",
+      "qualname": "URLSafeSerializerMixin.load_payload",
+      "span": [
+        23,
+        4,
+        53,
+        58
+      ]
+    },
+    {
+      "id": "sym:src/itsdangerous/url_safe.py::URLSafeTimedSerializer",
+      "kind": "class",
+      "path": "src/itsdangerous/url_safe.py",
+      "qualname": "URLSafeTimedSerializer",
+      "span": [
+        79,
+        0,
+        83,
+        7
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_encoding.py::test_base64",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_encoding.py",
+      "qualname": "test_base64",
+      "span": [
+        18,
+        0,
+        22,
+        35
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_encoding.py::test_base64_bad",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_encoding.py",
+      "qualname": "test_base64_bad",
+      "span": [
+        25,
+        0,
+        27,
+        30
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_encoding.py::test_int_bytes",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_encoding.py",
+      "qualname": "test_int_bytes",
+      "span": [
+        33,
+        0,
+        37,
+        23
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_encoding.py::test_want_bytes",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_encoding.py",
+      "qualname": "test_want_bytes",
+      "span": [
+        12,
+        0,
+        14,
+        33
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer",
+      "span": [
+        36,
+        0,
+        184,
+        57
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.serializer",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.serializer",
+      "span": [
+        42,
+        4,
+        43,
+        35
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.serializer_factory",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.serializer_factory",
+      "span": [
+        38,
+        4,
+        39,
+        62
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_alt_salt",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_alt_salt",
+      "span": [
+        123,
+        4,
+        129,
+        62
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_bad_payload_exception",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_bad_payload_exception",
+      "span": [
+        81,
+        4,
+        89,
+        56
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_bad_signature_exception",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_bad_signature_exception",
+      "span": [
+        72,
+        4,
+        79,
+        56
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_changed_value",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_changed_value",
+      "span": [
+        64,
+        4,
+        70,
+        37
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_fallback_signers",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_fallback_signers",
+      "span": [
+        156,
+        4,
+        165,
+        57
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_file",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_file",
+      "span": [
+        113,
+        4,
+        121,
+        57
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_iter_unsigners",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_iter_unsigners",
+      "span": [
+        167,
+        4,
+        184,
+        57
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_iter_unsigners.Signer256",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_iter_unsigners.Signer256",
+      "span": [
+        168,
+        8,
+        169,
+        50
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_loads_unsafe",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_loads_unsafe",
+      "span": [
+        91,
+        4,
+        111,
+        67
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_loads_unsafe.BadUnsign",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_loads_unsafe.BadUnsign",
+      "span": [
+        102,
+        8,
+        108,
+        25
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_loads_unsafe.BadUnsign.unsign",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_loads_unsafe.BadUnsign.unsign",
+      "span": [
+        103,
+        12,
+        108,
+        25
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_serializer",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_serializer",
+      "span": [
+        52,
+        4,
+        53,
+        65
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_serializer_kwargs",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_serializer_kwargs",
+      "span": [
+        146,
+        4,
+        154,
+        64
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_signer_cls",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_signer_cls",
+      "span": [
+        131,
+        4,
+        137,
+        60
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_signer_cls.Other",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_signer_cls.Other",
+      "span": [
+        132,
+        8,
+        133,
+        43
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.test_signer_kwargs",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.test_signer_kwargs",
+      "span": [
+        139,
+        4,
+        144,
+        64
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::TestSerializer.value",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "TestSerializer.value",
+      "span": [
+        46,
+        4,
+        47,
+        25
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::coerce_str",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "coerce_str",
+      "span": [
+        22,
+        0,
+        22,
+        44
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_serializer.py::test_digests",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "qualname": "test_digests",
+      "span": [
+        187,
+        0,
+        197,
+        5
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner",
+      "span": [
+        18,
+        0,
+        102,
+        34
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.signer",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.signer",
+      "span": [
+        24,
+        4,
+        25,
+        31
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.signer_factory",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.signer_factory",
+      "span": [
+        20,
+        4,
+        21,
+        55
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_algorithm",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_algorithm",
+      "span": [
+        87,
+        4,
+        92,
+        73
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_broken_signature",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_broken_signature",
+      "span": [
+        42,
+        4,
+        51,
+        45
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_changed_value",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_changed_value",
+      "span": [
+        53,
+        4,
+        59,
+        33
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_digest_method",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_digest_method",
+      "span": [
+        80,
+        4,
+        82,
+        62
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_invalid_key_derivation",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_invalid_key_derivation",
+      "span": [
+        74,
+        4,
+        78,
+        31
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_invalid_separator",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_invalid_separator",
+      "span": [
+        61,
+        4,
+        65,
+        64
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_key_derivation",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_key_derivation",
+      "span": [
+        70,
+        4,
+        72,
+        62
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_no_separator",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_no_separator",
+      "span": [
+        34,
+        4,
+        40,
+        33
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_secret_keys",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_secret_keys",
+      "span": [
+        94,
+        4,
+        102,
+        34
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::TestSigner.test_signer",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "TestSigner.test_signer",
+      "span": [
+        27,
+        4,
+        32,
+        34
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::_ReverseAlgorithm",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "_ReverseAlgorithm",
+      "span": [
+        13,
+        0,
+        15,
+        34
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::_ReverseAlgorithm.get_signature",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "_ReverseAlgorithm.get_signature",
+      "span": [
+        14,
+        4,
+        15,
+        34
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_signer.py::test_abstract_algorithm",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "qualname": "test_abstract_algorithm",
+      "span": [
+        105,
+        0,
+        109,
+        37
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::FreezeMixin",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "FreezeMixin",
+      "span": [
+        18,
+        0,
+        26,
+        20
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::FreezeMixin.freeze",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "FreezeMixin.freeze",
+      "span": [
+        24,
+        4,
+        26,
+        20
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::FreezeMixin.ts",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "FreezeMixin.ts",
+      "span": [
+        20,
+        4,
+        21,
+        66
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimedSerializer",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimedSerializer",
+      "span": [
+        96,
+        0,
+        115,
+        77
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimedSerializer.serializer_factory",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimedSerializer.serializer_factory",
+      "span": [
+        98,
+        4,
+        99,
+        64
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimedSerializer.test_max_age",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimedSerializer.test_max_age",
+      "span": [
+        101,
+        4,
+        111,
+        71
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimedSerializer.test_return_payload",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimedSerializer.test_return_payload",
+      "span": [
+        113,
+        4,
+        115,
+        77
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner",
+      "span": [
+        29,
+        0,
+        93,
+        63
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner.signer_factory",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner.signer_factory",
+      "span": [
+        31,
+        4,
+        32,
+        64
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner.test_future_age",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner.test_future_age",
+      "span": [
+        78,
+        4,
+        85,
+        63
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner.test_malformed_future_timestamp",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner.test_malformed_future_timestamp",
+      "span": [
+        69,
+        4,
+        76,
+        49
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner.test_malformed_timestamp",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner.test_malformed_timestamp",
+      "span": [
+        59,
+        4,
+        67,
+        49
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner.test_max_age",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner.test_max_age",
+      "span": [
+        34,
+        4,
+        43,
+        47
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner.test_return_timestamp",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner.test_return_timestamp",
+      "span": [
+        45,
+        4,
+        47,
+        77
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner.test_sig_error_date_signed",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner.test_sig_error_date_signed",
+      "span": [
+        87,
+        4,
+        93,
+        63
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_timed.py::TestTimestampSigner.test_timestamp_missing",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "qualname": "TestTimestampSigner.test_timestamp_missing",
+      "span": [
+        49,
+        4,
+        57,
+        49
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_url_safe.py::TestURLSafeSerializer",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_url_safe.py",
+      "qualname": "TestURLSafeSerializer",
+      "span": [
+        11,
+        0,
+        18,
+        28
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_url_safe.py::TestURLSafeSerializer.serializer_factory",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_url_safe.py",
+      "qualname": "TestURLSafeSerializer.serializer_factory",
+      "span": [
+        13,
+        4,
+        14,
+        66
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_url_safe.py::TestURLSafeSerializer.value",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_url_safe.py",
+      "qualname": "TestURLSafeSerializer.value",
+      "span": [
+        17,
+        4,
+        18,
+        28
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_url_safe.py::TestURLSafeTimedSerializer",
+      "kind": "class",
+      "path": "tests/test_itsdangerous/test_url_safe.py",
+      "qualname": "TestURLSafeTimedSerializer",
+      "span": [
+        21,
+        0,
+        24,
+        71
+      ]
+    },
+    {
+      "id": "sym:tests/test_itsdangerous/test_url_safe.py::TestURLSafeTimedSerializer.serializer_factory",
+      "kind": "function",
+      "path": "tests/test_itsdangerous/test_url_safe.py",
+      "qualname": "TestURLSafeTimedSerializer.serializer_factory",
+      "span": [
+        23,
+        4,
+        24,
+        71
+      ]
+    }
+  ]
+}

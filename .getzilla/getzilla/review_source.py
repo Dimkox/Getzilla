@@ -49,8 +49,9 @@ def review_source_binding(root: Path, reviewed_commit: str | None, report: str |
         raise ValueError('review source requires a valid selected route')
     selected_present = True
     try:
-        active = json.loads(_read_regular_bytes(root, '.getzilla/runtime/active-change.json',
-                                               label='selected active change').decode('utf-8'))
+        from .native_state_snapshot import decode
+        active = json.loads(decode(_read_regular_bytes(root, '.getzilla/runtime/active-change.json',
+                                               label='selected active change'),limit=4096).decode('utf-8'))
     except ArchitectureError as exc:
         if not isinstance(exc.__cause__, FileNotFoundError):
             raise

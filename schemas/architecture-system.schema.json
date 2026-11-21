@@ -114,13 +114,6 @@
           "const": "from_to",
           "type": "string"
         },
-        "secret_classes": {
-          "items": {"$ref": "#/$defs/id"},
-          "minItems": 1,
-          "maxItems": 256,
-          "type": "array",
-          "uniqueItems": true
-        },
         "failure_behavior": {
           "$ref": "#/$defs/failure_behavior"
         },
@@ -145,6 +138,15 @@
           "minLength": 1,
           "pattern": "^[a-z][a-z0-9_-]*$",
           "type": "string"
+        },
+        "secret_classes": {
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
         },
         "sync_or_async": {
           "enum": [
@@ -409,6 +411,50 @@
       ],
       "type": "object"
     },
+    "source_fixture": {
+      "additionalProperties": false,
+      "properties": {
+        "consumer_path": {
+          "$ref": "#/$defs/path"
+        },
+        "consumer_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "owner_node": {
+          "$ref": "#/$defs/id"
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "profile": {
+          "enum": [
+            "c-public-elf-probe-v1"
+          ],
+          "type": "string"
+        },
+        "purpose": {
+          "enum": [
+            "compile_inspect_only"
+          ],
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "path",
+        "sha256",
+        "consumer_path",
+        "consumer_sha256",
+        "owner_node",
+        "purpose"
+      ],
+      "type": "object"
+    },
     "trust_domain": {
       "additionalProperties": false,
       "properties": {
@@ -496,6 +542,14 @@
       "maxItems": 512,
       "minItems": 1,
       "type": "array"
+    },
+    "source_fixtures": {
+      "items": {
+        "$ref": "#/$defs/source_fixture"
+      },
+      "maxItems": 16,
+      "type": "array",
+      "uniqueItems": true
     },
     "trust_domains": {
       "items": {

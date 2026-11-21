@@ -47,7 +47,9 @@ class QueueSrcRootConsistencyTests(unittest.TestCase):
 
     def observe(self, *, folder='owned/src/pkg', ownership=None, extra=None,
                 consumer=None, helper=None, missing=False, initializer=True):
-        root = Path('closed-queue-src-fixture')
+        temporary = tempfile.TemporaryDirectory(prefix='closed-queue-src-fixture-')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
         path = folder + '/consumer.py'
         sources = {path: self.consumer if consumer is None else consumer,
                    folder + '/helper.py': None if missing else self.helper if helper is None else helper}
@@ -88,7 +90,7 @@ class QueueSrcRootConsistencyTests(unittest.TestCase):
         roots, cache, package, result = self.observe()
         self.assertEqual(result.state, 'not_queue', result)
         self.assertIn('owned/src', roots)
-        self.assertIn('pkg.helper', cache.modules)
+        self.assertIn('pkg.helper', cache.source_modules)
         self.assertEqual(package, 'pkg')
         self.assertEqual(result.state, 'not_queue', result)
         self.assertEqual(result.signals, ())
@@ -97,14 +99,14 @@ class QueueSrcRootConsistencyTests(unittest.TestCase):
         roots, cache, package, result = self.observe(folder='product/lib/src/acme/nested',
             ownership=['product/lib/src/acme/nested'])
         self.assertIn('product/lib/src', roots)
-        self.assertIn('acme.nested.helper', cache.modules)
+        self.assertIn('acme.nested.helper', cache.source_modules)
         self.assertEqual(package, 'acme.nested')
         self.assertEqual(result.state, 'not_queue', result)
 
     def test_namespace_src_files_have_canonical_module_names(self):
         roots, cache, package, result = self.observe(initializer=False)
         self.assertIn('owned/src', roots)
-        self.assertIn('pkg.helper', cache.modules)
+        self.assertIn('pkg.helper', cache.source_modules)
         self.assertEqual(package, 'pkg')
         self.assertEqual(result.state, 'not_queue', result)
 
@@ -3958,12 +3960,21 @@ class ArchitectureFitnessTests(unittest.TestCase):
 
         object_id = repo.git("rev-parse", f"{head}:{paths[0]}").encode("ascii")
         negative = b"100644 blob " + object_id + b" -1\t" + paths[0].encode() + b"\0"
-        with patch.object(DIFF, "_git", return_value=negative):
+        actual_git = DIFF._git
+        def negative_metadata(project, arguments, **options):
+            return negative if 'ls-tree' in arguments else actual_git(project, arguments, **options)
+        with patch.object(DIFF, "_git", side_effect=negative_metadata):
             with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "invalid Git blob size"):
                 DIFF.read_diff_files(repo.root, diff, (paths[0],))
         metadata = b"100644 blob " + object_id + b" 10\t" + paths[0].encode() + b"\0"
         malformed = object_id + b" blob 9\0VALUE = 1\n\0"
-        with patch.object(DIFF, "_git", side_effect=(metadata, malformed)):
+        def malformed_batch(project, arguments, **options):
+            if 'ls-tree' in arguments:
+                return metadata
+            if any(argument.startswith('--batch') for argument in arguments):
+                return malformed
+            return actual_git(project, arguments, **options)
+        with patch.object(DIFF, "_git", side_effect=malformed_batch):
             with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "unexpected Git blob batch header"):
                 DIFF.read_diff_files(repo.root, diff, (paths[0],))
 
@@ -3988,6 +3999,60 @@ class ArchitectureFitnessTests(unittest.TestCase):
             with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "batch exceeds analysis limit"):
                 DIFF.read_diff_files(repo.root, worktree, (paths[0], paths[1]))
             self.assertEqual(worktree_blob.call_count, 2)
+
+    def test_materialized_model_reads_are_batched_and_fall_back_under_the_aggregate_cap(self) -> None:
+        system = _system()
+        system["contracts"] = [
+            {
+                "id": f"CONTRACT-BATCH-{index}",
+                "kind": "json_schema",
+                "path": f"engineering/contracts/batch-{index}.json",
+                "version": "1",
+                "role": "consumer",
+                "compatibility": "consumer_accepts_old",
+            }
+            for index in range(6)
+        ]
+        system["nodes"][0]["public_contracts"] = [item["id"] for item in system["contracts"]]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, _rules())
+        for index in range(6):
+            repo.write_json(
+                f"engineering/contracts/batch-{index}.json",
+                _json_schema({f"field{index}": {"type": "string"}}),
+            )
+        head = repo.commit("batched model")
+        real_git = DIFF._git
+
+        def materialize() -> tuple[str, int]:
+            DIFF._GIT_BLOB_CACHE.clear()
+            DIFF._MATERIALIZED_STATE_CACHE.clear()
+            batches: list[list[str]] = []
+
+            def observed(root: Path, arguments: list[str], **kwargs: object) -> bytes | None:
+                if any(argument.startswith("--batch") for argument in arguments):
+                    batches.append(arguments)
+                return real_git(root, arguments, **kwargs)
+
+            with patch.object(DIFF, "_git", side_effect=observed):
+                digest = FIT.diff_architecture(repo.root, base_sha=head, head_sha=head).digest
+            return digest, len(batches)
+
+        digest, batches = materialize()
+        # Model and marker, schemas, contracts: one batch each; the base side reuses them.
+        self.assertEqual(batches, 3)
+        paths = (
+            "architecture/system.yaml", "architecture/rules.yaml", "architecture/adoption.json",
+            "schemas/architecture-system.schema.json", "schemas/architecture-rules.schema.json",
+            *(item["path"] for item in system["contracts"]),
+        )
+        largest = max(int(repo.git("cat-file", "-s", f"{head}:{path}")) for path in paths)
+        # Every blob fits the cap alone but some group does not: that group is read one path
+        # at a time, as before batching, with the same result.
+        with patch.object(DIFF, "MAX_GIT_OUTPUT_BYTES", largest):
+            capped_digest, capped_batches = materialize()
+        self.assertEqual(capped_digest, digest)
+        self.assertGreater(capped_batches, batches)
 
     def test_analysis_memory_constants_are_pinned(self) -> None:
         # Analysis memory caps remain unchanged; the finite streamed aggregate
@@ -4292,6 +4357,43 @@ class ArchitectureFitnessTests(unittest.TestCase):
         report = self._evaluate(repo, base, head, pre_risk="yellow")
         self.assertEqual(self._results(report)["background_job"].status, "unsupported")
         self.assertIn("new_queue", report.triggers)
+
+    def test_relative_whole_module_keeps_real_package_identity(self) -> None:
+        cases = (
+            ('harnesses.py', 'from . import fsx\n', 'fsx'),
+            ('harnesses.py', 'from . import fsx as local_fsx\n', 'local_fsx'),
+            ('commands/harnesses.py', 'from .. import fsx\n', 'fsx'),
+        )
+        for queue, (relative, imported, binding) in ((queue, case) for queue in (False, True) for case in cases):
+            with self.subTest(queue=queue, imported=imported):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['type'] = 'worker'
+                system['nodes'][0]['repository_paths'] = ['.getzilla/getzilla']
+                rules = _rules()
+                rules['background_job_policies'] = [{
+                    'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+                    'require_idempotency': True, 'require_correlation_id': True,
+                    'terminal_actions': ['dead_letter'], 'severity': 'error',
+                }]
+                repo.model(system, rules)
+                repo.write_text('.getzilla/getzilla/__init__.py', '')
+                repo.write_text('.getzilla/getzilla/fsx.py',
+                                "import celery\napp = celery.Celery('jobs')\n" if queue else
+                                'def open_dir(path): return path\n')
+                if relative.startswith('commands/'):
+                    repo.write_text('.getzilla/getzilla/commands/__init__.py', '')
+                importer = '.getzilla/getzilla/' + relative
+                repo.write_text(importer, '')
+                base = repo.commit('package baseline')
+                repo.write_text(importer, imported +
+                                (f'{binding}.app.delay(task)\n' if queue else
+                                 f'{binding}.open_dir(path)\n'))
+                head = repo.commit('relative whole module call')
+                report = self._evaluate(repo, base, head, pre_risk='yellow')
+                self.assertEqual(self._results(report)['background_job'].status,
+                                 'unsupported' if queue else 'not_applicable')
+                self.assertEqual('new_queue' in report.triggers, queue)
 
     def test_mixed_local_module_exports_are_member_specific(self) -> None:
         system = _system()
@@ -4712,7 +4814,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 warm = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
                 run(warm)
                 summary = warm.demands[('runtime', frozenset({'ordinary'}), True)]
-                self.assertEqual(len(summary.modules), 2 if reexport else 0)
+                self.assertEqual(len(summary.source_modules), 2 if reexport else 0)
                 self.assertTrue(summary.footprint.sources)
                 self.assertTrue(all(item.nodes > 0 for item in summary.footprint.sources))
                 inventory = FIT._queue_module_inventory
@@ -5714,9 +5816,11 @@ class ArchitectureFitnessTests(unittest.TestCase):
 
     def test_each_vulnerability_scanner_destination_has_its_own_declared_edge(self) -> None:
         """#73: the OSV query and the OSV mirror are separate destinations; dropping either edge is caught."""
-        known = (ROOT / '.getzilla/getzilla/known_vulns.py').read_text(encoding='utf-8')
-        self.assertIn("OSV_API = 'https://api.osv.dev/v1'", known)
-        self.assertIn("OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'", known)
+        known = importlib.import_module('getzilla.known_vulns')
+        snapshots = importlib.import_module('getzilla.security_data')
+        self.assertEqual(known.OSV_API, 'https://api.osv.dev/v1')
+        self.assertEqual(known.OSV_BUCKET, 'https://osv-vulnerabilities.storage.googleapis.com')
+        self.assertEqual(known.OSV_BUCKET, snapshots.OSV_BUCKET)
         destinations = {'EDGE-SCANNER-OSV-QUERY': 'NODE-OSV-API',
                         'EDGE-SCANNER-OSV-MIRROR-DOWNLOAD': 'NODE-OSV-ADVISORY-BUCKET'}
 
@@ -5989,7 +6093,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
             for node in system['nodes']:
                 node['repository_paths'] = [p for p in node['repository_paths'] if p not in FIT._PUBLIC_WORKER_SOURCES]
             repo.model(system, snapshot.rules)
-            base = repo.commit('unowned public worker membership fixture')
+            if repo.git('diff', '--', 'architecture/system.yaml').strip():
+                base = repo.commit('unowned public worker membership fixture')
+            self.assertTrue(all(not any(path in FIT._PUBLIC_WORKER_SOURCES for path in node['repository_paths'])
+                                for node in system['nodes']))
         descriptors = (
             ("github-public-lifecycle-projection", "CONTRACT-GITHUB-PUBLIC-LIFECYCLE-PROJECTION",
              "NODE-TRUST-CI-API", "json_schema", "consumer", "consumer_accepts_old", "api.py"),
@@ -6032,9 +6139,19 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertEqual(result.status, "pass", result.findings)
                 qualified = FIT._trust_ci_metadata_paths(diff)
                 self.assertIn("architecture/system.yaml", qualified)
+                introduced = (
+                    "CONTRACT-GITHUB-PUBLIC-LIFECYCLE-PROJECTION",
+                    "CONTRACT-TRUST-CI-PUBLIC-PROFILE-SELECTION",
+                    "CONTRACT-TRUST-CI-PUBLIC-EFFECTIVE-POLICY",
+                    "CONTRACT-TRUST-CI-PUBLIC-ATTESTATION-ENVELOPE",
+                )
+                expected = {introduced[index] for index in indices}
+                observed = set()
                 for contract in snapshot.system["contracts"]:
-                    if "PUBLIC" in contract["id"]:
+                    if contract["id"] in expected:
+                        observed.add(contract["id"])
                         self.assertIn(contract["path"], qualified)
+                self.assertEqual(observed, expected)
 
     def test_change_separation_public_contracts_preserve_original_envelope(self) -> None:
         mutations = (
@@ -6167,11 +6284,19 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'path')
 
     def test_public_worker_source_membership_is_exact_and_envelope_preserving(self) -> None:
-        approved = ("public_models.py", "public_admission.py", "public_policy.py", "source_safety.py",
+        approved = ("public_models.py", "public_policy.py", "source_safety.py",
                     "public_storage.py", "public_checkout.py", "public_runner.py")
+        rejected = ("public_admission.py", "public_extra.py")
         repo, base, common_system = self._public_trust_binding_repo(())
+        # Freeze first registration, even when the real model already owns a source.
+        # Actual API ownership and forbidden transfers are checked separately below.
+        sources = {f"trust-ci/src/adaptive_trust_ci/{name}" for name in (*approved, *rejected)}
+        for node in common_system["nodes"]:
+            node["repository_paths"] = [path for path in node["repository_paths"] if path not in sources]
+        repo.write_json("architecture/system.yaml", common_system)
+        base = repo.commit("before public worker source registration")
         prepared = []
-        for filename in (*approved, "public_extra.py"):
+        for filename in (*approved, *rejected):
             with self.subTest(filename=filename):
                 repo.git("reset", "--hard", base)
                 system = copy.deepcopy(common_system)
@@ -6187,6 +6312,25 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 diff = self._frozen_fixture_diff(repo, base, head, snapshot)
                 self.assertEqual(FIT._change_separation(snapshot, diff).status,
                                  "pass" if filename in approved else "fail")
+
+    def test_public_admission_keeps_api_ownership_and_rejects_worker_transfer(self) -> None:
+        source = "trust-ci/src/adaptive_trust_ci/public_admission_legacy.py"
+        repo, base, baseline = self._public_trust_baseline()
+        self.assertEqual([node["id"] for node in baseline.system["nodes"]
+                          if source in node["repository_paths"]], ["NODE-TRUST-CI-API"])
+        system = copy.deepcopy(baseline.system)
+        nodes = {node["id"]: node for node in system["nodes"]}
+        nodes["NODE-TRUST-CI-WORKER"]["repository_paths"].append(source)
+        repo.write_json("architecture/system.yaml", system)
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "repository path ownership tie"):
+            FIT.load_architecture(repo.root)
+        nodes["NODE-TRUST-CI-API"]["repository_paths"].remove(source)
+        repo.write_json("architecture/system.yaml", system)
+        repo.write_text(source, "VALUE = 'attempted ownership transfer'\n")
+        head = repo.commit("API admission cannot become worker metadata")
+        snapshot = FIT.load_architecture(repo.root)
+        diff = self._frozen_fixture_diff(repo, base, head, snapshot)
+        self.assertEqual(FIT._change_separation(snapshot, diff).status, "fail")
 
     def test_changed_code_budget_counts_bytes_lines_and_ast_complexity(self) -> None:
         metrics = (
@@ -9272,6 +9416,69 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(exact.head_sha, head)
         self.assertEqual(worktree.head_kind, "worktree")
 
+    def test_changed_text_line_stats_share_one_git_process_with_single_run_results(self) -> None:
+        repo, _architecture_base = self._repo()
+        bodies = {
+            f"notes/note-{index}.md": "".join(f"line {line}\n" for line in range(40))
+            for index in range(5)
+        }
+        for path, body in bodies.items():
+            repo.write_text(path, body)
+        repo.write_text("notes/retired.md", "gone\nsoon\n")
+        repo.write_bytes("notes/blob.bin", b"\0binary")
+        source_base = repo.commit("line-stat base")
+        for index, path in enumerate(bodies):
+            lines = bodies[path].splitlines(keepends=True)
+            lines[index] = f"changed {index}\n"
+            lines.extend(f"appended {index}.{extra}\n" for extra in range(index))
+            repo.write_text(path, "".join(lines))
+        (repo.root / "notes/retired.md").unlink()
+        repo.write_text("notes/fresh.md", "new\nfile\nhere\n")
+        repo.write_bytes("notes/blob.bin", b"\0binary changed")
+        repo.write_bytes("notes/latin1.txt", "caf\xe9\n".encode("latin-1"))
+        source_head = repo.commit("line-stat head")
+        real_run = DIFF._run_capped
+        no_index: list[list[str]] = []
+
+        def observed(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+            if "--no-index" in command:
+                no_index.append(command)
+            return real_run(command, **kwargs)
+
+        def line_stats() -> tuple[dict[str, tuple[int | None, int | None]], int]:
+            DIFF._GIT_BLOB_CACHE.clear()
+            DIFF._MATERIALIZED_STATE_CACHE.clear()
+            no_index.clear()
+            with patch.object(DIFF, "_run_capped", side_effect=observed):
+                diff = FIT.diff_architecture(repo.root, base_sha=source_base, head_sha=source_head)
+            return {item.path: (item.added_lines, item.deleted_lines) for item in diff.artifacts}, len(no_index)
+
+        stats, processes = line_stats()
+        expected = {
+            path: DIFF._line_stats(
+                DIFF._git_blob(repo.root, source_base, path),
+                DIFF._git_blob(repo.root, source_head, path),
+            )
+            for path in stats
+        }
+        self.assertEqual(stats, expected)
+        self.assertEqual(stats["notes/fresh.md"], (3, 0))
+        self.assertEqual(stats["notes/retired.md"], (0, 2))
+        self.assertEqual(stats["notes/blob.bin"], (None, None))
+        self.assertEqual(stats["notes/latin1.txt"], (None, None))
+        # Seven text pairs, one exact diff process instead of seven.
+        self.assertEqual(processes, 1)
+        with patch.object(DIFF, "MAX_LINE_STAT_BATCH_PATHS", 3):
+            # 3 + 3 + 1 pairs: two batches and one single-pair run.
+            self.assertEqual(line_stats(), (expected, 3))
+        with patch.object(
+            DIFF, "_numstat_batch", side_effect=ARCHITECTURE.ArchitectureError("timeout", code="timeout")
+        ):
+            # A batch that fails for any reason is re-run one pair at a time, as before batching.
+            self.assertEqual(line_stats(), (expected, 7))
+        self.assertEqual(DIFF._numstat_batch([(b"a\n", b"a\n"), (b"x\n", b"y\nz\n")]), [(0, 0), (2, 1)])
+        self.assertEqual(DIFF._numstat_batch([(b"same\n", b"same\n")] * 2), [(0, 0), (0, 0)])
+
     def test_line_stats_are_linear_and_have_an_explicit_line_ceiling(self) -> None:
         self.assertTrue(hasattr(DIFF, "MAX_LINE_STAT_LINES"), "line-stat ceiling is absent")
         before = (b"x\n" * 6_000) + b"before\n"
@@ -9514,7 +9721,7 @@ class QueueDiagnosticProvenanceTests(unittest.TestCase):
         python = SimpleNamespace(tree=tree or (lambda path: ast.parse('pass')))
         read = reader or (lambda root, diff, path, side: b'import celery\n')
         with patch.object(FIT, '_python_paths', return_value=paths), \
-                patch.object(FIT, '_queue_module_inventory', return_value=SimpleNamespace(paths=())), \
+                patch.object(FIT, '_queue_module_inventory', return_value=FIT._QueueResolutionCache((), (), {}, {})), \
                 patch.object(FIT, '_module_package', return_value=''), \
                 patch.object(FIT, 'read_diff_file', side_effect=read), \
                 patch.object(FIT, '_queue_signals', side_effect=signals), \

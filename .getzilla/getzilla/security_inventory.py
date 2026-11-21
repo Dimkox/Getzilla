@@ -29,6 +29,18 @@ _NONSTRING_SCALAR = re.compile(r'(?:null|Null|NULL|~|true|True|TRUE|false|False|
 _PIN = re.compile(r'([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\[([A-Za-z0-9_,.-]+)\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9.!+_-]*)(?:\s*;[^\r\n]+)?\Z')
 _UNSUPPORTED = frozenset({'pom.xml', 'build.gradle', 'build.gradle.kts', 'Pipfile', 'Gemfile',
                           'packages.config', 'packages.lock.json', 'Project.toml', 'Manifest.toml'})
+# One proved historical documentation copy, not a deployed Compose source.
+# Both unchanged source bytes and the tracked documentation of its role must
+# match. No directory-wide history exclusion or YAML grammar exception follows.
+_ARCHIVAL_DOCUMENTS = {
+    'engineering/changes/20260824-the-user-sent-a-message-while-you-were-working-u-3e6166/evidence/compose.host-socket.yaml': {
+        'bytes': 2134,
+        'sha256': '798b9d4e150796f66ed9ffdd1ab088b605d0801100307259468117eb187abe6b',
+        'provenance_path': 'engineering/changes/20260824-m0-2-sha-change-invalidation-on-draft-pr-5-beee95/evidence/analysis-architect.md',
+        'provenance_bytes': 15550,
+        'provenance_sha256': '3f1e515e53f3ccce679524137c9418da83b4ec18bec09836a5e5da76b6b5096a',
+    },
+}
 
 
 def canonical_digest(value: Any) -> str:
@@ -58,6 +70,24 @@ def _safe_bytes(root: Path, relative: str, *, maximum: int = MAX_MANIFEST_BYTES)
     if identity(before) != identity(after) or len(payload) != before.st_size:
         raise ValueError('inventory input changed during read')
     return payload
+
+
+def _archival_document(root: Path, relative: str, files: list[str]) -> dict | None:
+    record = _ARCHIVAL_DOCUMENTS.get(relative)
+    if record is None:
+        return None
+    if record['provenance_path'] not in files:
+        raise ValueError('archival provenance is absent from tracked source')
+    payload = _safe_bytes(root, relative, maximum=record['bytes'])
+    provenance = _safe_bytes(root, record['provenance_path'], maximum=record['provenance_bytes'])
+    if (len(payload) != record['bytes'] or hashlib.sha256(payload).hexdigest() != record['sha256']
+            or len(provenance) != record['provenance_bytes']
+            or hashlib.sha256(provenance).hexdigest() != record['provenance_sha256']):
+        raise ValueError('archival documentation or provenance differs')
+    return {'path': relative, 'bytes': len(payload), 'sha256': record['sha256'],
+            'classification': 'historical-documentation-copy-not-active-manifest',
+            'provenance': {'path': record['provenance_path'], 'bytes': len(provenance),
+                           'sha256': record['provenance_sha256']}}
 
 
 class _YamlError(ValueError):
@@ -397,6 +427,9 @@ def qualify_image_use(reference: str, path: str, line: int, source_sha256: str, 
             'source_sha256': source_sha256}
     if used is not None:
         item['source_selection_sha256'] = used
+        # Preserve393's declaration fields alongside the OCI source-use key.
+        item['selection_sha256'] = used
+        item['selection_assurance'] = 'declaration-only-unverified'
     return item, gaps, used
 
 
@@ -475,11 +508,24 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
             if 'include' in document:
                 gap('unsupported-compose-composition', relative, 'Compose include needs qualified referenced-source coverage')
             services = _yaml_map(document.get('services'), 'Compose services')
-            for service in services.values():
+            for service_name, service in services.items():
                 fields = _yaml_map(service, 'Compose service')
-                for indirect in ('build', 'extends', 'provider'):
+                for indirect in ('extends', 'provider'):
                     if indirect in fields:
                         gap('unsupported-compose-composition', relative, f'Compose {indirect} needs qualified build/composition coverage')
+                if 'build' in fields:
+                    from .security_build_inputs import describe_build
+                    try:
+                        build = describe_build(root, relative, service_name, fields, files, bindings)
+                    except (OSError, ValueError, UnicodeError, TypeError, KeyError) as exc:
+                        gap('unsupported-compose-composition', relative, str(exc)[:300])
+                    else:
+                        result.setdefault('builds', []).append(build)
+                        for item in build['context_files']:
+                            if item['path'] not in result['files']:
+                                result['files'].append(item['path'])
+                        image(build['source_reference'], relative, build['line'], require_digest=True,
+                              platform=build['platform'])
                 if 'image' in fields:
                     yaml_image(fields['image'], relative, 'Compose image', platform=compose_image_platform(fields))
                 elif not set(fields) & {'build', 'extends', 'provider'}:
@@ -558,6 +604,15 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
     if len(files) > MAX_FILES:
         gap('inventory-limit', '.', 'source file inventory exceeds its bound')
         files = []
+    from .security_corresponding_source import classify
+    try:
+        corresponding = classify(root, files)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        corresponding = []
+        gap('corresponding-source-unverified', '<corresponding-source>', str(exc)[:300])
+    if corresponding:
+        result['corresponding_sources'] = corresponding
+    retained_manifests = {row['manifest'] for row in corresponding}
     for relative in files:
         pure = PurePosixPath(relative)
         if relative.startswith('.getzilla/runtime/') or any(part in {'.git', '.venv', 'node_modules'} for part in pure.parts):
@@ -574,6 +629,14 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                     or relative == '.getzilla/config/ci-images.json'
                     )
         result['files'].append(relative)
+        try:
+            archival = _archival_document(root, relative, files)
+        except (OSError, ValueError):
+            gap('archival-evidence-unverified', relative, 'exact historical documentation/provenance binding is unavailable')
+        else:
+            if archival is not None:
+                result.setdefault('excluded_archival_evidence', []).append(archival)
+                continue  # Retained in files for source/secret coverage above.
         if not relevant:
             continue
         try:
@@ -599,6 +662,8 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                           require_digest=True, platform=data['platform'])
                     result['images'][-1].update(image_id=image_id, usage='build-ci')
             elif name == 'pyproject.toml':
+                if relative in retained_manifests:
+                    continue  # Exact constraints remain typed in corresponding_sources.
                 data = tomllib.loads(text)
                 project = data.get('project', {})
                 if 'dependencies' in project.get('dynamic', []):
@@ -704,6 +769,7 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                     continue
             if reference is not None:
                 image(reference, relative, line_number, platform=platform)
+    result['files'] = sorted(set(result['files']))
     result['dependencies'] = sorted(dependencies.values(), key=lambda item: (item['ecosystem'], item['name'], item['version'], item['manifest'], item['usage']))
     if isinstance(bindings, list) and used_image_bindings != {canonical_digest(row) for row in bindings}:
         gap('unused-image-source-selection', '<image-selection>', 'selected image use is absent or differs from current source')

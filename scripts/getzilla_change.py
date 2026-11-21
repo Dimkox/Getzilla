@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,4 +46,7 @@ elif args.command == 'transition':
         raise SystemExit(2)
 else:
     result = get_active_change(root)
+if args.command != 'show' and isinstance(result, dict) and result.get('route_id'):
+    from getzilla.sprint_lifecycle import flush_after_scope
+    flush_after_scope(root, result['route_id'])
 print(json.dumps(result, ensure_ascii=False, indent=2))

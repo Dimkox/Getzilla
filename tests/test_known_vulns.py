@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import runpy
+from unittest import mock
+
 import io
 import copy
 import json
@@ -57,12 +61,51 @@ def _repo(files: dict[str, str]) -> tuple[tempfile.TemporaryDirectory, Path]:
     return tmp, root
 
 
-def _mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+def _legacy_mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
     target = root / ecosystem / 'all.zip'
     target.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(target, 'w') as bundle:
         for record in records:
             bundle.writestr(f"{record['id']}.json", json.dumps(record))
+
+
+def _mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+    """A labelled public synthetic acquired source, through production contracts."""
+    from datetime import datetime, timezone
+    from getzilla.security_acquisition import FetchResult, _body
+    from getzilla.security_data import SOURCE_URLS, osv_coverage, publish_snapshot
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, 'w') as bundle:
+        for item in records:
+            bundle.writestr(item['id'] + '.json', json.dumps(item))
+    source_id = f'osv:{ecosystem}'
+    url = SOURCE_URLS[source_id]
+    payload = _body(FetchResult(content.getvalue(), url, url, 200), url)
+    current = datetime.now(timezone.utc)
+    publish_snapshot(root, source_id, payload,
+        acquisition={'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download',
+                     'producer': 'synthetic-public-known-vulns'},
+        coverage=osv_coverage(payload, ecosystem), now=current)
+
+
+def _tampered_mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+    """Intentionally forge public fixture bytes/metadata to test reader refusal."""
+    import hashlib
+    seed = {'id': 'PUBLIC-SEED', 'affected': [{'package': {'ecosystem': ecosystem, 'name': 'public-seed'}, 'versions': ['1.0.0']}]}
+    _mirror(root, ecosystem, [seed])
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, 'w') as bundle:
+        for item in records:
+            bundle.writestr(item['id'] + '.json', json.dumps(item))
+    payload = content.getvalue()
+    digest = hashlib.sha256(payload).hexdigest()
+    (root / '.snapshots/sha256' / digest).write_bytes(payload)
+    (root / '.snapshots/sha256' / digest).chmod(0o644)
+    pointer = root / ecosystem / 'snapshot.json'
+    document = json.loads(pointer.read_text(encoding='utf-8'))
+    document.update(content_sha256=digest, payload_size=len(payload))
+    document['coverage']['record_count'] = len(records)
+    pointer.write_text(json.dumps(document), encoding='utf-8')
 
 
 MANIFESTS = {
@@ -74,6 +117,7 @@ MANIFESTS = {
         'node_modules/linked': {'link': True},
     }}),
     'svc/go.mod': 'module example.com/svc\n\ngo 1.22\n\nrequire (\n\tgolang.org/x/net v0.17.0 // indirect\n)\nrequire github.com/a/b v1.2.3\n',
+    'rs/Cargo.toml': '[package]\nname="local"\nversion="0.1.0"\n[dependencies]\nsmallvec="1"\n',
     'rs/Cargo.lock': '[[package]]\nname = "local"\nversion = "0.1.0"\n\n[[package]]\nname = "smallvec"\nversion = "1.6.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
     'php/composer.lock': json.dumps({'packages': [{'name': 'guzzlehttp/guzzle', 'version': 'v7.4.0'}],
                                      'packages-dev': [{'name': 'x/y', 'version': 'dev-main'}]}),
@@ -112,6 +156,18 @@ class CollectTests(unittest.TestCase):
             ('pytest', '8.3.0', 'pyproject.toml'),
         })
         self.assertEqual(len(deps), 3)
+
+    def test_strict_group_inventory_counts_all_platforms_and_refuses_unresolved_groups(self):
+        def collect(group):
+            text = '[project]\nname="fixture"\n[dependency-groups]\ndev=' + group
+            return KV._strict_manifest_pairs('pyproject.toml', text, 'PyPI', KV._pairs_from_pyproject, {}, 'pyproject.toml')
+
+        self.assertEqual(collect("""['sample[extra]==1.2', 'other==2; sys_platform == "win32"']"""),
+                         [('sample', '1.2'), ('other', '2')])
+        for group in ('["sample>=1"]', '[{include-group="other"}]', '["sample==1;"]',
+                      """['sample==1; unknown_marker == "linux"']""", '"sample==1"'):
+            with self.subTest(group=group), self.assertRaises(ValueError):
+                collect(group)
 
     def test_build_only_backend_pin_is_collected(self) -> None:
         tmp, root = _repo({'pyproject.toml': '[build-system]\nrequires = ["setuptools==75.8.0"]\n'})
@@ -226,7 +282,7 @@ class OfflineTests(unittest.TestCase):
         for version, expected in (('0.9', False), ('1.0', True), ('1.4.9', True), ('1.5', False),
                                   ('2.0', True), ('2.3', True), ('2.3.1', False), ('10.0', False)):
             with self.subTest(version=version):
-                self.assertEqual(KV._in_ranges(version, affected), expected)
+                self.assertEqual(KV._in_ranges(version, affected, ecosystem='PyPI'), expected)
         open_ended = {'ranges': [{'type': 'SEMVER', 'events': [{'introduced': '3.0.0'}]}]}
         self.assertTrue(KV._in_ranges('9.9.9', open_ended))
         self.assertFalse(KV._in_ranges('2.9.9', open_ended))
@@ -276,9 +332,10 @@ class OnlineTests(unittest.TestCase):
 
         tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\nsafe-lib==1.0\n'})
         with tmp:
-            report = KV.scan(root, environ={'GETZILLA_OSV_ONLINE': '1'}, fetch=fetch)
-        self.assertEqual(report['status'], 'fail')
-        self.assertEqual(sorted(item['id'] for item in report['findings']), ['GHSA-h5c8-rqwp-cp95', 'PYSEC-2021-66'])
+            dependencies, _ = KV.collect_dependencies(root)
+            findings = KV.query_online(dependencies, fetch=fetch)
+        # An observation helper retains pagination; it is not a qualified scan.
+        self.assertEqual(sorted(item.vuln_id for item in findings), ['GHSA-h5c8-rqwp-cp95', 'PYSEC-2021-66'])
         first = calls[0][1]['queries']
         self.assertEqual({item['package']['ecosystem'] for item in first}, {'PyPI'})
         self.assertEqual(calls[1][1]['queries'], [{'package': {'name': 'Jinja2', 'ecosystem': 'PyPI'},
@@ -290,7 +347,8 @@ class OnlineTests(unittest.TestCase):
 
         tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n'})
         with tmp, self.assertRaisesRegex(KV.VulnerabilityError, 'OSV query failed'):
-            KV.scan(root, environ={'GETZILLA_OSV_ONLINE': '1'}, fetch=fetch)
+            dependencies, _ = KV.collect_dependencies(root)
+            KV.query_online(dependencies, fetch=fetch)
 
 
 class PolicyTests(unittest.TestCase):
@@ -334,17 +392,23 @@ class VerifierDetailTests(unittest.TestCase):
         # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
         from unittest.mock import patch
         from getzilla import verification
+        from getzilla.expanded_security import _result
         finding = KV.Finding(
             dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
             vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
             summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
         )
-        report = {'status': 'fail', 'summary': '1 known vulnerabilities in 1 pinned packages (OSV API)',
-                  'findings': [finding.to_dict()], 'accepted': []}
-        with patch.object(verification, 'scan_known_vulnerabilities', return_value=report):
-            result = verification._known_vulnerabilities(ROOT)
+        report = _result('known-vulnerabilities', 'finding',
+                         '1 known vulnerabilities in 1 pinned packages (owned fixture)',
+                         {'digest': 'a' * 64}, 'b' * 64, findings=[finding.to_dict()])
+        report['details'][0]['accepted'] = []
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(verification, 'known_vulnerability_check', return_value=report):
+            result = verification._known_vulnerabilities(Path(directory))
         self.assertEqual(result.status, 'fail')
-        [detail] = result.details
+        self.assertEqual(result.details[0], report['details'][0])
+        self.assertEqual(result.details[0]['kind'], 'security-result')
+        [detail] = [row for row in result.details if 'message' in row]
         self.assertEqual(detail['severity'], 'MODERATE')
         self.assertEqual(detail['path'], 'requirements.txt')
         self.assertEqual(
@@ -354,6 +418,36 @@ class VerifierDetailTests(unittest.TestCase):
         )
         self.assertEqual(detail['package'], 'jinja2')
         self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
+
+    def test_parent_contract_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
+        # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
+        from unittest.mock import patch
+        from getzilla import verification
+        finding = KV.Finding(
+            dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
+            vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
+            summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
+        )
+        report = {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': '1 known vulnerability',
+                  'details': [{'kind': 'security-result', 'findings': [finding.to_dict()], 'accepted': [],
+                               'data_sources': [{'source_id': 'osv:PyPI', 'content_sha256': 'a' * 64}]}]}
+        with patch.object(verification, 'known_vulnerability_check', return_value=report):
+            result = verification._known_vulnerabilities(ROOT)
+        self.assertEqual(result.status, 'fail')
+        [structured, detail] = result.details
+        self.assertEqual(structured['findings'], [finding.to_dict()])
+        self.assertEqual(structured['data_sources'][0]['content_sha256'], 'a' * 64)
+        self.assertEqual(detail['severity'], 'MODERATE')
+        self.assertEqual(detail['path'], 'requirements.txt')
+        self.assertEqual(
+            detail['message'],
+            'jinja2==3.1.2 GHSA-h5c8-rqwp-cp95 (CVE-2024-22195): '
+            'Jinja vulnerable to HTML attribute injection; fixed in 3.1.3',
+        )
+        self.assertEqual(detail['package'], 'jinja2')
+        self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
 
 
 class QualityGateTests(unittest.TestCase):
@@ -403,13 +497,17 @@ class DownloadTests(unittest.TestCase):
             bundle.writestr('A.json', json.dumps(JINJA))
         urls: list[str] = []
 
-        def fetch(url: str, body: bytes | None) -> bytes:
+        def fetch(url: str, body: bytes | None):
+            from getzilla.security_acquisition import FetchResult
             urls.append(url)
-            return buffer.getvalue()
+            content = io.BytesIO()
+            with zipfile.ZipFile(content, 'w') as bundle:
+                bundle.writestr('public.json', json.dumps(JINJA if '/PyPI/' in url else LODASH))
+            return FetchResult(content.getvalue(), url, url, 200)
 
         with tempfile.TemporaryDirectory() as db:
             written = KV.download_database(Path(db), ['PyPI', 'npm'], fetch=fetch)
-            self.assertEqual([Path(item).relative_to(db).as_posix() for item in written], ['PyPI/all.zip', 'npm/all.zip'])
+            self.assertEqual([Path(item).relative_to(db).as_posix() for item in written], ['PyPI/snapshot.json', 'npm/snapshot.json'])
             self.assertFalse(list(Path(db).rglob('*.partial')))
         self.assertEqual(urls, [f'{KV.OSV_BUCKET}/PyPI/all.zip', f'{KV.OSV_BUCKET}/npm/all.zip'])
         with tempfile.TemporaryDirectory() as db, self.assertRaises(KV.VulnerabilityError):
@@ -454,23 +552,31 @@ class NativeAliasTests(unittest.TestCase):
 
     def test_description_rejects_invalid_alias_shape_elements_and_ids_without_echo(self):
         malformed = ('CVE-2099-9999', {}, {'CVE-2099-9999': True}, 0, True,
-                     [1], [None], [[]], [''], ['GHSA-public,'], [' CVE-2099-9999 '],
+                     [1], [None], [[]], [' CVE-2099-9999 '],
                      ['CVE-2099-9999\n'], ['CVE-2099-9999', False])
         for case, aliases in enumerate(malformed):
             with self.subTest(case=case):
                 try:
                     KV._describe(self.record(aliases=aliases), self.dependency)
                 except KV.VulnerabilityError as error:
-                    self.assertEqual(str(error), 'OSV aliases must be null or a list of valid identifiers')
+                    prefix, detail = str(error).split('; ', 1)
+                    self.assertIn(prefix, ('OSV aliases must be null or a list of strings',
+                                           'OSV decision identifier is malformed'))
+                    self.assertEqual(json.loads(detail), error.osv_alias_detail)
+                    self.assertEqual(error.osv_alias_detail['kind'], 'osv-alias-rejection')
                 except (TypeError, ValueError):
                     self.fail('malformed aliases escaped as an untyped error')
                 else:
                     self.fail('malformed aliases were accepted or coerced')
+        for aliases in ([''], ['GHSA-public,']):
+            finding = KV._describe(self.record(aliases=aliases), self.dependency)
+            self.assertEqual(finding.raw_aliases, aliases)
+            self.assertEqual(finding.aliases, [])
 
     def test_offline_alias_admission_precedes_every_record_filter(self):
         for case in ('matched', 'withdrawn', 'unrelated', 'unaffected'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
-                _mirror(Path(database), 'PyPI', [self.record(case)])
+                _tampered_mirror(Path(database), 'PyPI', [self.record(case)])
                 with self.assertRaises(KV.VulnerabilityError):
                     KV.query_offline([self.dependency], Path(database))
 
@@ -519,12 +625,69 @@ class NativeAliasTests(unittest.TestCase):
     def test_nullable_archive_publication_roundtrips_through_actual_reader(self):
         with tempfile.TemporaryDirectory() as database:
             data = self.archive([self.record(aliases=None)])
-            target = Path(database)/'PyPI/all.zip'
-            written = KV.download_database(Path(database), ['PyPI'], fetch=lambda _url, _body: data)
+            from getzilla.security_acquisition import FetchResult
+            from getzilla.security_data import read_snapshot
+            target = Path(database)/'PyPI/snapshot.json'
+            written = KV.download_database(Path(database), ['PyPI'],
+                fetch=lambda url, _body: FetchResult(data, url, url, 200))
             self.assertEqual(written, [str(target)])
-            self.assertEqual(target.read_bytes(), data)
+            self.assertEqual(read_snapshot(Path(database), 'osv:PyPI')[0], data)
             [finding] = KV.query_offline([self.dependency], Path(database))
             self.assertEqual(finding.aliases, [])
+
+
+
+
+class AcceptedVerifierDetailTests(unittest.TestCase):
+    def test_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
+        # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
+        from unittest.mock import patch
+        from getzilla import verification
+        finding = KV.Finding(
+            dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
+            vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
+            summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
+        )
+        report = {'status': 'fail', 'summary': '1 known vulnerabilities in 1 pinned packages (OSV API)',
+                  'findings': [finding.to_dict()], 'accepted': []}
+        structured = {'name': 'known-vulnerabilities', 'status': report['status'], 'summary': report['summary'],
+                      'details': [{'kind': 'security-result', 'findings': report['findings'], 'accepted': report['accepted']}]}
+        with patch.object(verification, 'known_vulnerability_check', return_value=structured):
+            result = verification._known_vulnerabilities(ROOT)
+        self.assertEqual(result.status, 'fail')
+        detail = result.details[-1]
+        self.assertEqual(detail['severity'], 'MODERATE')
+        self.assertEqual(detail['path'], 'requirements.txt')
+        self.assertEqual(
+            detail['message'],
+            'jinja2==3.1.2 GHSA-h5c8-rqwp-cp95 (CVE-2024-22195): '
+            'Jinja vulnerable to HTML attribute injection; fixed in 3.1.3',
+        )
+        self.assertEqual(detail['package'], 'jinja2')
+        self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
+
+
+class CliTests(unittest.TestCase):
+    def test_actions_annotations_keep_advisory_specific_fix_versions(self) -> None:
+        dependency = KV.Dependency('npm', 'example', '1.2.0', 'package-lock.json')
+        report = {'status': 'fail', 'summary': 'two findings', 'accepted': [], 'findings': [
+            KV.Finding(dependency, 'OSV-A', fixed=['1.2.5', '2.0.1']).to_dict(),
+            KV.Finding(dependency, 'OSV-B', fixed=[]).to_dict(),
+        ]}
+        output = io.StringIO()
+        with mock.patch.object(KV, 'scan', return_value=report), \
+                mock.patch.object(KV, 'recheck_report', return_value=None), \
+                mock.patch('getzilla.util.find_root', return_value=ROOT), \
+                mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
+                mock.patch.object(sys, 'argv', ['getzilla_vulns.py']), \
+                mock.patch('sys.stdout', output), self.assertRaises(SystemExit) as stopped:
+            runpy.run_path(str(ROOT / 'scripts/getzilla_vulns.py'), run_name='__main__')
+        self.assertEqual(stopped.exception.code, 1)
+        annotation = next(line for line in output.getvalue().splitlines() if line.startswith('::error'))
+        self.assertIn('OSV-A: fixed in 1.2.5, 2.0.1', annotation)
+        self.assertIn('OSV-B: no fixed version published', annotation)
+        self.assertNotIn('upgrade to >=', output.getvalue())
 
 
 if __name__ == '__main__':

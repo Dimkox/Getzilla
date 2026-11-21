@@ -1,0 +1,115 @@
+{
+  "change_id": "20261013-task-a89867",
+  "checkpoint_mirror_pending": false,
+  "checkpoints": [
+    {
+      "branch": "fix/issues-install-20261013",
+      "change_id": "20261013-task-a89867",
+      "detached": false,
+      "dirty_product_paths": [],
+      "dirty_product_state": "clean",
+      "git_available": true,
+      "git_findings": [],
+      "head": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "kind": "initial",
+      "note": "draft; implementation not started",
+      "observed_at": "2026-10-13T01:22:01+00:00",
+      "route_id": "a8986733d3c5"
+    },
+    {
+      "branch": "fix/issues-install-20261013",
+      "change_id": "20261013-task-a89867",
+      "detached": false,
+      "dirty_product_paths": [
+        "scripts/install_into.py",
+        "tests/test_installer.py"
+      ],
+      "dirty_product_state": "dirty",
+      "git_available": true,
+      "git_findings": [],
+      "head": "6dd06ff5b96692a01812fbac6252fd08f6169f91",
+      "kind": "implementation",
+      "note": "implementation started; preserve work before handoff",
+      "observed_at": "2026-10-13T01:30:19+00:00",
+      "route_id": "a8986733d3c5"
+    }
+  ],
+  "created_at": "2026-10-13T01:22:01+00:00",
+  "evidence_accounting": {
+    "obligations": [
+      {
+        "id": "verification",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "verification",
+        "status": "not_run"
+      },
+      {
+        "id": "code_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "code_review",
+        "status": "not_run"
+      },
+      {
+        "id": "test_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "test_review",
+        "status": "not_run"
+      },
+      {
+        "id": "security_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "security_review",
+        "status": "not_run"
+      },
+      {
+        "id": "release_review",
+        "kind": "receipt",
+        "reason": "implementation not started",
+        "receipt_kind": "release_review",
+        "status": "not_run"
+      }
+    ],
+    "schema_version": 1
+  },
+  "history": [
+    {
+      "at": "2026-10-13T01:22:01+00:00",
+      "from": null,
+      "reason": "created",
+      "to": "draft"
+    },
+    {
+      "at": "2026-10-13T01:26:17+00:00",
+      "from": "draft",
+      "reason": "Four selected source analyses complete; isolated ownership and bounded criteria recorded",
+      "to": "scoped"
+    },
+    {
+      "at": "2026-10-13T01:27:05+00:00",
+      "from": "scoped",
+      "reason": "Source-only issue75 scope and migration-plan decisions recorded; real consumer operations remain separately gated",
+      "to": "approved"
+    },
+    {
+      "at": "2026-10-13T01:30:19+00:00",
+      "from": "approved",
+      "reason": "Approved source-only leaf; failing ownership and migration regressions reproduced",
+      "to": "implementing"
+    }
+  ],
+  "human_gates": [
+    "scope_and_design_approval",
+    "migration_or_external_write_approval",
+    "production_action_approval"
+  ],
+  "human_gates_digest": "0d0cddb9b877d021ef580f3a87599838bc3d728751cadcb323f812d91e502c44",
+  "route_id": "a8986733d3c5",
+  "schema_version": 1,
+  "status": "implementing",
+  "title": "Fix Getzilla issue #75 consumer installation migration: classify requirements, evidence, unrelated user changes and generated metadata; maintain exact install ownership; preserve AGENTS and CI; plan read-only dirty trees without generic cleanup; recoverable explicit quarantine and avoid egg-info/cache in consumer source. Source-only isolated leaf; do not access real consumer production state or credentials. Bounded regressions only; no full PR run or external delivery before parent all-issue integration.",
+  "updated_at": "2026-10-13T01:30:19+00:00"
+}

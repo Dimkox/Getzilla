@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import fsx
+from .free_onboarding import Admission, LocalAdmission, parse_admission
 
 POLICY_PATH = '.getzilla/config/model-continuation.json'
 MAX_POLICY_BYTES = 16 * 1024
@@ -48,6 +49,7 @@ class Policy:
     enabled: bool
     candidates: tuple[Candidate, ...] = ()
     bounds: Bounds | None = None
+    admission: Admission | LocalAdmission | None = None
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,9 @@ def _parse(data: bytes) -> Policy:
             or value['schema_version'] != 1 or type(value.get('enabled')) is not bool):
         raise ValueError('schema')
     fields = {'schema_version', 'enabled'}
-    if value['enabled'] or 'candidates' in value or 'bounds' in value:
+    if 'admission' in value:
+        fields.add('admission')
+    if value['enabled'] or 'candidates' in value or 'bounds' in value or 'admission' in value:
         fields |= {'candidates', 'bounds'}
     if not _fields(value, fields):
         raise ValueError('fields')
@@ -111,7 +115,8 @@ def _parse(data: bytes) -> Policy:
     # Money keeps the exact JSON decimal. Time remains the public float field;
     # durable consumers floor its duration before constructing deadlines.
     bounds['deadline_seconds'] = float(bounds['deadline_seconds'])
-    return Policy(value['enabled'], tuple(candidates), Bounds(**bounds))
+    admission = parse_admission(value['admission'], tuple(candidates)) if 'admission' in value else None
+    return Policy(value['enabled'], tuple(candidates), Bounds(**bounds), admission)
 
 
 def _read(root: Path) -> bytes:

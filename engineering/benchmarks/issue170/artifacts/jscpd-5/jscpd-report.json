@@ -1,0 +1,373 @@
+{
+  "statistics": {
+    "detectionDate": "2026-10-23T22:13:17.100Z",
+    "formats": {
+      "python": {
+        "sources": {
+          "/input/tests/test_itsdangerous/test_url_safe.py": {
+            "lines": 23,
+            "tokens": 187,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/tests/test_itsdangerous/test_timed.py": {
+            "lines": 114,
+            "tokens": 1053,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/tests/test_itsdangerous/test_signer.py": {
+            "lines": 108,
+            "tokens": 965,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/tests/test_itsdangerous/test_serializer.py": {
+            "lines": 196,
+            "tokens": 1976,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/tests/test_itsdangerous/test_encoding.py": {
+            "lines": 36,
+            "tokens": 310,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/src/itsdangerous/url_safe.py": {
+            "lines": 82,
+            "tokens": 509,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/src/itsdangerous/timed.py": {
+            "lines": 227,
+            "tokens": 1537,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/src/itsdangerous/signer.py": {
+            "lines": 265,
+            "tokens": 1655,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/src/itsdangerous/serializer.py": {
+            "lines": 405,
+            "tokens": 3289,
+            "sources": 1,
+            "clones": 10,
+            "duplicatedLines": 102,
+            "duplicatedTokens": 1384,
+            "percentage": 25.19,
+            "percentageTokens": 42.08,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/src/itsdangerous/exc.py": {
+            "lines": 105,
+            "tokens": 530,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/src/itsdangerous/encoding.py": {
+            "lines": 53,
+            "tokens": 397,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/src/itsdangerous/_json.py": {
+            "lines": 17,
+            "tokens": 145,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/input/src/itsdangerous/__init__.py": {
+            "lines": 37,
+            "tokens": 330,
+            "sources": 1,
+            "clones": 0,
+            "duplicatedLines": 0,
+            "duplicatedTokens": 0,
+            "percentage": 0,
+            "percentageTokens": 0,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          }
+        },
+        "total": {
+          "lines": 1668,
+          "tokens": 12883,
+          "sources": 13,
+          "clones": 5,
+          "duplicatedLines": 51,
+          "duplicatedTokens": 692,
+          "percentage": 3.06,
+          "percentageTokens": 5.37,
+          "newDuplicatedLines": 0,
+          "newClones": 0
+        }
+      }
+    },
+    "total": {
+      "lines": 1668,
+      "tokens": 12883,
+      "sources": 13,
+      "clones": 5,
+      "duplicatedLines": 51,
+      "duplicatedTokens": 692,
+      "percentage": 3.06,
+      "percentageTokens": 5.37,
+      "newDuplicatedLines": 0,
+      "newClones": 0
+    }
+  },
+  "duplicates": [
+    {
+      "format": "python",
+      "lines": 11,
+      "fragment": ",\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...\n\n    # Serializer[bytes] with a bytes data serializer keyword argument.",
+      "tokens": 0,
+      "firstFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 130,
+        "end": 140,
+        "startLoc": {
+          "line": 130,
+          "column": 2,
+          "position": 734
+        },
+        "endLoc": {
+          "line": 140,
+          "column": 67,
+          "position": 869
+        }
+      },
+      "secondFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 114,
+        "end": 124,
+        "startLoc": {
+          "line": 114,
+          "column": 5,
+          "position": 524
+        },
+        "endLoc": {
+          "line": 124,
+          "column": 70,
+          "position": 659
+        }
+      }
+    },
+    {
+      "format": "python",
+      "lines": 12,
+      "fragment": ",\n        serializer: _PDataSerializer[bytes],\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...\n\n    # Fall back with a positional argument. If the strict signature of",
+      "tokens": 0,
+      "firstFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 146,
+        "end": 157,
+        "startLoc": {
+          "line": 146,
+          "column": 2,
+          "position": 943
+        },
+        "endLoc": {
+          "line": 157,
+          "column": 67,
+          "position": 1088
+        }
+      },
+      "secondFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 129,
+        "end": 124,
+        "startLoc": {
+          "line": 129,
+          "column": 5,
+          "position": 724
+        },
+        "endLoc": {
+          "line": 124,
+          "column": 70,
+          "position": 659
+        }
+      }
+    },
+    {
+      "format": "python",
+      "lines": 11,
+      "fragment": ",\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...\n\n    # Fall back with a keyword argument.",
+      "tokens": 0,
+      "firstFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 165,
+        "end": 175,
+        "startLoc": {
+          "line": 165,
+          "column": 4,
+          "position": 1162
+        },
+        "endLoc": {
+          "line": 175,
+          "column": 37,
+          "position": 1297
+        }
+      },
+      "secondFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 114,
+        "end": 124,
+        "startLoc": {
+          "line": 114,
+          "column": 5,
+          "position": 524
+        },
+        "endLoc": {
+          "line": 124,
+          "column": 70,
+          "position": 659
+        }
+      }
+    },
+    {
+      "format": "python",
+      "lines": 12,
+      "fragment": ",\n        serializer: t.Any,\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...\n\n    def",
+      "tokens": 0,
+      "firstFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 181,
+        "end": 192,
+        "startLoc": {
+          "line": 181,
+          "column": 2,
+          "position": 1365
+        },
+        "endLoc": {
+          "line": 192,
+          "column": 4,
+          "position": 1509
+        }
+      },
+      "secondFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 164,
+        "end": 124,
+        "startLoc": {
+          "line": 164,
+          "column": 5,
+          "position": 1153
+        },
+        "endLoc": {
+          "line": 124,
+          "column": 70,
+          "position": 659
+        }
+      }
+    },
+    {
+      "format": "python",
+      "lines": 10,
+      "fragment": "= None,\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ):\n        #: The list of secret keys to try for verifying signatures, from",
+      "tokens": 0,
+      "firstFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 196,
+        "end": 205,
+        "startLoc": {
+          "line": 196,
+          "column": 2,
+          "position": 1579
+        },
+        "endLoc": {
+          "line": 205,
+          "column": 65,
+          "position": 1712
+        }
+      },
+      "secondFile": {
+        "name": "../input/src/itsdangerous/serializer.py",
+        "start": 114,
+        "end": 122,
+        "startLoc": {
+          "line": 114,
+          "column": 2,
+          "position": 521
+        },
+        "endLoc": {
+          "line": 122,
+          "column": 2,
+          "position": 653
+        }
+      }
+    }
+  ]
+}

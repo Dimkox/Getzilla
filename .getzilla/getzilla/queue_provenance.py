@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import AbstractSet, Literal, NamedTuple, TypeAlias
 
 from .python_source_proof import binding_events, binding_owner, namespace_is_closed
+from .python_test_runner import check_cancellation
 
 LiteralKey: TypeAlias = tuple[str, object]
 QueueState = Literal[
@@ -729,21 +730,25 @@ def _project_channel_tree(tree: ast.AST, imported: ast.AST, replaced: set[int]) 
 
 def literal_patch_members(tree: ast.AST) -> dict[int, tuple[str, str, ast.AST | None, bool]]:
     """Resolve only unshadowed stdlib mock.patch.object with a literal member."""
-    if not namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS):
-        return {}
+    nodes = tuple(ast.walk(tree))
     aliases: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.ImportFrom) and node.module == 'unittest':
             aliases.update((alias.asname or alias.name) + '.patch.object' for alias in node.names if alias.name == 'mock')
         elif isinstance(node, ast.ImportFrom) and node.module == 'unittest.mock':
             aliases.update((alias.asname or alias.name) + '.object' for alias in node.names if alias.name == 'patch')
         elif isinstance(node, ast.Import):
             aliases.update((alias.asname or alias.name) + '.patch.object' for alias in node.names if alias.name == 'unittest.mock')
+    # No recognized supplier means no special patch facts, never "no queue".
+    if not aliases:
+        return {}
+    if not namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS):
+        return {}
     bindings = binding_events(tree)
     counts = Counter(event.name for event in bindings)
     aliases = {name for name in aliases if counts[name.split('.')[0]] == 1}
     result = {}
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.Call) or len(node.args) < 2 or any(isinstance(arg, ast.Starred) for arg in node.args) or any(item.arg is None for item in node.keywords):
             continue
         parts = []
@@ -1119,11 +1124,13 @@ class _Interpreter:
         self.scope_stack: list[_FunctionScope] = []
 
     def _statement(self) -> None:
+        check_cancellation()
         self.statement_count += 1
         if self.statement_count > self.statement_limit:
             raise QueueAnalysisLimit("queue statement limit exceeded")
 
     def _value(self, value: AbstractValue) -> AbstractValue:
+        check_cancellation()
         self.value_count += 1 + len(value.entries)
         if self.value_count > self.value_limit:
             raise QueueAnalysisLimit("queue value limit exceeded")
@@ -1904,7 +1911,11 @@ def analyze_queue_tree(
     complete_module: bool = False,
 ) -> QueueTreeAnalysis:
     """Analyze values; only full-source callers may opt into module provenance."""
+    check_cancellation()
     if allow_local_ipc:
         tree = stdlib_exception_projection(tree, complete_module=complete_module)
         tree = local_byte_channel_projection(tree)
     return _Interpreter(tree, adapter_names, statement_limit, value_limit, loop_limit).analyze()
+
+
+from .queue_refusal import QueueRefusalCapture, queue_refusal_text  # noqa: E402,F401

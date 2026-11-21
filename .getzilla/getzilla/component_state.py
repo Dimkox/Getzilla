@@ -130,7 +130,10 @@ def _module_state(value: object, name: str) -> None:
         items = value[field]
         if type(items) is not list or len(items) > 32 or any(not scope(item) for item in items) or len(set(items)) != len(items):
             raise ComponentStateError(f'invalid module scopes: {name}')
-    if (set(value['grants']) != set(value['permissions']) if value['enabled'] else bool(value['grants'])):
+    selected = set(value['grants'])
+    declared = set(value['permissions'])
+    invalid_grants = (not selected or not selected <= declared) if value['schema_version'] == 2 else selected != declared
+    if (invalid_grants if value['enabled'] else bool(value['grants'])):
         raise ComponentStateError(f'invalid module activation: {name}')
     if value['schema_version'] == 2:
         runtime = value['runtime']
@@ -376,8 +379,7 @@ class ManifestState:
         return self.agents
 
 
-def mode_matches(actual: int, expected: int) -> bool:
-    return bool(actual & stat.S_IWRITE) == bool(expected & stat.S_IWUSR) if fsx.WINDOWS else stat.S_IMODE(actual) == expected
+from .fsx import mode_matches as mode_matches
 
 
 

@@ -31,6 +31,31 @@ from factory.tests.test_landing_normalizer import draft
 
 
 class BackendContractVersionTests(unittest.TestCase):
+    def test_published_v1_contracts_stay_frozen_while_current_pdf_uses_v3(self):
+        from getzilla_factory.landing_media import PDF_DECODER_DIGEST, PDF_PYPDF_VERSION
+        directory = Path(__file__).parents[1] / 'contracts'
+        # Accepted v1 bytes at e99548d7 are historical facts, not runtime pins.
+        historical = {
+            'jsonschema/landing-backend-capability.v1.schema.json':
+                '6ece032b101344e4f2923b5c274164983539c75a731bc2248fd3a59b70808b16',
+            'openapi/landing-failover.v1.json':
+                'd316ac7942ac47fc4cf99e340f2098dd5521aef92a68af9dfcc1a7c521bb8dde',
+        }
+        for relative, digest in historical.items():
+            with self.subTest(contract=relative):
+                self.assertEqual(hashlib.sha256((directory / relative).read_bytes()).hexdigest(), digest)
+        current = json.loads((directory / 'jsonschema/landing-backend-capability.v3.schema.json').read_bytes())
+        self.assertEqual(PDF_PYPDF_VERSION, '6.21.4')
+        self.assertEqual({item['pdf_parser_version'] for item in current['properties']['profile']['enum']},
+                         {PDF_PYPDF_VERSION})
+        self.assertEqual({item['pdf_decoder_digest'] for item in current['properties']['profile']['enum']},
+                         {PDF_DECODER_DIGEST})
+        for facts in current['properties']['profile']['enum']:
+            profile = HttpLandingProfile.for_provider(facts['profile_id'], available=True)
+            document = backend_capability(profile, 'public-actor', TARGET_REPOSITORY_ID,
+                                          TARGET_BASE_SHA, TARGET_BASE_TREE)
+            Draft202012Validator(current).validate(document)
+
     def test_current_successor_is_sealed_v3_and_legacy_profiles_stay_frozen(self):
         profile = HttpLandingProfile.for_provider("qwen-intl", available=True)
         document = backend_capability(profile, "public-actor", TARGET_REPOSITORY_ID, TARGET_BASE_SHA, TARGET_BASE_TREE)
@@ -143,6 +168,13 @@ class BackendObservationTests(unittest.TestCase):
                                    command_key=item.job_id, request_digest=item.input_digest)
             store.close()
             with sqlite3.connect(root / "landing.sqlite3") as connection:
+                # A v1 database predates paid authority tables as well as observations.
+                from getzilla_factory.paid_admission import COLUMNS
+                from getzilla_factory.shared_landing_contracts import CONTROL_COLUMNS
+                for table in reversed(tuple(CONTROL_COLUMNS)):
+                    connection.execute(f"DROP TABLE {table}")
+                for table in reversed(tuple(COLUMNS)):
+                    connection.execute(f"DROP TABLE {table}")
                 connection.execute("ALTER TABLE landing_jobs DROP COLUMN observation_json")
                 connection.execute("PRAGMA user_version = 1")
             migrated = SQLiteLandingJobStore(root, repository_root=Path(__file__).parents[2])
@@ -150,7 +182,7 @@ class BackendObservationTests(unittest.TestCase):
             retained = migrated.get(item.tenant_id, item.repository_id, item.job_id)
             self.assertIsNone(retained.observation)
             with sqlite3.connect(migrated.database_path) as connection:
-                self.assertEqual(2, connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(4, connection.execute("PRAGMA user_version").fetchone()[0])
 
 
 class DraftReceiptPersistenceTests(unittest.TestCase):

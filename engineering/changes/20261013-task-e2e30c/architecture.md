@@ -1,0 +1,3 @@
+# Bounded design
+
+Use existing core hooks, factory budget reservation, landing SQLite/journal, installer/fsx ownership, architecture import resolver and Trust CI dependency tooling. Actual runtime actions require admission before every network/exec boundary; unsupported opaque orchestration cannot be authorized by source scanning. Paid authority is separate from ads/deploy authority; one aggregate budget covers fallback/retries. No new service/datastore/major dependency is authorized without a concrete architectural ruling. Exact file ownership and leaf dependencies live in issues-ledger.md and analysis reports. Parent sole writer is ai_implementer. Root persists workflow evidence only.

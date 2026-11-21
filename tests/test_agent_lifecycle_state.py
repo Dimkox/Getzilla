@@ -45,15 +45,22 @@ class AgentLifecycleTests(unittest.TestCase):
                                      ('Read', {'file_path': str(root / 'VERSION')})]:
                     results = []
                     warning = io.StringIO()
-                    with patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
+                    request = json.dumps({**payload, 'tool_name': tool, 'tool_input': values}).encode('utf-8')
+                    # Feed the real bounded decoder. The former read_payload
+                    # global is no longer consumed by this native hook.
+                    with io.TextIOWrapper(io.BytesIO(request), encoding='utf-8') as stream, \
+                         patch.object(sys, 'stdin', stream), \
+                         patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
                          patch.object(sys, 'stderr', warning), \
-                         patch.dict(hook['main'].__globals__, {'read_payload': lambda: {**payload, 'tool_name': tool, 'tool_input': values}, 'emit': results.append}):
+                         patch.dict(hook['main'].__globals__, {'emit': results.append}):
                         hook['main']()
                     self.assertEqual(results[-1]['decision'], 'allow' if tool == 'Read' else 'deny')
                     self.assertEqual(warning.getvalue(), 'Getzilla: lifecycle observation unavailable; authorization continues.\n')
-                    with patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
+                    with io.TextIOWrapper(io.BytesIO(request), encoding='utf-8') as stream, \
+                         patch.object(sys, 'stdin', stream), \
+                         patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
                          patch.object(sys.stderr, 'write', side_effect=OSError('private-marker')), \
-                         patch.dict(hook['main'].__globals__, {'read_payload': lambda: {**payload, 'tool_name': tool, 'tool_input': values}, 'emit': results.append}):
+                         patch.dict(hook['main'].__globals__, {'emit': results.append}):
                         hook['main']()
                     self.assertEqual(results[-1]['decision'], 'allow' if tool == 'Read' else 'deny')
 
@@ -320,6 +327,53 @@ class AgentLifecycleTests(unittest.TestCase):
                                    'failed', now=T0 + timedelta(seconds=602))
             self.assertEqual(self.sweep(root, 603)['terminal'][0]['classification'], 'terminal-failed')
             record_agent_start(root, 'writer-2', 'general_implementer', now=T0)
+
+    def test_terminal_report_binds_bytes_dataset_and_refuses_rebinding(self):
+        from getzilla.agent_lifecycle import record_terminal_report, terminal_report_binding
+        import hashlib
+        from contextlib import chdir
+        with project_copy() as root, chdir(root):
+            record = self.start(root)
+            record_agent_stop(root, 'writer-1', 'general_implementer', generation=record['generation'], now=T0)
+            (root / '.getzilla/runtime').chmod(0o700)
+            relative = '.getzilla/runtime/review-input-report.json'
+            report = root / relative
+            report.write_bytes(b'{"review":"annotations only"}')
+            report.chmod(0o600)
+            dataset = root / '.getzilla/runtime/frozen-dataset'
+            dataset.mkdir(mode=0o700)
+            frozen = []
+            for name in ('function-universes.json', 'partition.json', 'queries.json', 'full-qrels.json'):
+                raw = b'{"inert":"separate fixture"}'
+                (dataset / name).write_bytes(raw)
+                (dataset / name).chmod(0o600)
+                frozen.append({'name': name, 'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)})
+            data_digest = hashlib.sha256(json.dumps(frozen, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            kwargs = dict(report_path=relative, dataset_sha256=data_digest, dataset_path='.getzilla/runtime/frozen-dataset')
+            with self.assertRaisesRegex(ValueError, 'dataset-digest-mismatch'):
+                record_terminal_report(root, 'writer-1', record['generation'], 'route-229', 'task-229',
+                                       'completed', now=T0, **{**kwargs, 'dataset_sha256': 'b' * 64})
+            record_terminal_report(root, 'writer-1', record['generation'], 'route-229', 'task-229',
+                                   'completed', now=T0, **kwargs)
+            stop = [r for r in get_agent_state(root)['history'] if r['event'] == 'stop'][-1]
+            self.assertEqual(stop['report_binding']['sha256'], hashlib.sha256(report.read_bytes()).hexdigest())
+            self.assertEqual(stop['report_binding']['dataset_sha256'], data_digest)
+            self.assertEqual(stop['report_binding']['qualification'], 'local-observation-only')
+            self.assertEqual(terminal_report_binding(root, 'writer-1', record['generation'],
+                'route-229', 'task-229', dataset_sha256=data_digest), stop['report_binding'])
+            with self.assertRaisesRegex(ValueError, 'terminal-report-unbound'):
+                terminal_report_binding(root, 'writer-1', record['generation'],
+                    'route-229', 'task-229', dataset_sha256='b' * 64)
+            record_terminal_report(root, 'writer-1', record['generation'], 'route-229', 'task-229',
+                                   'completed', now=T0, **kwargs)
+            report.write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError, 'terminal-report-changed'):
+                terminal_report_binding(root, 'writer-1', record['generation'],
+                    'route-229', 'task-229', dataset_sha256=data_digest)
+            with self.assertRaisesRegex(ValueError, 'terminal-report-conflict'):
+                record_terminal_report(root, 'writer-1', record['generation'], 'route-229', 'task-229',
+                                       'completed', now=T0, **kwargs)
+            self.assertEqual([r for r in get_agent_state(root)['history'] if r['event'] == 'stop'][-1], stop)
 
     def test_concurrent_writer_acquisition_has_one_owner(self) -> None:
         with project_copy() as root:

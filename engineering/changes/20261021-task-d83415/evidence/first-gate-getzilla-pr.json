@@ -1,0 +1,828 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-21T14:40:16+00:00",
+  "mode": "pr",
+  "profiles": [
+    "base",
+    "contracts"
+  ],
+  "route_id": "d834158878e0",
+  "tree_fingerprint": "18c206fca2dceddb948b2a1f800eb332ddf140ea559b7b14a87ede02aa303a27",
+  "changed_files": [
+    ".getzilla/getzilla/verification.py",
+    ".getzilla/getzilla/verification_dispositions.py",
+    "docs/REFERENCE.md",
+    "engineering/changes/20261021-task-d83415/architecture.md",
+    "engineering/changes/20261021-task-d83415/brief.md",
+    "engineering/changes/20261021-task-d83415/change-spec.yaml",
+    "engineering/changes/20261021-task-d83415/evidence/README.md",
+    "engineering/changes/20261021-task-d83415/evidence/analysis-architect.md",
+    "engineering/changes/20261021-task-d83415/evidence/analysis-docs_researcher.md",
+    "engineering/changes/20261021-task-d83415/evidence/analysis-integration_architect.md",
+    "engineering/changes/20261021-task-d83415/evidence/analysis-repo_explorer.md",
+    "engineering/changes/20261021-task-d83415/evidence/bounded-controls.md",
+    "engineering/changes/20261021-task-d83415/evidence/bounded-log-bindings.json",
+    "engineering/changes/20261021-task-d83415/evidence/code-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/committed-controls.json",
+    "engineering/changes/20261021-task-d83415/evidence/gate-environment.json",
+    "engineering/changes/20261021-task-d83415/evidence/initial-code-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/initial-release-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/initial-review-binding.json",
+    "engineering/changes/20261021-task-d83415/evidence/initial-security-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/initial-test-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/release-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/repair-controls.json",
+    "engineering/changes/20261021-task-d83415/evidence/repaired-committed-controls.json",
+    "engineering/changes/20261021-task-d83415/evidence/second-code-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/second-release-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/second-repair-committed-controls.json",
+    "engineering/changes/20261021-task-d83415/evidence/second-repair-controls.json",
+    "engineering/changes/20261021-task-d83415/evidence/second-review-binding.json",
+    "engineering/changes/20261021-task-d83415/evidence/second-security-initial-pass.md",
+    "engineering/changes/20261021-task-d83415/evidence/second-security-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/second-test-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/security-review.md",
+    "engineering/changes/20261021-task-d83415/evidence/startup-capacity.json",
+    "engineering/changes/20261021-task-d83415/evidence/test-review.md",
+    "engineering/changes/20261021-task-d83415/human-gates.json",
+    "engineering/changes/20261021-task-d83415/release.md",
+    "engineering/changes/20261021-task-d83415/requirements.md",
+    "engineering/changes/20261021-task-d83415/rollback.md",
+    "engineering/changes/20261021-task-d83415/route.json",
+    "engineering/changes/20261021-task-d83415/state.json",
+    "engineering/changes/20261021-task-d83415/tasks.md",
+    "engineering/changes/20261021-task-d83415/test-plan.md",
+    "mistakes.md",
+    "tests/test_manifest_package.py",
+    "tests/test_verification_dispositions.py"
+  ],
+  "changed_file_inventory": {
+    "mode": "range-union",
+    "bases": [
+      {
+        "kind": "route",
+        "source": "route.base_commit",
+        "base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+        "target": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+        "count": 46
+      },
+      {
+        "kind": "pr-target",
+        "source": "refs/remotes/origin/main",
+        "base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+        "target": "e42398ddaa41e662e921d7af68ab87b1e28e3554",
+        "count": 46
+      }
+    ],
+    "worktree_count": 0,
+    "union_count": 46,
+    "selection_findings": []
+  },
+  "checks": [
+    {
+      "name": "architecture-inputs",
+      "status": "pass",
+      "summary": "bounded model and referenced-input preflight executed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "git-diff-check",
+      "status": "pass",
+      "summary": "4/4 commands clean; 0 findings disposed; 0 unresolved; bases=route:e158ddc7263a55f5308944c5a426eb1e9f1a4327,pr-target:e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "checked-range",
+          "path": "route.base_commit",
+          "message": "checked e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD",
+          "kind": "route",
+          "base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+          "target": "e158ddc7263a55f5308944c5a426eb1e9f1a4327"
+        },
+        {
+          "severity": "info",
+          "code": "checked-range",
+          "path": "refs/remotes/origin/main",
+          "message": "checked e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD",
+          "kind": "pr-target",
+          "base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+          "target": "e42398ddaa41e662e921d7af68ab87b1e28e3554"
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "worktree",
+          "message": "exit=0: git diff --check",
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "index",
+          "message": "exit=0: git diff --cached --check",
+          "command": [
+            "git",
+            "diff",
+            "--cached",
+            "--check"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "route",
+          "message": "exit=0: git diff --check e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD",
+          "command": [
+            "git",
+            "diff",
+            "--check",
+            "e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "pr-target",
+          "message": "exit=0: git diff --check e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD",
+          "command": [
+            "git",
+            "diff",
+            "--check",
+            "e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "disposition-summary",
+          "path": "engineering/verification-dispositions.json",
+          "message": "Raw findings remain visible; effective outcomes include reviewed dispositions.",
+          "config_sha256": null,
+          "configured": 0,
+          "observed": 0,
+          "disposed": 0,
+          "unresolved": 0
+        }
+      ]
+    },
+    {
+      "name": "docs-state-scope",
+      "status": "pass",
+      "summary": "profile=full-pr-suite; evidence=verification:full-pr-suite; reason=operator-override; paths=0; skipped=none",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "operator-override",
+          "path": "",
+          "message": "full PR suite is required: GETZILLA_VERIFY_FORCE_FULL forces the full PR suite"
+        }
+      ]
+    },
+    {
+      "name": "change-spec",
+      "status": "fail",
+      "summary": "1 specs checked; exempt=False",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "error",
+          "code": "change-spec-invalid",
+          "path": "engineering/changes/20261021-task-d83415/change-spec.yaml",
+          "message": "/home/pall/projects/liqvera/.getzilla/runtime/getzilla-dispositions/engineering/changes/20261021-task-d83415/change-spec.yaml: red-risk requires approvals.required_scopes"
+        }
+      ]
+    },
+    {
+      "name": "architecture",
+      "status": "fail",
+      "summary": "drift=pass; fitness=fail; diagrams=pass",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "error",
+          "code": "architecture-fitness",
+          "path": "architecture/rules.yaml",
+          "message": "architecture fitness status is fail"
+        }
+      ]
+    },
+    {
+      "name": "governance",
+      "status": "fail",
+      "summary": "governance requires a complete successful architecture check",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "error",
+          "code": "governance-invalid",
+          "path": "governance",
+          "message": "governance requires a complete successful architecture check"
+        }
+      ]
+    },
+    {
+      "name": "workflow-artifacts",
+      "status": "skip",
+      "summary": "workflow artifacts are not configured",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "diff-risk",
+      "status": "pass",
+      "summary": "diff risk medium (2 reasons, profile standard); route risk high covers it",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "cost-guard",
+      "status": "pass",
+      "summary": "no paid or unbounded operation in the prompt or the diff",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "eu-ai-act",
+      "status": "skip",
+      "summary": "EU AI Act component not installed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "hook-health",
+      "status": "pass",
+      "summary": "no hook failed open during this route",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "workflow-baseline",
+      "status": "skip",
+      "summary": "not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "secret-scan",
+      "status": "pass",
+      "summary": "0 potential secrets; 0 disposed; 0 unresolved",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "disposition-summary",
+          "path": "engineering/verification-dispositions.json",
+          "message": "Raw findings remain visible; effective outcomes include reviewed dispositions.",
+          "config_sha256": null,
+          "configured": 0,
+          "observed": 0,
+          "disposed": 0,
+          "unresolved": 0
+        }
+      ]
+    },
+    {
+      "name": "contract-structure",
+      "status": "pass",
+      "summary": "0 contracts checked",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "sql-safety",
+      "status": "pass",
+      "summary": "0 unsafe SQL findings",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "stack:powershell",
+      "status": "skip",
+      "summary": "no changed files of this stack",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "stack-untouched",
+          "path": "powershell",
+          "message": "powershell: the change does not touch this stack; its checks did not run"
+        }
+      ]
+    },
+    {
+      "name": "known-vulnerabilities",
+      "status": "pass",
+      "summary": "no known vulnerabilities in 83 pinned dependencies (OSV API)",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "opengrep",
+      "status": "pass",
+      "summary": "no taint findings from Getzilla OpenGrep rules",
+      "command": [
+        "/home/pall/.getzilla/bin/opengrep",
+        "scan",
+        "--config",
+        ".getzilla/sast/rules",
+        "--taint-intrafile",
+        "--json",
+        "--quiet",
+        "--disable-version-check",
+        "--timeout",
+        "30",
+        "--exclude",
+        ".getzilla/sast",
+        "--exclude",
+        "tests",
+        "--exclude",
+        "**/fixtures/**",
+        "--exclude",
+        "node_modules",
+        "--exclude",
+        "vendor",
+        "--exclude",
+        ".getzilla/runtime",
+        "."
+      ],
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "ruff",
+      "status": "pass",
+      "summary": "exit=0",
+      "command": [
+        "ruff",
+        "check",
+        ".getzilla/getzilla",
+        "scripts",
+        "tests",
+        ".grok/hooks",
+        "factory/src/getzilla_factory"
+      ],
+      "stdout": "All checks passed!\n",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "bandit",
+      "status": "pass",
+      "summary": "exit=0",
+      "command": [
+        "bandit",
+        "-c",
+        "bandit.yaml",
+        "-q",
+        "-r",
+        ".getzilla/getzilla",
+        "scripts",
+        ".grok/hooks",
+        "factory/src/getzilla_factory"
+      ],
+      "stdout": "",
+      "stderr": "[manager]\tWARNING\tTest in comment: fixed is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: argv is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: no is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: shell is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: fixed is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: https is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: OSV is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: endpoints is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: the is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: agent is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: s is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: own is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: shell is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: command is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: checked is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: by is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: the is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: repository is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: policy is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: above is not a test name or id, ignoring\n[tester]\tWARNING\tnosec encountered (B105), but no failed test on file .getzilla/getzilla/shell_targets.py:91\n[tester]\tWARNING\tnosec encountered (B105), but no failed test on file .getzilla/getzilla/shell_targets.py:91\n[tester]\tWARNING\tnosec encountered (B105), but no failed test on file .getzilla/getzilla/shell_targets.py:242\n[tester]\tWARNING\tnosec encountered (B105), but no failed test on file .getzilla/getzilla/shell_targets.py:242\n[manager]\tWARNING\tTest in comment: Git is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: object is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: id is not a test name or id, ignoring\n[tester]\tWARNING\tnosec encountered (B324), but no failed test on file .getzilla/getzilla/source_git.py:99\n[tester]\tWARNING\tnosec encountered (B324), but no failed test on file .getzilla/getzilla/source_git.py:99\n[manager]\tWARNING\tTest in comment: https is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: only is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: checked is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: above is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: fixed is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: git is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: argv is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: below is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: fixed is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: git is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: argv is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: no is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: shell is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: fixed is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: git is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: argv is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: paths is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: on is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: stdin is not a test name or id, ignoring\n",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "pilot-unittest",
+      "status": "pass",
+      "summary": "exit=0",
+      "command": [
+        "/home/pall/projects/liqvera/.getzilla/runtime/completion/getzilla-gate-venv/bin/python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "pilot/tests",
+        "-t",
+        ".",
+        "-v"
+      ],
+      "stdout": "",
+      "stderr": "test_any_server_request_is_denied_without_response (pilot.tests.test_app_server_codex.AppServerCodexRunnerTests.test_any_server_request_is_denied_without_response) ... ok\ntest_broad_workspace_profile_is_rejected_before_model_turn (pilot.tests.test_app_server_codex.AppServerCodexRunnerTests.test_broad_workspace_profile_is_rejected_before_model_turn) ... ok\ntest_malformed_or_non_success_terminal_fails_closed (pilot.tests.test_app_server_codex.AppServerCodexRunnerTests.test_malformed_or_non_success_terminal_fails_closed) ... ok\ntest_one_closed_app_server_thread_and_turn_returns_synthetic_success (pilot.tests.test_app_server_codex.AppServerCodexRunnerTests.test_one_closed_app_server_thread_and_turn_returns_synthetic_success) ... ok\ntest_wrong_response_id_or_timeout_fails_closed (pilot.tests.test_app_server_codex.AppServerCodexRunnerTests.test_wrong_response_id_or_timeout_fails_closed) ... ok\ntest_all_five_pilot_contracts_are_in_the_executable_inventory (pilot.tests.test_architecture.PilotArchitectureTests.test_all_five_pilot_contracts_are_in_the_executable_inventory) ... ok\ntest_pilot_has_separate_trust_domains_and_factory_has_no_external_edge (pilot.tests.test_architecture.PilotArchitectureTests.test_pilot_has_separate_trust_domains_and_factory_has_no_external_edge) ... ok\ntest_exact_request_resource_is_accepted_and_digest_bound (pilot.tests.test_authority.LiteralGrantAuthorityTests.test_exact_request_resource_is_accepted_and_digest_bound) ... ok\ntest_wildcard_coarse_stale_or_ambiguous_grants_fail_closed (pilot.tests.test_authority.LiteralGrantAuthorityTests.test_wildcard_coarse_stale_or_ambiguous_grants_fail_closed) ... ok\ntest_closed_config_dispatches_three_live_phases_and_read_only_status (pilot.tests.test_cli.PilotCliTests.test_closed_config_dispatches_three_live_phases_and_read_only_status) ... ok\ntest_effect_phases_are_disabled_without_live_flag_or_config (pilot.tests.test_cli.PilotCliTests.test_effect_phases_are_disabled_without_live_flag_or_config) ... ok\ntest_main_has_a_built_in_host_runner_not_an_adapter_placeholder (pilot.tests.test_cli.PilotCliTests.test_main_has_a_built_in_host_runner_not_an_adapter_placeholder) ... ok\ntest_exact_argv_starts_once_and_persists_the_sealed_candidate (pilot.tests.test_codex_executor.CodexExecutorTests.test_exact_argv_starts_once_and_persists_the_sealed_candidate) ... ok\ntest_failed_sandbox_proof_starts_zero_processes (pilot.tests.test_codex_executor.CodexExecutorTests.test_failed_sandbox_proof_starts_zero_processes) ... ok\ntest_installed_sandbox_denies_outside_reads_and_unix_sockets (pilot.tests.test_codex_executor.CodexExecutorTests.test_installed_sandbox_denies_outside_reads_and_unix_sockets) ... skipped 'requires explicit pinned local Codex sandbox'\ntest_contract_rejects_unknown_fields_and_digest_substitution (pilot.tests.test_contracts.PilotContractTests.test_contract_rejects_unknown_fields_and_digest_substitution) ... ok\ntest_exact_profile_and_five_outputs_form_a_closed_schema_valid_chain (pilot.tests.test_contracts.PilotContractTests.test_exact_profile_and_five_outputs_form_a_closed_schema_valid_chain) ... ok\ntest_untrusted_issue_text_does_not_change_the_profile_digest (pilot.tests.test_contracts.PilotContractTests.test_untrusted_issue_text_does_not_change_the_profile_digest) ... ok\ntest_one_fake_run_forms_all_five_outputs_and_replay_has_no_effect (pilot.tests.test_coordinator.PilotCoordinatorTests.test_one_fake_run_forms_all_five_outputs_and_replay_has_no_effect) ... ok\ntest_restart_reopens_workspace_at_each_recoverable_local_state (pilot.tests.test_coordinator.PilotCoordinatorTests.test_restart_reopens_workspace_at_each_recoverable_local_state) ... ok\ntest_ambiguous_restart_reconciles_branch_and_pr_without_second_write (pilot.tests.test_github.GitHubPublicationTests.test_ambiguous_restart_reconciles_branch_and_pr_without_second_write) ... ok\ntest_exact_command_shapes_are_non_force_single_ref_and_draft_only (pilot.tests.test_github.GitHubPublicationTests.test_exact_command_shapes_are_non_force_single_ref_and_draft_only) ... ok\ntest_base_or_issue_identity_drift_fails_closed (pilot.tests.test_issue_source.IssueSourceTests.test_base_or_issue_identity_drift_fails_closed) ... ok\ntest_snapshot_uses_only_the_exact_profile_for_routing (pilot.tests.test_issue_source.IssueSourceTests.test_snapshot_uses_only_the_exact_profile_for_routing) ... ok\ntest_in_flight_branch_restart_observes_without_a_second_push (pilot.tests.test_live.PilotPhasesTests.test_in_flight_branch_restart_observes_without_a_second_push) ... ok\ntest_missing_api_key_stops_before_snapshot_or_invocation_and_secret_is_not_persisted (pilot.tests.test_live.PilotPhasesTests.test_missing_api_key_stops_before_snapshot_or_invocation_and_secret_is_not_persisted) ... ok\ntest_runtime_roots_reject_a_symlinked_parent_into_control (pilot.tests.test_live.PilotPhasesTests.test_runtime_roots_reject_a_symlinked_parent_into_control) ... ok\ntest_three_process_phases_use_distinct_grants_and_replay_zero_writes (pilot.tests.test_live.PilotPhasesTests.test_three_process_phases_use_distinct_grants_and_replay_zero_writes) ... ok\ntest_observes_then_executes_only_exact_push_and_draft_post (pilot.tests.test_live_github.PinnedGitHubTransportTests.test_observes_then_executes_only_exact_push_and_draft_post) ... ok\ntest_reads_only_exact_repo_issue_and_base_ref_facts (pilot.tests.test_live_github.PinnedGitHubTransportTests.test_reads_only_exact_repo_issue_and_base_ref_facts) ... ok\ntest_interrupted_invocation_is_terminal_and_cannot_start_again (pilot.tests.test_recovery.PilotRecoveryTests.test_interrupted_invocation_is_terminal_and_cannot_start_again) ... ok\ntest_loads_one_literal_grant_bound_to_observed_control_state (pilot.tests.test_runtime_authority.RuntimeGrantLoaderTests.test_loads_one_literal_grant_bound_to_observed_control_state) ... ok\ntest_stale_wildcard_or_multiple_runtime_grants_fail_closed (pilot.tests.test_runtime_authority.RuntimeGrantLoaderTests.test_stale_wildcard_or_multiple_runtime_grants_fail_closed) ... ok\ntest_conflicting_replay_and_tampered_record_fail_closed (pilot.tests.test_store.PilotStoreTests.test_conflicting_replay_and_tampered_record_fail_closed) ... ok\ntest_read_only_status_does_not_recover_or_change_database (pilot.tests.test_store.PilotStoreTests.test_read_only_status_does_not_recover_or_change_database) ... ok\ntest_replay_is_exact_and_candidate_survives_close_reopen (pilot.tests.test_store.PilotStoreTests.test_replay_is_exact_and_candidate_survives_close_reopen) ... ok\ntest_bwrap_argv_has_minimal_read_only_source_and_no_network (pilot.tests.test_validation.ValidationTests.test_bwrap_argv_has_minimal_read_only_source_and_no_network) ... ok\ntest_fixed_test_and_semantic_pass_persist_one_exact_validation (pilot.tests.test_validation.ValidationTests.test_fixed_test_and_semantic_pass_persist_one_exact_validation) ... ok\ntest_semantic_gate_proves_exact_versions_labels_csp_and_protected_css (pilot.tests.test_validation.ValidationTests.test_semantic_gate_proves_exact_versions_labels_csp_and_protected_css) ... ok\ntest_semantic_gate_rejects_extra_padding_and_csp_policy_changes (pilot.tests.test_validation.ValidationTests.test_semantic_gate_rejects_extra_padding_and_csp_policy_changes) ... ok\ntest_tree_mutation_is_terminal_even_when_test_exit_is_zero (pilot.tests.test_validation.ValidationTests.test_tree_mutation_is_terminal_even_when_test_exit_is_zero) ... ok\ntest_disallowed_or_special_change_is_rejected_without_commit (pilot.tests.test_workspace.ExactGitWorkspaceTests.test_disallowed_or_special_change_is_rejected_without_commit) ... ok\ntest_private_no_local_clone_has_no_remote_and_seals_one_parent_candidate (pilot.tests.test_workspace.ExactGitWorkspaceTests.test_private_no_local_clone_has_no_remote_and_seals_one_parent_candidate) ... ok\ntest_sealed_workspace_recovers_by_job_and_rejects_tamper (pilot.tests.test_workspace.ExactGitWorkspaceTests.test_sealed_workspace_recovers_by_job_and_rejects_tamper) ... ok\n\n----------------------------------------------------------------------\nRan 44 tests in 5.068s\n\nOK (skipped=1)\n",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "python-unittest",
+      "status": "fail",
+      "summary": "pytest-xdist workers=16 exit=1 seconds=518.176",
+      "command": [
+        "/home/pall/projects/liqvera/.getzilla/runtime/completion/getzilla-gate-venv/bin/python",
+        "-m",
+        "pytest",
+        "-c",
+        "/dev/null",
+        "-p",
+        "xdist.plugin",
+        "-p",
+        "no:cacheprovider",
+        "--import-mode=prepend",
+        "--rootdir=.",
+        "-o",
+        "python_files=test*.py",
+        "-q",
+        "-n",
+        "16",
+        "--dist=worksteal",
+        "--max-worker-restart=0",
+        "--durations=20",
+        "-ra",
+        "-p",
+        "pytest_cov.plugin",
+        "--cov",
+        "--cov-config=/home/pall/projects/liqvera/.getzilla/runtime/getzilla-dispositions/.coveragerc",
+        "--cov-report=term",
+        "tests"
+      ],
+      "stdout": "_risk_terms.py                              45      7     12      4    81%   38-40, 54, 56-57, 61\nscripts/getzilla_route.py                                   34     34      8      0     0%   1-40\nscripts/getzilla_setup_agent.py                             44     44     20      0     0%   1-73\nscripts/getzilla_spec.py                                    85      8     24      4    89%   35, 47-48, 102->104, 111, 116-118, 122\nscripts/getzilla_startup_cpu.py                             46     46     14      0     0%   1-57\nscripts/getzilla_status.py                                  24     24      2      0     0%   1-34\nscripts/getzilla_trust_ci.py                                55     55     12      0     0%   8-85\nscripts/getzilla_update.py                                   7      7      0      0     0%   1-11\nscripts/getzilla_verify.py                                  70     17     18      5    70%   43, 45, 47, 52, 55-59, 66-71, 102-103\nscripts/getzilla_vulns.py                                   53     53     20      0     0%   1-64\nscripts/install_into.py                                   1082    205    390     78    79%   222, 225, 235, 249, 258-268, 279, 315, 322, 342, 348-351, 356, 362, 368, 401-404, 412, 415, 420-421, 451, 463, 466-467, 480-482, 504-505, 510-513, 538-541, 547, 554-556, 570, 574-575, 580, 586-587, 609, 622, 624, 629, 645, 658, 682, 686, 693, 704, 710, 719, 722->728, 730, 736, 760-761, 813, 837-838, 862, 881-882, 885, 889, 897, 930, 946, 949, 953-954, 959-960, 989-990, 1008, 1011, 1015, 1025-1026, 1037, 1040-1043, 1069-1070, 1072, 1106, 1122, 1132-1133, 1227, 1231, 1239-1240, 1256-1260, 1274-1276, 1284, 1294, 1298, 1307, 1327, 1332-1334, 1345-1355, 1367-1368, 1378-1379, 1386, 1395, 1404, 1408-1413, 1417, 1461-1462, 1466, 1474, 1481, 1489, 1511, 1547, 1560, 1563, 1565, 1580, 1610, 1634, 1638, 1647->1646, 1651-1652, 1674->1676, 1713, 1785-1868, 1872\nscripts/package_stack.py                                   692    145    178     51    77%   36-37, 43-44, 50-51, 107-108, 111, 113, 124-125, 127, 129, 132->exit, 143-146, 158, 162-163, 168-169, 197, 218, 225, 226->177, 228-232, 234->236, 244-245, 249-251, 253-254, 261-263, 273-275, 282-283, 301-302, 304, 330-333, 339, 341-344, 346, 354-355, 368-369, 398-399, 414-415, 424-425, 447, 450-453, 470, 483-484, 500-501, 510-511, 518-519, 565-566, 577, 585, 588-589, 591, 623, 625->627, 628, 643, 645, 657, 665-666, 670, 688-689, 693, 701-702, 704, 710, 714, 716-717, 719->724, 722-723, 725->727, 728, 741, 770, 772, 792-793, 797, 811, 860, 867, 879-880, 891-894, 898-900, 907-908, 910, 922-923, 925, 935, 966-967, 969, 990-991, 1001->1003, 1103, 1106, 1126, 1140\nscripts/verify_manifest.py                                  12     12      4      0     0%   1-16\n----------------------------------------------------------------------------------------------------\nTOTAL                                                    30976   5221  12866   1892    81%\n\n1 empty file skipped.\nRequired test coverage of 74.0% reached. Total coverage: 81.34%\n============================= slowest 20 durations =============================\n194.84s call     tests/test_architecture_fitness.py::ArchitectureFitnessTests::test_change_separation_metadata_does_not_hide_implementation\n181.93s call     tests/test_verifier_recovery.py::VerifierRecoveryTests::test_receipt_failure_keeps_completed_verdict_and_report\n145.55s call     tests/test_architecture_fitness.py::ArchitectureFitnessTests::test_public_worker_source_membership_is_exact_and_envelope_preserving\n140.49s call     tests/test_verification_doctor.py::VerificationTests::test_governance_runs_after_spec_and_architecture_and_failure_is_not_receipted\n132.93s call     tests/test_zero_git_adoption.py::StateMachineTests::test_crash_after_each_transition_can_resume_or_abort\n131.47s call     tests/test_architecture_fitness.py::ArchitectureFitnessTests::test_change_separation_public_contracts_preserve_original_envelope\n123.54s call     tests/test_verification_doctor.py::VerificationTests::test_missing_adoption_marker_cannot_disable_architecture_checks\n114.31s call     tests/test_architecture_fitness.py::ArchitectureFitnessTests::test_repository_vulnerability_scanner_requires_its_own_declared_https_edges\n89.48s call     tests/test_architecture_fitness.py::ArchitectureFitnessTests::test_reviewed_public_migration_refuses_drift_and_incomplete_history\n87.61s call     tests/test_installer.py::InstallerTests::test_materialized_consumer_documentation_is_portable\n65.02s call     tests/test_verification_doctor.py::VerificationTests::test_shallow_descendant_cannot_hide_prior_adoption_from_legacy_route\n62.81s call     tests/test_verification_doctor.py::VerificationTests::test_marker_backed_shallow_deletion_fails_at_depth_one\n61.95s call     tests/test_verification_doctor.py::VerificationTests::test_malformed_adoption_marker_fails_closed\n57.52s call     tests/test_verification_doctor.py::VerificationTests::test_scanner_fixture_keeps_real_checks_and_full_source_negative_control\n54.14s call     tests/test_verification_doctor.py::QualityContourTests::test_coverage_module_failure_is_not_skipped_when_executable_is_missing_in_pr_mode\n52.75s call     tests/test_verification_doctor.py::QualityContourTests::test_trivy_signal_without_binary_is_skip\n51.46s call     tests/test_zero_git_adoption.py::StateMachineTests::test_status_is_read_only\n51.29s call     tests/test_architecture_fitness.py::ArchitectureFitnessTests::test_queue_container_mutations_and_signed_selections\n49.93s call     tests/test_verification_doctor.py::VerificationTests::test_verify_reports_architecture_metadata_without_exact_worktree_sha\n48.60s call     tests/test_architecture_fitness.py::ArchitectureFitnessTests::test_queue_alias_mutations_propagate_without_tainting_unrelated_aliases\n=========================== short test summary info ============================\nSKIPPED [1] tests/test_stack_go_java.py:99: downloads Go from go.dev\nSKIPPED [1] tests/test_stack_go_java.py:159: downloads Temurin JDK 21 from GitHub\nSKIPPED [1] tests/test_stack_node.py:175: downloads Node from nodejs.org\nSKIPPED [1] tests/test_stack_runners.py:152: downloads rustup and a Rust toolchain from static.rust-lang.org\nSKIPPED [1] tests/test_stack_runners.py:216: downloads the .NET SDK from builds.dotnet.microsoft.com\nSKIPPED [1] tests/test_stack_runners.py:293: downloads PSScriptAnalyzer and Pester from the PowerShell Gallery\nSKIPPED [1] tests/test_python_test_runner.py:634: Windows Job Object\nSKIPPED [1] tests/test_python_test_runner.py:607: Windows Job Object\nSKIPPED [1] tests/test_python_test_runner.py:596: Windows Job Object capability\nSKIPPED [1] tests/test_install_scripts.py:478: downloads the OSV database, OpenGrep, the pinned workflow sources and PyPI tools\nSKIPPED [1] tests/test_fsx.py:85: POSIX dir_fd calls already resolve names relative to the descriptor\nSKIPPED [1] tests/test_fsx.py:92: Windows-only primitives\nSKIPPED [1] tests/test_manifest_package.py:287: the refusal is for hosts without POSIX ownership and umask\nSKIPPED [1] tests/test_zero_git_platform.py:105: native Windows filesystem cases\nSKIPPED [1] tests/test_zero_git_platform.py:71: native Windows filesystem cases\nSKIPPED [1] tests/test_zero_git_platform.py:93: native Windows filesystem cases\nSKIPPED [1] tests/test_zero_git_platform.py:79: native Windows filesystem cases\nFAILED tests/test_adopt_existing_cli.py::CliTests::test_apply_requires_matching_digest\nFAILED tests/test_stack_go_java.py::GoTests::test_fast_and_pr_commands - Asse...\nFAILED tests/test_stack_go_java.py::GoTests::test_unformatted_files_fail_gofmt\nFAILED tests/test_stack_go_java.py::JavaTests::test_gradle_and_maven_run_only_through_the_project_wrapper\nFAILED tests/test_stack_go_java.py::JavaTests::test_missing_wrapper_and_unknown_maven_dependencies_fail_pr\nFAILED tests/test_adopt_existing_cli.py::CliTests::test_cli_plan_has_no_source_side_effect\nFAILED tests/test_stack_runners.py::RustTests::test_clippy_warnings_are_findings_not_failures\nFAILED tests/test_stack_runners.py::RustTests::test_fast_and_pr_commands_with_the_toolchain_on_path\nFAILED tests/test_stack_runners.py::RustTests::test_missing_lockfile_is_a_gap_that_fails_pr\nFAILED tests/test_adopt_existing_cli.py::CliTests::test_exit_code_contract - ...\nFAILED tests/test_stack_runners.py::RustTests::test_workspace_member_runs_at_the_workspace_root_once\nFAILED tests/test_stack_runners.py::DotnetTests::test_pr_restore_build_test_format_and_vulnerabilities\nFAILED tests/test_stack_runners.py::DotnetTests::test_vulnerable_package_fails_and_fast_mode_reports_unknown_dependencies\nFAILED tests/test_stack_runners.py::DotnetTests::test_workloads_are_refused_explicitly\nFAILED tests/test_adopt_existing_cli.py::CliTests::test_full_cli_round_trip\nFAILED tests/test_stacks_registry.py::DetectionTests::test_detects_by_marker_and_ignores_fixtures_and_dependencies\nFAILED tests/test_stacks_registry.py::NotVerifiedTests::test_fast_mode_warns_instead_of_refusing\nFAILED tests/test_stacks_registry.py::NotVerifiedTests::test_pr_with_changed_files_of_an_unchecked_stack_fails\nFAILED tests/test_stacks_registry.py::NotVerifiedTests::test_registered_runner_replaces_the_not_verified_line\nFAILED tests/test_stacks_registry.py::NotVerifiedTests::test_untouched_stack_is_reported_but_does_not_refuse\nFAILED tests/test_adopt_existing_cli.py::CliTests::test_missing_git_reports_tool_error\nSUBFAILED(flag=\"'--push'\") tests/test_adopt_existing_cli.py::CliTests::test_remote_push_flags_not_available\nSUBFAILED(flag=\"'--remote'\") tests/test_adopt_existing_cli.py::CliTests::test_remote_push_flags_not_available\nSUBFAILED(flag=\"'--create-repo'\") tests/test_adopt_existing_cli.py::CliTests::test_remote_push_flags_not_available\nFAILED tests/test_adopt_existing_cli.py::CliTests::test_status_failed_operation_has_successful_query_envelope\nFAILED tests/test_hook_degraded.py::HookDegradedTests::test_policy_import_failure_allows_and_records\nSUBFAILED(breakage=\"'.getzilla/getzilla/fsx.py'\", tool=\"'Bash'\", tool_input=\"{'command': 'rm -rf build'}\") tests/test_degraded_fail_closed.py::DegradedFailClosedTests::test_helper_library_that_does_not_import\nFAILED tests/test_adopt_existing_cli.py::AdversarialTests::test_approved_path_replacement_is_stale\nFAILED tests/test_hook_degraded.py::HookDegradedTests::test_unimportable_lib_allows_and_records_with_stdlib_only\nFAILED tests/test_degraded_fail_closed.py::DegradedFailClosedTests::test_helper_library_that_does_not_import\nSUBFAILED(breakage=\"'.getzilla/getzilla/policy.py'\", tool=\"'Bash'\", tool_input=\"{'command': 'rm -rf build'}\") tests/test_degraded_fail_closed.py::DegradedFailClosedTests::test_policy_that_does_not_import\nFAILED tests/test_degraded_fail_closed.py::DegradedFailClosedTests::test_policy_that_does_not_import\nFAILED tests/test_util_fingerprint.py::FingerprintTests::test_non_git_and_unborn_repositories_conservatively_bind_scratch\nFAILED tests/test_adopt_existing_cli.py::AdversarialTests::test_secret_absent_from_snapshot_git_logs_and_index\nFAILED tests/test_policy_hardening.py::Review2PosixTests::test_secret_scan_is_bounded_and_fails_closed_on_a_huge_argv\nFAILED tests/test_code_graph_store.py::GraphStoreTests::test_cache_not_in_source_digest\nSUBFAILED(reason=\"'AMBIGUOUS_INPUT_DECLARED_GIT_HAS_NO_GIT'\") tests/test_project_ingestion_routing.py::IngestionRoutingTests::test_ambiguous_input_blocks\nFAILED tests/test_project_ingestion_routing.py::IngestionRoutingTests::test_plain_folder_routes_to_plan\nFAILED tests/test_enforcement_report.py::EnforcementReportTests::test_self_test_proves_the_policy_runs\nFAILED tests/test_seo_landing_side_project.py::SeoLandingShowcaseContractTests::test_local_chrome_runner_exits_cleanly_after_contract_passes\nFAILED tests/test_package_status.py::PackageStatusTests::test_unknown_git_or_base_never_becomes_a_zero_ahead_claim\nFAILED tests/test_path_hints.py::SuggestionTests::test_fast_on_a_large_repository\n42 failed, 2224 passed, 17 skipped, 2 warnings, 3926 subtests passed in 516.94s (0:08:36)\n",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "path": "tests",
+          "message": "backend=pytest-xdist; fresh invocation-owned coverage",
+          "requested_workers": "16",
+          "versions": "{\"coverage\": \"7.15.4\", \"engine\": \"pytest-xdist\", \"pytest\": \"9.1.1\", \"pytest-cov\": \"7.1.0\", \"pytest-xdist\": \"3.8.0\"}",
+          "coverage": "{\"branch_coverage\": true, \"files\": [\".getzilla/getzilla/__init__.py\", \".getzilla/getzilla/_cpu_capacity.py\", \".getzilla/getzilla/_policy_legacy.py\", \".getzilla/getzilla/adoption_state.py\", \".getzilla/getzilla/agent_lifecycle.py\", \".getzilla/getzilla/agent_setup.py\", \".getzilla/getzilla/architecture.py\", \".getzilla/getzilla/architecture_diagrams.py\", \".getzilla/getzilla/architecture_diff.py\", \".getzilla/getzilla/architecture_fitness.py\", \".getzilla/getzilla/baseline.py\", \".getzilla/getzilla/bitrix_checks.py\", \".getzilla/getzilla/branch_lifecycle.py\", \".getzilla/getzilla/change.py\", \".getzilla/getzilla/ci_gate.py\", \".getzilla/getzilla/claim_check.py\", \".getzilla/getzilla/code_graph/__init__.py\", \".getzilla/getzilla/code_graph/architecture_bindings.py\", \".getzilla/getzilla/code_graph/builder.py\", \".getzilla/getzilla/code_graph/cli.py\", \".getzilla/getzilla/code_graph/impact.py\", \".getzilla/getzilla/code_graph/incremental.py\", \".getzilla/getzilla/code_graph/models.py\", \".getzilla/getzilla/code_graph/python_calls.py\", \".getzilla/getzilla/code_graph/python_parser.py\", \".getzilla/getzilla/code_graph/python_resolver.py\", \".getzilla/getzilla/code_graph/store.py\", \".getzilla/getzilla/code_graph/task_bindings.py\", \".getzilla/getzilla/cost_guard.py\", \".getzilla/getzilla/demo.py\", \".getzilla/getzilla/demo_http.py\", \".getzilla/getzilla/deploy.py\", \".getzilla/getzilla/diff_risk.py\", \".getzilla/getzilla/doctor.py\", \".getzilla/getzilla/enforcement.py\", \".getzilla/getzilla/eu_ai_act.py\", \".getzilla/getzilla/fsx.py\", \".getzilla/getzilla/governance.py\", \".getzilla/getzilla/harnesses.py\", \".getzilla/getzilla/history.py\", \".getzilla/getzilla/hook_health.py\", \".getzilla/getzilla/human_gates.py\", \".getzilla/getzilla/interpreter.py\", \".getzilla/getzilla/known_vulns.py\", \".getzilla/getzilla/manifest.py\", \".getzilla/getzilla/on_demand.py\", \".getzilla/getzilla/package_status.py\", \".getzilla/getzilla/parallel.py\", \".getzilla/getzilla/path_hints.py\", \".getzilla/getzilla/policy.py\", \".getzilla/getzilla/project_adoption.py\", \".getzilla/getzilla/project_ingestion.py\", \".getzilla/getzilla/protected_write.py\", \".getzilla/getzilla/python_test_runner.py\", \".getzilla/getzilla/quality_gates.py\", \".getzilla/getzilla/queue_provenance.py\", \".getzilla/getzilla/receipts.py\", \".getzilla/getzilla/release_state.py\", \".getzilla/getzilla/repo.py\", \".getzilla/getzilla/review_source.py\", \".getzilla/getzilla/risk_terms.py\", \".getzilla/getzilla/route_metrics.py\", \".getzilla/getzilla/router.py\", \".getzilla/getzilla/shell_targets.py\", \".getzilla/getzilla/source_admission.py\", \".getzilla/getzilla/source_baseline.py\", \".getzilla/getzilla/source_git.py\", \".getzilla/getzilla/source_inventory.py\", \".getzilla/getzilla/source_managed_layer.py\", \".getzilla/getzilla/source_models.py\", \".getzilla/getzilla/source_paths.py\", \".getzilla/getzilla/source_provenance.py\", \".getzilla/getzilla/source_secrets.py\", \".getzilla/getzilla/source_shadow.py\", \".getzilla/getzilla/source_snapshot.py\", \".getzilla/getzilla/source_verification.py\", \".getzilla/getzilla/spec.py\", \".getzilla/getzilla/stack_runners.py\", \".getzilla/getzilla/stack_toolchains.py\", \".getzilla/getzilla/stacks.py\", \".getzilla/getzilla/startup_cpu.py\", \".getzilla/getzilla/state.py\", \".getzilla/getzilla/toolchain.py\", \".getzilla/getzilla/trust_ci_setup.py\", \".getzilla/getzilla/updater.py\", \".getzilla/getzilla/util.py\", \".getzilla/getzilla/verification.py\", \".getzilla/getzilla/verification_dispositions.py\", \".getzilla/getzilla/verification_scope.py\", \".getzilla/getzilla/workflow_artifacts.py\", \"scripts/adopt_existing.py\", \"scripts/branch_lifecycle.py\", \"scripts/generate_manifest.py\", \"scripts/getzilla_agent.py\", \"scripts/getzilla_approve.py\", \"scripts/getzilla_architecture.py\", \"scripts/getzilla_artifacts.py\", \"scripts/getzilla_audit_bundle.py\", \"scripts/getzilla_baseline.py\", \"scripts/getzilla_change.py\", \"scripts/getzilla_ci.py\", \"scripts/getzilla_cli.py\", \"scripts/getzilla_components.py\", \"scripts/getzilla_demo.py\", \"scripts/getzilla_deploy.py\", \"scripts/getzilla_doctor.py\", \"scripts/getzilla_gate.py\", \"scripts/getzilla_governance.py\", \"scripts/getzilla_graph.py\", \"scripts/getzilla_harness.py\", \"scripts/getzilla_history.py\", \"scripts/getzilla_landing_publish.py\", \"scripts/getzilla_m8.py\", \"scripts/getzilla_par.py\", \"scripts/getzilla_protected_write.py\", \"scripts/getzilla_report.py\", \"scripts/getzilla_review.py\", \"scripts/getzilla_risk_terms.py\", \"scripts/getzilla_route.py\", \"scripts/getzilla_setup_agent.py\", \"scripts/getzilla_spec.py\", \"scripts/getzilla_startup_cpu.py\", \"scripts/getzilla_status.py\", \"scripts/getzilla_trust_ci.py\", \"scripts/getzilla_update.py\", \"scripts/getzilla_verify.py\", \"scripts/getzilla_vulns.py\", \"scripts/install_into.py\", \"scripts/package_stack.py\", \"scripts/verify_manifest.py\"], \"totals\": {\"covered_branches\": 9908, \"covered_lines\": 25755, \"excluded_lines\": 19, \"missing_branches\": 2958, \"missing_lines\": 5221, \"num_branches\": 12866, \"num_partial_branches\": 1892, \"num_statements\": 30976, \"percent_branches_covered\": 77.00917145966112, \"percent_branches_covered_display\": \"77\", \"percent_covered\": 81.34437297568542, \"percent_covered_display\": \"81\", \"percent_statements_covered\": 83.14501549586777, \"percent_statements_covered_display\": \"83\"}}"
+        }
+      ]
+    },
+    {
+      "name": "coverage",
+      "status": "fail",
+      "summary": "pytest-xdist workers=16 exit=1 seconds=3.212",
+      "command": [
+        "/home/pall/projects/liqvera/.getzilla/runtime/completion/getzilla-gate-venv/bin/python",
+        "-m",
+        "coverage",
+        "report",
+        "--rcfile=/home/pall/projects/liqvera/.getzilla/runtime/getzilla-dispositions/.coveragerc"
+      ],
+      "stdout": "dels.py                        277     18     42      4    92%   48, 52, 239, 365-374, 378-379, 382->387, 399-401\n.getzilla/getzilla/source_paths.py                         120     15     60      9    87%   35, 37, 39, 43, 46-47, 54, 104, 107, 111-112, 127, 149-151\n.getzilla/getzilla/source_provenance.py                     36      8     12      6    71%   22, 50, 52, 58-59, 61, 63, 67\n.getzilla/getzilla/source_secrets.py                        95      6     28      2    93%   107-108, 114-115, 117, 120\n.getzilla/getzilla/source_shadow.py                         50      5     16      4    86%   26, 57, 65, 67, 69\n.getzilla/getzilla/source_snapshot.py                      125     19     36      4    82%   53, 61->exit, 74-75, 77, 102-103, 116, 128, 155-156, 163-171\n.getzilla/getzilla/source_verification.py                   64     15     26     10    72%   27, 40-41, 43, 45, 47, 51, 59, 62, 66, 68, 71-72, 77, 80\n.getzilla/getzilla/spec.py                                 650     90    378     68    84%   69, 80, 87, 89, 97->99, 102, 123, 126, 144, 147, 149, 153, 159, 170->219, 173, 179, 182, 186-191, 197, 200-205, 214, 224, 232, 234, 236, 240, 256, 277-278, 286-287, 296, 301, 303, 317, 321, 324, 350, 369, 376, 378, 390, 392, 403, 471, 480-481, 483, 513-514, 516, 537, 559-561, 562->557, 564->557, 630-631, 633, 636-637, 664, 673, 679, 682, 684, 704->702, 710-711, 731, 734, 740-741, 755, 757, 761, 773-781, 790, 793->795, 795->797, 804, 826-828, 832, 847\n.getzilla/getzilla/stack_runners.py                        248    104     92     15    50%   32-33, 41-42, 46-47, 53-57, 69-72, 74, 83, 99, 118-129, 146-150, 157-160, 164, 167-188, 195-210, 246-250, 267, 289->298, 309, 313-324, 337-342, 353-360, 364, 367-371\n.getzilla/getzilla/stack_toolchains.py                     346     58    124     20    79%   85, 101-105, 109, 125-135, 157-159, 211, 219->217, 221, 223-231, 234->233, 235->234, 237-238, 256, 268-270, 304, 307-308, 313->301, 320, 323, 331-336, 337->317, 378, 385-386, 407, 410-413, 456\n.getzilla/getzilla/stacks.py                               110     22     22      4    76%   90, 102-103, 106-113, 123-124, 145-152, 161-164\n.getzilla/getzilla/startup_cpu.py                          160     38     56      9    75%   30-35, 44, 79, 85, 91-109, 118->125, 120->125, 136, 204-207, 214-217, 220, 231\n.getzilla/getzilla/state.py                                352     81    132     26    74%   46-69, 74, 76, 81-85, 91->exit, 95-102, 127-141, 174->178, 176->178, 236, 240->242, 374, 376, 378, 380, 384, 387, 393, 401, 406, 410, 436, 455, 458, 465, 481-482, 484, 487, 489, 515, 533, 537-544, 548-552\n.getzilla/getzilla/toolchain.py                            120     17     38      8    82%   39, 52-56, 165->164, 182, 188, 190-191, 193-194, 199-200, 204-206\n.getzilla/getzilla/trust_ci_setup.py                       679     73    250     37    88%   88->exit, 94, 135-136, 143, 161-162, 263, 306, 318, 321-322, 399-400, 437-438, 442->440, 444, 455, 462, 486, 491->493, 500-501, 504, 520, 523-524, 527, 532, 536-537, 551, 594, 600-601, 602->592, 664, 671-672, 692-693, 718-719, 730, 737-738, 740, 743->742, 745, 771-773, 782, 829, 844-845, 848-849, 851, 861-862, 864-865, 868, 873, 879-880, 884, 888, 895, 899-905\n.getzilla/getzilla/updater.py                              370     65    124     18    78%   161-163, 187-193, 209->215, 213, 232-235, 271->273, 319-320, 325->327, 332-348, 352-363, 371-385, 393->395, 396, 398->401, 401->406, 406->413, 494-495, 504, 508-510, 512, 514->517, 525\n.getzilla/getzilla/util.py                                 286     35    118     22    85%   27, 31-44, 99-100, 120->126, 122->124, 124->126, 135-136, 184-185, 194, 252-253, 255, 258->260, 266, 269, 280, 311, 323, 333, 338, 342, 346, 394, 425-426, 431-434, 463\n.getzilla/getzilla/verification.py                        1520    178    616    101    86%   155->exit, 158-159, 195, 237, 367-388, 427, 440-441, 447, 467-472, 557, 565, 586, 602, 627->666, 639, 735-741, 759-760, 768-773, 824, 838, 845-846, 848, 864, 871-877, 881-887, 912-918, 931, 977-978, 1002, 1039-1040, 1045-1046, 1154-1155, 1160-1161, 1168->1167, 1171-1173, 1200, 1207, 1218, 1222, 1224-1225, 1264, 1301-1304, 1325, 1327-1330, 1403, 1405, 1412, 1417-1419, 1445, 1447, 1448->1430, 1487, 1490, 1494, 1499, 1506->1500, 1509, 1516, 1519, 1522, 1524, 1538, 1540, 1544, 1550, 1552, 1598, 1610, 1635, 1696, 1699, 1711-1716, 1722, 1725, 1731-1732, 1741->1743, 1744->1746, 1746->1748, 1763, 1832, 1835-1837, 1906-1907, 1914, 1918, 1938, 1998->2008, 2009-2010, 2087, 2090->2142, 2099, 2141, 2156, 2158, 2162, 2164, 2169, 2172, 2176, 2205, 2223->2226, 2270->2272, 2302-2303, 2335-2338, 2359-2360, 2376-2378, 2440-2442, 2455-2464, 2503-2504, 2509, 2538, 2540, 2542, 2560-2562, 2624, 2651-2652, 2657-2658, 2710, 2712-2714, 2718->2720, 2719, 2756-2758\n.getzilla/getzilla/verification_dispositions.py            308     24    140     19    90%   56, 103, 113, 117, 139, 151-152, 154, 179, 228, 234, 242, 266, 280-281, 283, 293, 309, 322-323, 327, 330, 385, 389\n.getzilla/getzilla/verification_scope.py                   153      4     76      3    97%   164-165, 169, 202\n.getzilla/getzilla/workflow_artifacts.py                  1134    213    498    110    78%   203, 207, 211, 215, 217, 227-228, 244-245, 249, 255, 309, 327, 330, 337-340, 346-347, 357-370, 375-378, 384, 389-424, 429, 456, 490, 504, 519, 521, 527-528, 557, 560, 566, 568, 590, 622, 664, 680, 690, 698, 708, 814, 816->822, 818, 820->816, 824-825, 829, 834, 876, 879, 884-893, 922, 927, 942, 944, 976, 997->995, 1014->1013, 1043, 1057, 1062, 1069, 1072, 1075, 1095, 1106, 1130, 1132, 1134, 1137, 1139, 1155, 1159, 1161, 1164, 1169, 1174, 1181, 1185, 1198, 1223, 1242, 1245-1246, 1254, 1259, 1268, 1281, 1297, 1322, 1328, 1340, 1349, 1360, 1366, 1408->1381, 1467, 1508, 1509->1511, 1512, 1526, 1561, 1568-1569, 1572-1573, 1580-1586, 1594-1595, 1598-1599, 1604-1609, 1634, 1653, 1657-1660, 1663, 1669, 1671, 1682, 1686, 1694, 1719-1721, 1726, 1729->1735, 1739, 1748, 1751-1754, 1766, 1776, 1804, 1810-1811, 1820-1821, 1840-1841, 1857-1858, 1861-1862, 1873, 1894\nscripts/adopt_existing.py                                   89     89     28      0     0%   17-135\nscripts/branch_lifecycle.py                                 53     53     12      0     0%   14-81\nscripts/generate_manifest.py                                11     11      2      0     0%   1-16\nscripts/getzilla_agent.py                                   85     85     40      0     0%   2-104\nscripts/getzilla_approve.py                                 33     33      6      0     0%   1-88\nscripts/getzilla_architecture.py                            90     35     26      7    59%   57, 61-79, 83-97, 106-123, 127-130, 132-145, 155->157, 159-169, 173\nscripts/getzilla_artifacts.py                               76      6     20      4    90%   55, 67, 84-98, 158\nscripts/getzilla_audit_bundle.py                            63      7     14      4    86%   42, 49-50, 51->46, 58->69, 95-97, 111\nscripts/getzilla_baseline.py                                35     35     12      0     0%   10-51\nscripts/getzilla_change.py                                  27     27      4      0     0%   1-33\nscripts/getzilla_ci.py                                      83      8     28      4    89%   51->54, 91-93, 95-96, 106-107, 134\nscripts/getzilla_cli.py                                     58     28     14      2    50%   57-62, 77-82, 98-100, 105-115, 119-122\nscripts/getzilla_components.py                              36     36      8      0     0%   9-51\nscripts/getzilla_demo.py                                    45     45      6      0     0%   2-57\nscripts/getzilla_deploy.py                                  21     21      6      0     0%   1-27\nscripts/getzilla_doctor.py                                  47     47     18      0     0%   1-63\nscripts/getzilla_gate.py                                    29     29      2      0     0%   1-54\nscripts/getzilla_governance.py                             113     39     32     10    62%   51-59, 63, 80, 84-88, 91, 103-106, 111, 127-139, 141-150, 158-161, 163-164, 168-170, 174\nscripts/getzilla_graph.py                                    8      8      2      0     0%   3-14\nscripts/getzilla_harness.py                                 21     21      6      0     0%   1-32\nscripts/getzilla_history.py                                 20     20      2      0     0%   2-28\nscripts/getzilla_landing_publish.py                         62     62     28      0     0%   3-93\nscripts/getzilla_m8.py                                      31     31      6      0     0%   3-41\nscripts/getzilla_par.py                                     32     32      6      0     0%   12-51\nscripts/getzilla_protected_write.py                         23     23      2      0     0%   2-37\nscripts/getzilla_report.py                                  47     47     14      0     0%   9-68\nscripts/getzilla_review.py                                  38     38     12      0     0%   1-43\nscripts/getzilla_risk_terms.py                              45      7     12      4    81%   38-40, 54, 56-57, 61\nscripts/getzilla_route.py                                   34     34      8      0     0%   1-40\nscripts/getzilla_setup_agent.py                             44     44     20      0     0%   1-73\nscripts/getzilla_spec.py                                    85      8     24      4    89%   35, 47-48, 102->104, 111, 116-118, 122\nscripts/getzilla_startup_cpu.py                             46     46     14      0     0%   1-57\nscripts/getzilla_status.py                                  24     24      2      0     0%   1-34\nscripts/getzilla_trust_ci.py                                55     55     12      0     0%   8-85\nscripts/getzilla_update.py                                   7      7      0      0     0%   1-11\nscripts/getzilla_verify.py                                  70     17     18      5    70%   43, 45, 47, 52, 55-59, 66-71, 102-103\nscripts/getzilla_vulns.py                                   53     53     20      0     0%   1-64\nscripts/install_into.py                                   1082    205    390     78    79%   222, 225, 235, 249, 258-268, 279, 315, 322, 342, 348-351, 356, 362, 368, 401-404, 412, 415, 420-421, 451, 463, 466-467, 480-482, 504-505, 510-513, 538-541, 547, 554-556, 570, 574-575, 580, 586-587, 609, 622, 624, 629, 645, 658, 682, 686, 693, 704, 710, 719, 722->728, 730, 736, 760-761, 813, 837-838, 862, 881-882, 885, 889, 897, 930, 946, 949, 953-954, 959-960, 989-990, 1008, 1011, 1015, 1025-1026, 1037, 1040-1043, 1069-1070, 1072, 1106, 1122, 1132-1133, 1227, 1231, 1239-1240, 1256-1260, 1274-1276, 1284, 1294, 1298, 1307, 1327, 1332-1334, 1345-1355, 1367-1368, 1378-1379, 1386, 1395, 1404, 1408-1413, 1417, 1461-1462, 1466, 1474, 1481, 1489, 1511, 1547, 1560, 1563, 1565, 1580, 1610, 1634, 1638, 1647->1646, 1651-1652, 1674->1676, 1713, 1785-1868, 1872\nscripts/package_stack.py                                   692    145    178     51    77%   36-37, 43-44, 50-51, 107-108, 111, 113, 124-125, 127, 129, 132->exit, 143-146, 158, 162-163, 168-169, 197, 218, 225, 226->177, 228-232, 234->236, 244-245, 249-251, 253-254, 261-263, 273-275, 282-283, 301-302, 304, 330-333, 339, 341-344, 346, 354-355, 368-369, 398-399, 414-415, 424-425, 447, 450-453, 470, 483-484, 500-501, 510-511, 518-519, 565-566, 577, 585, 588-589, 591, 623, 625->627, 628, 643, 645, 657, 665-666, 670, 688-689, 693, 701-702, 704, 710, 714, 716-717, 719->724, 722-723, 725->727, 728, 741, 770, 772, 792-793, 797, 811, 860, 867, 879-880, 891-894, 898-900, 907-908, 910, 922-923, 925, 935, 966-967, 969, 990-991, 1001->1003, 1103, 1106, 1126, 1140\nscripts/verify_manifest.py                                  12     12      4      0     0%   1-16\n----------------------------------------------------------------------------------------------------\nTOTAL                                                    30976   5221  12866   1892    81%\n\n1 empty file skipped.\n",
+      "stderr": "\ncoverage does not qualify an unsuccessful or incomplete test run",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "path": "tests",
+          "message": "backend=pytest-xdist; fresh invocation-owned coverage",
+          "requested_workers": "16",
+          "versions": "{\"coverage\": \"7.15.4\", \"engine\": \"pytest-xdist\", \"pytest\": \"9.1.1\", \"pytest-cov\": \"7.1.0\", \"pytest-xdist\": \"3.8.0\"}",
+          "coverage": "{\"branch_coverage\": true, \"files\": [\".getzilla/getzilla/__init__.py\", \".getzilla/getzilla/_cpu_capacity.py\", \".getzilla/getzilla/_policy_legacy.py\", \".getzilla/getzilla/adoption_state.py\", \".getzilla/getzilla/agent_lifecycle.py\", \".getzilla/getzilla/agent_setup.py\", \".getzilla/getzilla/architecture.py\", \".getzilla/getzilla/architecture_diagrams.py\", \".getzilla/getzilla/architecture_diff.py\", \".getzilla/getzilla/architecture_fitness.py\", \".getzilla/getzilla/baseline.py\", \".getzilla/getzilla/bitrix_checks.py\", \".getzilla/getzilla/branch_lifecycle.py\", \".getzilla/getzilla/change.py\", \".getzilla/getzilla/ci_gate.py\", \".getzilla/getzilla/claim_check.py\", \".getzilla/getzilla/code_graph/__init__.py\", \".getzilla/getzilla/code_graph/architecture_bindings.py\", \".getzilla/getzilla/code_graph/builder.py\", \".getzilla/getzilla/code_graph/cli.py\", \".getzilla/getzilla/code_graph/impact.py\", \".getzilla/getzilla/code_graph/incremental.py\", \".getzilla/getzilla/code_graph/models.py\", \".getzilla/getzilla/code_graph/python_calls.py\", \".getzilla/getzilla/code_graph/python_parser.py\", \".getzilla/getzilla/code_graph/python_resolver.py\", \".getzilla/getzilla/code_graph/store.py\", \".getzilla/getzilla/code_graph/task_bindings.py\", \".getzilla/getzilla/cost_guard.py\", \".getzilla/getzilla/demo.py\", \".getzilla/getzilla/demo_http.py\", \".getzilla/getzilla/deploy.py\", \".getzilla/getzilla/diff_risk.py\", \".getzilla/getzilla/doctor.py\", \".getzilla/getzilla/enforcement.py\", \".getzilla/getzilla/eu_ai_act.py\", \".getzilla/getzilla/fsx.py\", \".getzilla/getzilla/governance.py\", \".getzilla/getzilla/harnesses.py\", \".getzilla/getzilla/history.py\", \".getzilla/getzilla/hook_health.py\", \".getzilla/getzilla/human_gates.py\", \".getzilla/getzilla/interpreter.py\", \".getzilla/getzilla/known_vulns.py\", \".getzilla/getzilla/manifest.py\", \".getzilla/getzilla/on_demand.py\", \".getzilla/getzilla/package_status.py\", \".getzilla/getzilla/parallel.py\", \".getzilla/getzilla/path_hints.py\", \".getzilla/getzilla/policy.py\", \".getzilla/getzilla/project_adoption.py\", \".getzilla/getzilla/project_ingestion.py\", \".getzilla/getzilla/protected_write.py\", \".getzilla/getzilla/python_test_runner.py\", \".getzilla/getzilla/quality_gates.py\", \".getzilla/getzilla/queue_provenance.py\", \".getzilla/getzilla/receipts.py\", \".getzilla/getzilla/release_state.py\", \".getzilla/getzilla/repo.py\", \".getzilla/getzilla/review_source.py\", \".getzilla/getzilla/risk_terms.py\", \".getzilla/getzilla/route_metrics.py\", \".getzilla/getzilla/router.py\", \".getzilla/getzilla/shell_targets.py\", \".getzilla/getzilla/source_admission.py\", \".getzilla/getzilla/source_baseline.py\", \".getzilla/getzilla/source_git.py\", \".getzilla/getzilla/source_inventory.py\", \".getzilla/getzilla/source_managed_layer.py\", \".getzilla/getzilla/source_models.py\", \".getzilla/getzilla/source_paths.py\", \".getzilla/getzilla/source_provenance.py\", \".getzilla/getzilla/source_secrets.py\", \".getzilla/getzilla/source_shadow.py\", \".getzilla/getzilla/source_snapshot.py\", \".getzilla/getzilla/source_verification.py\", \".getzilla/getzilla/spec.py\", \".getzilla/getzilla/stack_runners.py\", \".getzilla/getzilla/stack_toolchains.py\", \".getzilla/getzilla/stacks.py\", \".getzilla/getzilla/startup_cpu.py\", \".getzilla/getzilla/state.py\", \".getzilla/getzilla/toolchain.py\", \".getzilla/getzilla/trust_ci_setup.py\", \".getzilla/getzilla/updater.py\", \".getzilla/getzilla/util.py\", \".getzilla/getzilla/verification.py\", \".getzilla/getzilla/verification_dispositions.py\", \".getzilla/getzilla/verification_scope.py\", \".getzilla/getzilla/workflow_artifacts.py\", \"scripts/adopt_existing.py\", \"scripts/branch_lifecycle.py\", \"scripts/generate_manifest.py\", \"scripts/getzilla_agent.py\", \"scripts/getzilla_approve.py\", \"scripts/getzilla_architecture.py\", \"scripts/getzilla_artifacts.py\", \"scripts/getzilla_audit_bundle.py\", \"scripts/getzilla_baseline.py\", \"scripts/getzilla_change.py\", \"scripts/getzilla_ci.py\", \"scripts/getzilla_cli.py\", \"scripts/getzilla_components.py\", \"scripts/getzilla_demo.py\", \"scripts/getzilla_deploy.py\", \"scripts/getzilla_doctor.py\", \"scripts/getzilla_gate.py\", \"scripts/getzilla_governance.py\", \"scripts/getzilla_graph.py\", \"scripts/getzilla_harness.py\", \"scripts/getzilla_history.py\", \"scripts/getzilla_landing_publish.py\", \"scripts/getzilla_m8.py\", \"scripts/getzilla_par.py\", \"scripts/getzilla_protected_write.py\", \"scripts/getzilla_report.py\", \"scripts/getzilla_review.py\", \"scripts/getzilla_risk_terms.py\", \"scripts/getzilla_route.py\", \"scripts/getzilla_setup_agent.py\", \"scripts/getzilla_spec.py\", \"scripts/getzilla_startup_cpu.py\", \"scripts/getzilla_status.py\", \"scripts/getzilla_trust_ci.py\", \"scripts/getzilla_update.py\", \"scripts/getzilla_verify.py\", \"scripts/getzilla_vulns.py\", \"scripts/install_into.py\", \"scripts/package_stack.py\", \"scripts/verify_manifest.py\"], \"totals\": {\"covered_branches\": 9908, \"covered_lines\": 25755, \"excluded_lines\": 19, \"missing_branches\": 2958, \"missing_lines\": 5221, \"num_branches\": 12866, \"num_partial_branches\": 1892, \"num_statements\": 30976, \"percent_branches_covered\": 77.00917145966112, \"percent_branches_covered_display\": \"77\", \"percent_covered\": 81.34437297568542, \"percent_covered_display\": \"81\", \"percent_statements_covered\": 83.14501549586777, \"percent_statements_covered_display\": \"83\"}}"
+        }
+      ]
+    },
+    {
+      "name": "factory-unit",
+      "status": "pass",
+      "summary": "exit=0",
+      "command": [
+        "/home/pall/projects/liqvera/.getzilla/runtime/completion/getzilla-gate-venv/bin/python",
+        "-m",
+        "unittest",
+        "factory.tests.test_contracts",
+        "factory.tests.test_state",
+        "factory.tests.test_migrations",
+        "factory.tests.test_service"
+      ],
+      "stdout": "",
+      "stderr": "...............................................................\n----------------------------------------------------------------------\nRan 63 tests in 0.153s\n\nOK\n",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "factory-postgres-exit",
+      "status": "fail",
+      "summary": "exit=1",
+      "command": [
+        "/home/pall/projects/liqvera/.getzilla/runtime/completion/getzilla-gate-venv/bin/python",
+        "factory/tests/run_disposable_exit.py"
+      ],
+      "stdout": "PASS: disposable PostgreSQL identity preflight\nadaptive-factory-exit-be24f476f8fb\nadaptive-factory-exit-be24f476f8fb\n",
+      "stderr": "tests.test_prediction_contracts.PredictionContractTests.test_prediction_digest_is_deterministic_and_every_binding_changes_it) ... ok\ntest_public_schemas_are_closed_bounded_and_match_parser_examples (factory.tests.test_prediction_contracts.PredictionContractTests.test_public_schemas_are_closed_bounded_and_match_parser_examples) ... ok\ntest_replay_index_accepts_same_canonical_body_and_rejects_identity_reuse (factory.tests.test_prediction_contracts.PredictionContractTests.test_replay_index_accepts_same_canonical_body_and_rejects_identity_reuse) ... ok\ntest_replay_index_is_bounded_fail_closed_and_detaches_duck_input (factory.tests.test_prediction_contracts.PredictionContractTests.test_replay_index_is_bounded_fail_closed_and_detaches_duck_input) ... ok\ntest_schema_and_parser_reject_missing_extra_types_bounds_and_nested_shapes (factory.tests.test_prediction_contracts.PredictionContractTests.test_schema_and_parser_reject_missing_extra_types_bounds_and_nested_shapes) ... ok\ntest_unordered_set_like_inputs_are_canonicalized_without_mutating_callers (factory.tests.test_prediction_contracts.PredictionContractTests.test_unordered_set_like_inputs_are_canonicalized_without_mutating_callers) ... ok\ntest_complete_stream_returns_only_canonical_events (factory.tests.test_protocol.ProtocolTests.test_complete_stream_returns_only_canonical_events) ... ok\ntest_duplicate_keys_nonfinite_and_invalid_utf8_fail (factory.tests.test_protocol.ProtocolTests.test_duplicate_keys_nonfinite_and_invalid_utf8_fail) ... ok\ntest_event_type_is_a_known_scalar_before_membership_or_payload_lookup (factory.tests.test_protocol.ProtocolTests.test_event_type_is_a_known_scalar_before_membership_or_payload_lookup) ... ok\ntest_every_payload_field_is_closed_and_scalar_typed (factory.tests.test_protocol.ProtocolTests.test_every_payload_field_is_closed_and_scalar_typed) ... ok\ntest_finish_requires_exactly_one_terminal_and_no_partial_line (factory.tests.test_protocol.ProtocolTests.test_finish_requires_exactly_one_terminal_and_no_partial_line) ... ok\ntest_forbidden_note_categories_cannot_become_durable_metadata (factory.tests.test_protocol.ProtocolTests.test_forbidden_note_categories_cannot_become_durable_metadata) ... ok\ntest_identity_sequence_terminal_and_capability_violations_fail (factory.tests.test_protocol.ProtocolTests.test_identity_sequence_terminal_and_capability_violations_fail) ... ok\ntest_line_stream_event_depth_and_node_limits_fail_before_retention (factory.tests.test_protocol.ProtocolTests.test_line_stream_event_depth_and_node_limits_fail_before_retention) ... ok\ntest_reasoning_or_raw_output_keys_never_cross_boundary (factory.tests.test_protocol.ProtocolTests.test_reasoning_or_raw_output_keys_never_cross_boundary) ... ok\ntest_broker_timeout_is_bounded_and_leaves_durable_retry (factory.tests.test_recovery.RecoveryTests.test_broker_timeout_is_bounded_and_leaves_durable_retry) ... ok\ntest_cleanup_failure_is_durable_and_permits_discovery_wrap (factory.tests.test_recovery.RecoveryTests.test_cleanup_failure_is_durable_and_permits_discovery_wrap) ... ok\ntest_cleanup_outcome_write_failure_is_reported_as_terminalize_failure (factory.tests.test_recovery.RecoveryTests.test_cleanup_outcome_write_failure_is_reported_as_terminalize_failure) ... ok\ntest_cleanup_retry_older_than_discovery_cursor_never_regresses_cursor (factory.tests.test_recovery.RecoveryTests.test_cleanup_retry_older_than_discovery_cursor_never_regresses_cursor) ... ok\ntest_crash_after_release_retries_absent_with_a_new_claim (factory.tests.test_recovery.RecoveryTests.test_crash_after_release_retries_absent_with_a_new_claim) ... ok\ntest_each_bounded_page_reserves_fresh_and_retry_lanes (factory.tests.test_recovery.RecoveryTests.test_each_bounded_page_reserves_fresh_and_retry_lanes) ... ok\ntest_expired_claim_allows_idempotent_at_least_once_release (factory.tests.test_recovery.RecoveryTests.test_expired_claim_allows_idempotent_at_least_once_release) ... ok\ntest_fresh_contention_stops_that_lane_but_not_retry_cleanup (factory.tests.test_recovery.RecoveryTests.test_fresh_contention_stops_that_lane_but_not_retry_cleanup) ... ok\ntest_limit_and_cursor_contract_are_closed (factory.tests.test_recovery.RecoveryTests.test_limit_and_cursor_contract_are_closed) ... ok\ntest_live_cleanup_claim_allows_only_one_broker_call_before_expiry (factory.tests.test_recovery.RecoveryTests.test_live_cleanup_claim_allows_only_one_broker_call_before_expiry) ... ok\ntest_monotonic_budget_returns_processed_prefix_and_resumes (factory.tests.test_recovery.RecoveryTests.test_monotonic_budget_returns_processed_prefix_and_resumes) ... ok\ntest_pending_cancel_job_cannot_advance_past_unseen_fresh_manifest (factory.tests.test_recovery.RecoveryTests.test_pending_cancel_job_cannot_advance_past_unseen_fresh_manifest) ... ok\ntest_raw_pages_advance_across_healthy_rows_wrap_and_revisit_expiry (factory.tests.test_recovery.RecoveryTests.test_raw_pages_advance_across_healthy_rows_wrap_and_revisit_expiry) ... ok\ntest_release_outcome_is_closed_and_provider_neutral (factory.tests.test_recovery.RecoveryTests.test_release_outcome_is_closed_and_provider_neutral) ... ok\ntest_terminalization_failure_retries_after_idempotent_cleanup (factory.tests.test_recovery.RecoveryTests.test_terminalization_failure_retries_after_idempotent_cleanup) ... ok\ntest_identity_mismatch_is_rejected_before_unavailable_capability (factory.tests.test_result_admission_api.ResultAdmissionApiTests.test_identity_mismatch_is_rejected_before_unavailable_capability) ... ok\ntest_outer_duplicate_keys_and_wrong_media_type_are_rejected (factory.tests.test_result_admission_api.ResultAdmissionApiTests.test_outer_duplicate_keys_and_wrong_media_type_are_rejected) ... ok\ntest_real_service_returns_durable_admission_without_outbox (factory.tests.test_result_admission_api.ResultAdmissionApiTests.test_real_service_returns_durable_admission_without_outbox) ... ok\ntest_each_grant_binding_rejects_before_unavailable_and_store (factory.tests.test_result_admission_api.ResultAdmissionServiceTests.test_each_grant_binding_rejects_before_unavailable_and_store) ... ok\ntest_result_read_rejects_cross_repository_actor_before_store (factory.tests.test_result_admission_api.ResultAdmissionServiceTests.test_result_read_rejects_cross_repository_actor_before_store) ... ok\ntest_valid_admission_and_repository_bound_read_delegate_to_store (factory.tests.test_result_admission_api.ResultAdmissionServiceTests.test_valid_admission_and_repository_bound_read_delegate_to_store) ... ok\ntest_broker_can_bind_v2_identity_without_qualifying_any_channel (factory.tests.test_result_admission_api.ResultEnvelopeV2Tests.test_broker_can_bind_v2_identity_without_qualifying_any_channel) ... ok\ntest_v2_is_closed_immutable_digest_bound_and_rejects_bool_fence (factory.tests.test_result_admission_api.ResultEnvelopeV2Tests.test_v2_is_closed_immutable_digest_bound_and_rejects_bool_fence) ... ok\ntest_v2_schema_and_openapi_embed_the_same_canonical_contract (factory.tests.test_result_admission_api.ResultEnvelopeV2Tests.test_v2_schema_and_openapi_embed_the_same_canonical_contract) ... ok\ntest_byte_and_chunk_boundaries_do_not_truncate_or_consume_tail (factory.tests.test_result_broker.ResultBrokerTests.test_byte_and_chunk_boundaries_do_not_truncate_or_consume_tail) ... ok\ntest_closed_contract_outcomes_and_semantic_parity (factory.tests.test_result_broker.ResultBrokerTests.test_closed_contract_outcomes_and_semantic_parity) ... ok\ntest_digest_is_deterministic_and_envelope_is_immutable (factory.tests.test_result_broker.ResultBrokerTests.test_digest_is_deterministic_and_envelope_is_immutable) ... ok\ntest_duplicate_json_keys_are_rejected_before_last_value_wins (factory.tests.test_result_broker.ResultBrokerTests.test_duplicate_json_keys_are_rejected_before_last_value_wins) ... ok\ntest_empty_chunks_have_a_finite_iteration_ceiling (factory.tests.test_result_broker.ResultBrokerTests.test_empty_chunks_have_a_finite_iteration_ceiling) ... ok\ntest_limits_malformed_input_and_recursive_redaction_fail_closed (factory.tests.test_result_broker.ResultBrokerTests.test_limits_malformed_input_and_recursive_redaction_fail_closed) ... ok\ntest_nonfinite_json_and_redacted_key_collisions_fail_closed (factory.tests.test_result_broker.ResultBrokerTests.test_nonfinite_json_and_redacted_key_collisions_fail_closed) ... ok\ntest_oversized_chunk_is_rejected_before_buffer_copy (factory.tests.test_result_broker.ResultBrokerTests.test_oversized_chunk_is_rejected_before_buffer_copy) ... ok\ntest_policy_limits_and_metadata_reject_invalid_configuration (factory.tests.test_result_broker.ResultBrokerTests.test_policy_limits_and_metadata_reject_invalid_configuration) ... ok\ntest_runtime_channels_are_unavailable_and_stream_is_not_consumed (factory.tests.test_result_broker.ResultBrokerTests.test_runtime_channels_are_unavailable_and_stream_is_not_consumed) ... ok\ntest_stream_and_metadata_failures_are_bounded (factory.tests.test_result_broker.ResultBrokerTests.test_stream_and_metadata_failures_are_bounded) ... ok\ntest_structured_sensitive_keys_do_not_export_values (factory.tests.test_result_broker.ResultBrokerTests.test_structured_sensitive_keys_do_not_export_values) ... ok\ntest_typed_envelope_failures_and_unknown_channel_parity (factory.tests.test_result_broker.ResultBrokerTests.test_typed_envelope_failures_and_unknown_channel_parity) ... ok\ntest_unknown_sanitization_and_unrecognized_inspection_reject_without_consuming (factory.tests.test_result_broker.ResultBrokerTests.test_unknown_sanitization_and_unrecognized_inspection_reject_without_consuming) ... ok\ntest_constructor_rejects_unbounded_controls (factory.tests.test_result_dispatch.ResultDispatcherTests.test_constructor_rejects_unbounded_controls) ... ok\ntest_dispatcher_claims_bounded_batch_and_records_exact_observation (factory.tests.test_result_dispatch.ResultDispatcherTests.test_dispatcher_claims_bounded_batch_and_records_exact_observation) ... ok\ntest_unknown_claim_is_observed_and_never_posted_again (factory.tests.test_result_dispatch.ResultDispatcherTests.test_unknown_claim_is_observed_and_never_posted_again) ... ok\ntest_ambiguous_post_failure_becomes_unknown_without_internal_retry (factory.tests.test_result_dispatch.UdsResultHandoffClientTests.test_ambiguous_post_failure_becomes_unknown_without_internal_retry) ... ok\ntest_delivered_response_requires_exact_observation_digest (factory.tests.test_result_dispatch.UdsResultHandoffClientTests.test_delivered_response_requires_exact_observation_digest) ... Traceback (most recent call last):\n  File \"/home/pall/projects/liqvera/.getzilla/runtime/getzilla-dispositions/factory/tests/run_disposable_exit.py\", line 240, in <module>\n    raise SystemExit(main())\n                     ^^^^^^\n  File \"/home/pall/projects/liqvera/.getzilla/runtime/getzilla-dispositions/factory/tests/run_disposable_exit.py\", line 198, in main\n    _run(\n  File \"/home/pall/projects/liqvera/.getzilla/runtime/getzilla-dispositions/factory/tests/run_disposable_exit.py\", line 77, in _run\n    subprocess.run(command, check=True, env=environment, timeout=timeout)\n  File \"/usr/lib/python3.12/subprocess.py\", line 550, in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/subprocess.py\", line 1209, in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/subprocess.py\", line 2141, in _communicate\n    self.wait(timeout=self._remaining_time(endtime))\n  File \"/usr/lib/python3.12/subprocess.py\", line 1264, in wait\n    return self._wait(timeout=timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/subprocess.py\", line 2045, in _wait\n    raise TimeoutExpired(self.args, timeout)\nsubprocess.TimeoutExpired: Command '['uv', 'run', '--project', 'factory', 'python', '-m', 'unittest', 'discover', '-s', 'factory/tests', '-t', '.', '-v']' timed out after 719.9999852757901 seconds\n",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "source-stability",
+      "status": "pass",
+      "summary": "repository fingerprint remained stable",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "quality-gate",
+      "status": "pass",
+      "summary": "QG-01 admission checks passed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    }
+  ],
+  "spec": {
+    "exempt": false,
+    "specs": [
+      {
+        "path": "engineering/changes/20261021-task-d83415/change-spec.yaml",
+        "profile": "gate",
+        "valid": false,
+        "errors": [
+          "/home/pall/projects/liqvera/.getzilla/runtime/getzilla-dispositions/engineering/changes/20261021-task-d83415/change-spec.yaml: red-risk requires approvals.required_scopes"
+        ],
+        "coverage": {
+          "spec_count": 1,
+          "criterion_total": 5,
+          "criterion_mapped": 5,
+          "mapped_ids": [
+            "AC-001",
+            "AC-002",
+            "AC-003",
+            "AC-004",
+            "AC-005"
+          ],
+          "unmapped_ids": [],
+          "evidence_counts": {
+            "test": 5,
+            "receipt": 10,
+            "production_signal": 0,
+            "attestation": 0
+          },
+          "attestation_ac": {
+            "spec_count": 1,
+            "criterion_total": 5,
+            "criterion_mapped": 5,
+            "unmapped_ids": []
+          },
+          "categories": {
+            "acceptance_criteria": {
+              "criterion_total": 5,
+              "criterion_mapped": 5,
+              "mapped_ids": [
+                "AC-001",
+                "AC-002",
+                "AC-003",
+                "AC-004",
+                "AC-005"
+              ],
+              "unmapped_ids": []
+            },
+            "invariants": {
+              "criterion_total": 1,
+              "criterion_mapped": 1,
+              "mapped_ids": [
+                "INV-001"
+              ],
+              "unmapped_ids": []
+            },
+            "forbidden_outcomes": {
+              "criterion_total": 1,
+              "criterion_mapped": 1,
+              "mapped_ids": [
+                "FORBID-001"
+              ],
+              "unmapped_ids": []
+            }
+          },
+          "all_criterion_total": 7,
+          "all_criterion_mapped": 7,
+          "all_mapped_ids": [
+            "AC-001",
+            "AC-002",
+            "AC-003",
+            "AC-004",
+            "AC-005",
+            "FORBID-001",
+            "INV-001"
+          ],
+          "all_unmapped_ids": []
+        }
+      }
+    ],
+    "historical_migrations": [],
+    "active_path": "engineering/changes/20261021-task-d83415/change-spec.yaml"
+  },
+  "architecture": {
+    "configured": true,
+    "diagram_status": "pass",
+    "diagram_mismatches": [],
+    "drift_findings": [],
+    "status": "fail",
+    "architecture_contract_version": 1,
+    "adoption_digest": "af26761dc3c6657e576a1c699536e041d8a993e8da6597566e1ced23312600ab",
+    "architecture_digest": "ec52dc80b6a677df18d4edee34a765fa702128688111febc001929c4ab32c452",
+    "architecture_fingerprint": "2938e3b1856bbaef3b2e594f1bb92e641ec5f5ccf88d2221a1b5c6d5c51a0592",
+    "architecture_base_sha": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+    "architecture_head_commit": "4cf2abf21753e61383e3d89be593e0fb815afc7f",
+    "architecture_base_kind": "route_model",
+    "architecture_bootstrap_baseline": false,
+    "architecture_route_base_sha": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+    "baseline_introduced": false,
+    "base_adoption_state": "adopted",
+    "head_adoption_state": "adopted",
+    "base_adoption_digest": "af26761dc3c6657e576a1c699536e041d8a993e8da6597566e1ced23312600ab",
+    "head_adoption_digest": "af26761dc3c6657e576a1c699536e041d8a993e8da6597566e1ced23312600ab",
+    "contract_inventory_digest": "8da389e7361bfb6569b8146f256e14a8a6217046cf48dd1ed04f4833aa1090f3",
+    "diff_digest": "ac33984b4959a1ab045925ac3fdc2ecc6d3723a4d4134a01a90a195ea30b8876",
+    "drift_status": "pass",
+    "exact_base_sha": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+    "base_kind": "commit",
+    "fitness_evidence_digest": "3dccf2420af0bf356fe79341310fe74f4062fb693197c4da81cdacf7efa0b949",
+    "fitness_status": "fail",
+    "generated_artifact_digests": {
+      "context.mmd": "fb394ac580bf43a59af46bf5d75f9ee9ef9ece1423cd2f5be673df6089e936a5",
+      "container.mmd": "f50d31d969da655783c2b1e48b6682f7a42f5338035ab401135aafa6bc9c1658",
+      "deployment.mmd": "03e81cb4a343b3d69370ae02becf975ea9a263df45c6da2baa75714215de6da8",
+      "data-flow.mmd": "defbb77a18efc03d697dcb106b5c7e213c19ce076fce929e23a966ee31468907",
+      "trust-boundary.mmd": "c4d8a71fb0d193d9bc55b353892ede66322f7643b12dd038f904ebfafc7f3b95"
+    },
+    "head_kind": "worktree",
+    "repository_inventory_digest": "e391e14190b0f5eeec95bc342e72ca4c002de7a8cd32fde3e2a1991c2774b824",
+    "risk_escalation": "red",
+    "risk_post": "red",
+    "risk_pre": "red",
+    "rules_digest": "a0d8252c4232f469a6a62669d06ec511edabefc8c837dd9fad6d559ce9e15aa6",
+    "schema_digest": "c849231d6d3e1ea35afa4da52f612893bf9c4586934670007b9bfb495afc8769",
+    "system_digest": "087f7aa0108c70d173451d4c17b0cd088564b98d158d2cb863ad0daf01ad3d28",
+    "architecture_evidence_digest": "7e67a04afde12ac2de90216337a54e01dea701e42e3105c72a4f7b65488e8f5d"
+  },
+  "governance": {
+    "configured": true,
+    "error": "governance requires a complete successful architecture check",
+    "status": "fail"
+  },
+  "workflow_artifacts": {
+    "configured": false,
+    "status": "not_configured"
+  },
+  "status": "fail",
+  "terminal_state": "completed",
+  "evidence_status": "not_recorded",
+  "receipt_refusal": "change specification cannot provide the current binding",
+  "docs_state_scope": {
+    "eligible": false,
+    "profile": "full-pr-suite",
+    "mode": "pr",
+    "reason": "GETZILLA_VERIFY_FORCE_FULL forces the full PR suite",
+    "reason_code": "operator-override",
+    "documentation_files": [],
+    "state_files": [],
+    "artifact_files": [],
+    "changed_lockstep_tests": [],
+    "focused_tests": [],
+    "rejected_files": [],
+    "skipped_checks": [],
+    "changed_paths_digest": "2eda2cdfa0974de6c0c0700c7254f893e6c45866e250fc56143114890aba6c64",
+    "evidence_kind": "verification:full-pr-suite",
+    "rejection": null
+  },
+  "diff_risk": {
+    "status": "computed",
+    "head": "4cf2abf21753e61383e3d89be593e0fb815afc7f",
+    "tree": "947e9f362d4f0bc862e8bf12455c8e4b1862e850",
+    "bases": [
+      "e158ddc7263a55f5308944c5a426eb1e9f1a4327"
+    ],
+    "diff_risk": "medium",
+    "profile_candidate": "standard",
+    "reasons": [
+      {
+        "rule": "CONTROL_PLANE",
+        "path": ".getzilla/getzilla/verification.py",
+        "risk": "medium"
+      },
+      {
+        "rule": "CONTROL_PLANE",
+        "path": ".getzilla/getzilla/verification_dispositions.py",
+        "risk": "medium"
+      }
+    ],
+    "reason_count": 2,
+    "gaps": [],
+    "rules_digest": "778f69237f422c40e2a47c7c0851671d15bee8d3871688caf26a3620ba5ca2da",
+    "route_risk": "high",
+    "effective_risk": "high",
+    "added_reviewers": [],
+    "added_evidence": [],
+    "missing_evidence": [],
+    "waived_evidence": []
+  },
+  "cost_guard": {
+    "status": "pass",
+    "summary": "no paid or unbounded operation in the prompt or the diff",
+    "signal": false,
+    "findings": [],
+    "finding_count": 0,
+    "problems": []
+  },
+  "eu_ai_act": {
+    "status": "not_installed"
+  },
+  "hook_health": {
+    "degraded_events": 0,
+    "by_hook": {},
+    "last": []
+  },
+  "workflow_baseline": {
+    "status": "not_run",
+    "reason": "source"
+  },
+  "stacks": {
+    "detected": [
+      "python",
+      "php",
+      "powershell"
+    ],
+    "checked": [],
+    "builtin": [
+      "python",
+      "php"
+    ],
+    "not_verified": [],
+    "untouched": [
+      "powershell"
+    ],
+    "details": {}
+  },
+  "check_status": "fail"
+}

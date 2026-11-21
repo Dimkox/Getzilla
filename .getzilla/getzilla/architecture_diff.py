@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
+import ntpath
 import os
 import queue
 import re
@@ -14,12 +17,12 @@ import subprocess  # nosec B404
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from . import fsx
-from .git_binding_guard import GuardUnavailable, LinuxGitGuard
+from .git_binding_guard import GuardUnavailable, LinuxGitGuard, NativeGitGraph
 from .architecture import (
     RULE_COLLECTIONS,
     ArchitectureError,
@@ -41,6 +44,9 @@ BLOB_STREAM_CHUNK_BYTES = 64 * 1024
 # Keep a finite aggregate bound; per-blob, stream, path and time limits still apply.
 MAX_DIFF_ARTIFACT_BYTES = 128_000_000
 MAX_LINE_STAT_LINES = 100_000
+# One `git diff --no-index` covers up to this many changed text pairs and bytes.
+MAX_LINE_STAT_BATCH_PATHS = 256
+MAX_LINE_STAT_BATCH_BYTES = 8_000_000
 _EXACT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _ADOPTION_PATH = "architecture/adoption.json"
 _MODEL_PATHS = ("architecture/system.yaml", "architecture/rules.yaml")
@@ -57,6 +63,29 @@ _GIT_BLOB_CACHE: dict[tuple[object, ...], dict[str, bytes | None]] = {}
 _MATERIALIZED_STATE_CACHE: dict[tuple[object, ...], "_ArchitectureState | None"] = {}
 _GIT_BLOB_CACHE_LIMIT = 512
 _MATERIALIZED_STATE_CACHE_LIMIT = 128
+# Probe keys of the bindings `git rev-parse` already confirmed in the open binding scope.
+_PROBED_BINDINGS: contextvars.ContextVar[set[tuple[object, ...]] | None] = contextvars.ContextVar(
+    "getzilla_probed_git_bindings", default=None
+)
+
+
+@contextlib.contextmanager
+def git_binding_scope() -> Iterator[None]:
+    """Cross-check each exact Git binding with Git once for one bounded operation.
+
+    Inside the scope every Git operation still re-derives its binding from the filesystem and
+    verifies it afterwards; only the `git rev-parse` cross-check is reused, and only while the
+    registrations and the Git config files it depends on keep their exact identities. A nested
+    scope joins the outer one; the scope ends with the outermost operation.
+    """
+    if _PROBED_BINDINGS.get() is not None:
+        yield
+        return
+    token = _PROBED_BINDINGS.set(set())
+    try:
+        yield
+    finally:
+        _PROBED_BINDINGS.reset(token)
 
 
 def _binding_key(binding: "_GitBinding", guard: LinuxGitGuard | None = None) -> tuple[object, ...]:
@@ -238,9 +267,22 @@ def _run_capped(
     stderr_limit: int,
     timeout: float,
     stdin_data: bytes | None = None,
+    pass_fds: tuple[int, ...] = (),
 ) -> tuple[int, bytes, bytes]:
     """Run a process while enforcing limits before output is fully produced."""
-    input_stream = tempfile.TemporaryFile() if stdin_data is not None else None
+    input_stream = None
+    if stdin_data is not None:
+        if pass_fds:
+            if not hasattr(os,'memfd_create') or not getattr(os,'MFD_CLOEXEC',0):
+                raise ArchitectureError('native Git bounded input is unavailable',code='io')
+            descriptor = os.memfd_create('native-git-input',os.MFD_CLOEXEC)
+            try:
+                input_stream = os.fdopen(descriptor,'w+b')
+            except BaseException:
+                os.close(descriptor)
+                raise
+        else:
+            input_stream = tempfile.TemporaryFile()
     try:
         if input_stream is not None:
             input_stream.write(stdin_data)
@@ -249,6 +291,7 @@ def _run_capped(
             command, cwd=cwd, env=env,
             stdin=input_stream if input_stream is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
+            **({'pass_fds':pass_fds} if pass_fds else {}),
             **fsx.process_group_kwargs(),
         )
     except BaseException:
@@ -339,6 +382,8 @@ def _git_environment() -> dict[str, str]:
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_ATTR_NOSYSTEM": "1",
     }
     if fsx.WINDOWS and os.environ.get("SYSTEMROOT"):
         # Windows processes need SystemRoot to load system libraries; it names no config.
@@ -403,8 +448,10 @@ def _git_path_identity(path: Path) -> tuple[int, int, int, int, int, int]:
     return _stat_identity(path.lstat())
 
 
-def _git_pointer(path: Path) -> bytes:
+def _git_pointer(path: Path, *, _guard=None) -> bytes:
     """Read Git's small registration files without following a substituted name."""
+    if isinstance(_guard,NativeGitGraph):
+        return _guard.read(path)
     if fsx.WINDOWS:
         # No O_NOFOLLOW there: refuse a link or reparse point by lstat; the
         # identity comparison below catches a name swapped before the open.
@@ -444,7 +491,8 @@ class _GitBinding:
             guard.check()
         for path, identity, label in self.registrations:
             try:
-                current = _git_path_identity(path)
+                current = (_stat_identity(guard.stat(path)) if isinstance(guard,NativeGitGraph)
+                           else _git_path_identity(path))
             except OSError as exc:
                 raise ArchitectureError(f"Git {label} binding is unavailable", code="git") from exc
             # Objects were formerly checked by their strict parent's metadata.
@@ -457,13 +505,13 @@ class _GitBinding:
             if guard is not None and is_directory:
                 if not guard.covers(path, identity):
                     raise ArchitectureError(f"Git {label} binding guard is incomplete", code="git")
-                stable = True
+                stable = not isinstance(guard,NativeGitGraph) or path == self.objects_directory
             changed = current[:3] != identity[:3] if stable else current != identity
             if changed:
                 raise ArchitectureError(f"Git {label} binding changed", code="git")
         for path in self.absent_registrations:
             try:
-                path.lstat()
+                guard.stat(path) if isinstance(guard,NativeGitGraph) else path.lstat()
             except FileNotFoundError:
                 continue
             except OSError as exc:
@@ -473,7 +521,17 @@ class _GitBinding:
             guard.check()
 
 
-def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> None:
+def _bounded_git_timeout(maximum: float, deadline: float | None = None) -> float:
+    if deadline is None:
+        return maximum
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ArchitectureError('Git operation binding guard limit exceeded',code='git')
+    return min(maximum,remaining)
+
+
+def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard,
+                               *, _deadline: float | None = None) -> None:
     """Close a conservative read graph; let Git itself parse configuration syntax."""
     common = binding.common_directory
     objects = binding.objects_directory
@@ -502,7 +560,7 @@ def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> No
             continue
         if info.st_size > 4096:
             raise GuardUnavailable("reference-topology")
-        content = _git_pointer(path).removesuffix(b"\n")
+        content = _git_pointer(path,_guard=guard).removesuffix(b"\n")
         if _EXACT_SHA.fullmatch(content.decode("ascii", "replace")) is not None:
             continue
         if content.startswith(b"ref: refs/"):
@@ -526,12 +584,14 @@ def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> No
         return
     if info.st_size > 4096:
         raise GuardUnavailable("configuration-size")
-    content = _git_pointer(config)
+    content = _git_pointer(config,_guard=guard)
     guard.check()
     returncode, output, _error = _run_capped(
         _git_command(["config", "--null", "--no-includes", "--list", "--file=-"]),
-        cwd=Path("/"), env=_git_environment(), stdout_limit=16_384,
-        stderr_limit=16_384, timeout=min(_GIT_TIMEOUT_SECONDS, guard.remaining()), stdin_data=content,
+        cwd=guard.address(binding.root) if isinstance(guard,NativeGitGraph) else Path("/"),
+        pass_fds=guard.pass_fds() if isinstance(guard,NativeGitGraph) else (),
+        env=_git_environment(), stdout_limit=16_384,
+        stderr_limit=16_384, timeout=_bounded_git_timeout(min(_GIT_TIMEOUT_SECONDS, guard.remaining()),_deadline), stdin_data=content,
     )
     guard.check()
     if returncode or (output and not output.endswith(b"\0")):
@@ -557,20 +617,31 @@ def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> No
 class _GitOperation:
     """One explicit snapshot and admission point, including pending cache writes."""
 
-    def __init__(self, root: Path, *, relaxed: bool = True) -> None:
+    def __init__(self, root: Path, *, relaxed: bool = True, native_anchor=None,
+                 _budget_seconds: float = 120.0) -> None:
+        if not 0 < _budget_seconds <= 120.0:
+            raise ArchitectureError('Git operation binding guard limit exceeded',code='git')
         self.root = Path(os.path.abspath(root))
         self.guard: LinuxGitGuard | None = None
         self.binding: _GitBinding | None = None
         self.mode = "strict"
         self.reason = "unavailable"
         self._relaxed = relaxed
+        self._native_anchor = native_anchor
         self._owner = threading.get_ident()
         self._closed = False
         self._pending: dict[tuple[str, tuple[object, ...]], Any] = {}
-        self._deadline = time.monotonic() + 120.0
+        self._deadline = time.monotonic() + _budget_seconds
 
     def __enter__(self) -> "_GitOperation":
         try:
+            if self._native_anchor is not None:
+                self._native_anchor.check_root(self.root)
+                self.guard = NativeGitGraph(self._native_anchor)
+                self.binding = _git_binding(self.root,_guard=self.guard,_deadline=self._deadline)
+                self.mode,self.reason = self.guard.mode,'qualified'
+                self.check()
+                return self
             if not self._relaxed:
                 self.reason = "command"
                 self.binding = _git_binding(self.root)
@@ -590,13 +661,18 @@ class _GitOperation:
                 self.reason = str(exc)
                 self.binding = _git_binding(self.root)  # a fresh strict acquisition
             return self
+        except GuardUnavailable as exc:
+            if self.guard is not None:
+                self.guard.close()
+            self._closed = True
+            raise ArchitectureError('Git native binding is unavailable',code='git') from exc
         except BaseException:
             try:
                 if self.guard is not None:
-                    LinuxGitGuard.check(self.guard)
+                    self.guard.check()
             finally:
                 if self.guard is not None:
-                    LinuxGitGuard.close(self.guard)
+                    self.guard.close()
                 self._closed = True
             raise
 
@@ -655,7 +731,7 @@ class _GitOperation:
             self._pending.clear()
             self._closed = True
             if self.guard is not None:
-                LinuxGitGuard.close(self.guard)
+                self.guard.close()
 
 
 def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Path) -> bool:
@@ -667,26 +743,47 @@ def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Pa
     if len(lines) != 3 or lines[2] != b"false":
         return False
     try:
-        reported = [os.path.normcase(os.fsdecode(line)) for line in lines[:2]]
+        reported = [ntpath.normcase(os.fsdecode(line)) for line in lines[:2]]
     except UnicodeDecodeError:
         return False
-    return reported == [os.path.normcase(str(git_directory)), os.path.normcase(str(repository))]
+    return reported == [ntpath.normcase(str(git_directory)), ntpath.normcase(str(repository))]
 
 
-def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBinding:
+def _config_identities(directories: tuple[Path, ...], guard=None) -> tuple[object, ...]:
+    """Identities of the config files that can change what `git rev-parse` reports."""
+    identities: list[object] = []
+    for directory in directories:
+        for name in ("config", "config.worktree"):
+            try:
+                identity = (_stat_identity(guard.stat(directory / name))
+                            if isinstance(guard, NativeGitGraph)
+                            else _git_path_identity(directory / name))
+                identities.append((name, identity))
+            except FileNotFoundError:
+                identities.append((name, None))
+    return tuple(identities)
+
+
+def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
+                 _deadline: float | None = None, _probe: bool = True) -> _GitBinding:
     try:
+        native = isinstance(_guard,NativeGitGraph)
+        def info(path):
+            return _guard.stat(path) if native else path.lstat()
+        def identity(path):
+            return _stat_identity(info(path))
         named_root = Path(os.path.abspath(root))
-        if not stat.S_ISDIR(named_root.lstat().st_mode):
+        if not native and not stat.S_ISDIR(named_root.lstat().st_mode):
             raise ArchitectureError("Git worktree root must be a non-symlink directory", code="git")
         repository = (named_root.resolve(strict=True) if _guard is None else
                       _guard.directory(named_root, "worktree root"))
         dot_git = repository / ".git"
         if _guard is not None:
             _guard.protect(repository, ".git", "worktree registration")
-        registration = dot_git.lstat()
+        registration = info(dot_git)
         registrations = [
-            (repository, _git_path_identity(repository), "worktree root"),
-            (dot_git, _git_path_identity(dot_git),
+            (repository, identity(repository), "worktree root"),
+            (dot_git, identity(dot_git),
              "directory" if stat.S_ISDIR(registration.st_mode) else "worktree registration"),
         ]
         absent_registrations: tuple[Path, ...] = ()
@@ -697,7 +794,7 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
             if _guard is not None:
                 _guard.protect(dot_git, "commondir", "common-directory registration")
         elif stat.S_ISREG(registration.st_mode):
-            content = _git_pointer(dot_git)
+            content = _git_pointer(dot_git,_guard=_guard)
             if not content.startswith(b"gitdir: ") or not content.endswith(b"\n") or b"\0" in content:
                 raise ArchitectureError("Git worktree registration is invalid", code="git")
             target = Path(os.fsdecode(content[8:-1]))
@@ -709,11 +806,11 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
                 _guard.protect(git_directory, "gitdir", "worktree backlink")
                 _guard.protect(git_directory, "commondir", "common-directory registration")
             registrations.extend((
-                (git_directory, _git_path_identity(git_directory), "directory"),
-                (backlink, _git_path_identity(backlink), "worktree backlink"),
-                (common_registration, _git_path_identity(common_registration), "common-directory registration"),
+                (git_directory, identity(git_directory), "directory"),
+                (backlink, identity(backlink), "worktree backlink"),
+                (common_registration, identity(common_registration), "common-directory registration"),
             ))
-            common_content = _git_pointer(common_registration)
+            common_content = _git_pointer(common_registration,_guard=_guard)
             if not common_content.endswith(b"\n") or b"\0" in common_content:
                 raise ArchitectureError("Git common-directory registration is invalid", code="git")
             common_path = git_directory / Path(os.fsdecode(common_content[:-1]))
@@ -721,47 +818,59 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
                                 _guard.directory(common_path, "common directory"))
             if git_directory.parent.name != "worktrees" or common_directory != git_directory.parent.parent:
                 raise ArchitectureError("Git common-directory relationship does not match registered worktree", code="git")
-            registrations.append((common_directory, _git_path_identity(common_directory), "common directory"))
-            backlink_content = _git_pointer(backlink)
+            registrations.append((common_directory, identity(common_directory), "common directory"))
+            backlink_content = _git_pointer(backlink,_guard=_guard)
             if not backlink_content.endswith(b"\n") or b"\0" in backlink_content:
                 raise ArchitectureError("Git worktree backlink is invalid", code="git")
             backlink_path = Path(os.fsdecode(backlink_content[:-1]))
+            backlink_parent = None
             if _guard is not None:
-                _guard.directory((git_directory / backlink_path).parent, "worktree root")
-            if (git_directory / backlink_path).resolve(strict=True) != dot_git:
+                backlink_parent = _guard.directory((git_directory / backlink_path).parent, "worktree root")
+            matches = (backlink_parent/backlink_path.name == dot_git if native else
+                       (git_directory / backlink_path).resolve(strict=True) == dot_git)
+            if not matches:
                 raise ArchitectureError("Git worktree backlink does not match root", code="git")
         else:
             raise ArchitectureError("Git worktree registration is not a directory or regular file", code="git")
-        if not stat.S_ISDIR(git_directory.lstat().st_mode):
+        if not stat.S_ISDIR(info(git_directory).st_mode):
             raise ArchitectureError("Git directory is not a non-symlink directory", code="git")
         objects_directory = common_directory / "objects"
         if _guard is not None:
             objects_directory = _guard.directory(objects_directory, "object store")
-        if not stat.S_ISDIR(objects_directory.lstat().st_mode):
+        if not stat.S_ISDIR(info(objects_directory).st_mode):
             raise ArchitectureError("Git object store is not a non-symlink directory", code="git")
         bound_registrations = (*registrations,
-                               (objects_directory, _git_path_identity(objects_directory), "object store"))
+                               (objects_directory, identity(objects_directory), "object store"))
         binding = _GitBinding(repository, git_directory, bound_registrations, absent_registrations,
                               common_directory, objects_directory)
         binding.verify(_guard, strict_directories=True)
         if _guard is not None:
-            _qualify_git_configuration(binding, _guard)
+            _qualify_git_configuration(binding, _guard,_deadline=_deadline)
             binding.verify(_guard, strict_directories=True)
             _guard.seal()
-        returncode, output, _error = _run_capped(
-            _git_command(["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
-                         safe_directory=repository, git_directory=git_directory),
-            cwd=repository, env=_git_environment(), stdout_limit=16_384,
-            stderr_limit=65_536, timeout=_GIT_TIMEOUT_SECONDS,
-        )
-        binding.verify(_guard, strict_directories=True)
-        if returncode or not _reported_git_paths_match(output, git_directory, repository):
+        if not _probe:
+            return binding
+        code, output, _ = run_git_read(repository,
+            ["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
+            binding=binding, guard=_guard, timeout=_bounded_git_timeout(_GIT_TIMEOUT_SECONDS, _deadline),
+            stdout_limit=16_384)
+        if code or not _reported_git_paths_match(output, git_directory, repository):
             raise ArchitectureError("Git directory/worktree relationship does not match root", code="git")
         return binding
     except ArchitectureError:
         raise
     except (OSError, ValueError) as exc:
         raise ArchitectureError("Git worktree binding is unavailable", code="git") from exc
+
+
+def _native_git_child(binding,guard):
+    guard.check()
+    environment = _git_environment()
+    environment['GIT_COMMON_DIR'] = str(guard.address(binding.common_directory))
+    environment['GIT_OBJECT_DIRECTORY'] = str(guard.address(binding.objects_directory))
+    return {'root':guard.address(binding.root),'git':guard.address(binding.git_directory),
+            'env':environment,'fds':guard.pass_fds((binding.root,binding.git_directory,
+                                                  binding.common_directory,binding.objects_directory))}
 
 
 def _guarded_git_arguments(arguments: list[str], stdin_data: bytes | None) -> bool:
@@ -806,6 +915,77 @@ def _guarded_git_arguments(arguments: list[str], stdin_data: bytes | None) -> bo
     return False
 
 
+@contextlib.contextmanager
+def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
+    from .git_read_view import GitReadView, validate_arguments
+    validate_arguments(arguments)
+    deadline = time.monotonic() + timeout
+    binding = binding or _git_binding(root, _probe=False)
+    def parse_config(raw):
+        code, output, _ = _run_capped(
+            _git_command(['config', '--null', '--no-includes', '--list', '--file=-']),
+            cwd=Path(Path(root).anchor), env=_git_environment(), stdout_limit=MAX_GIT_OUTPUT_BYTES,
+            stderr_limit=4096, timeout=_bounded_git_timeout(timeout, deadline), stdin_data=raw)
+        if code or output and not output.endswith(b'\0'):
+            raise ValueError('Git configuration syntax unavailable')
+        return [tuple(record.decode('utf-8', 'strict').split('\n', 1))
+                for record in output.split(b'\0')[:-1]]
+    with GitReadView(binding, parse_config, deadline, guard) as view:
+        environment = _git_environment()
+        environment['GIT_COMMON_DIR'] = str(view.path)
+        environment['GIT_OBJECT_DIRECTORY'] = str(view.path/'objects')
+        command = _git_command(arguments, safe_directory=binding.root,
+                               git_directory=view.path, work_tree=binding.root)
+        command[1:1] = ['--attr-source='+view.empty_tree, '-c', 'protocol.allow=never']
+        if arguments[:1] in (['status'], ['diff']):
+            inventory = _git_command(['ls-files', '--stage', '-z'], safe_directory=binding.root,
+                git_directory=view.path, work_tree=binding.root)
+            code, entries, _ = _run_capped(inventory, cwd=binding.root, env=environment,
+                stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=4096,
+                timeout=_bounded_git_timeout(timeout, deadline), pass_fds=view.pass_fds)
+            if code or any(entry.startswith(b'160000 ') for entry in entries.split(b'\0')):
+                raise ValueError('Git submodule observations unavailable')
+        yield command, environment, view.pass_fds, deadline, binding, view
+
+
+def run_git_read(root, arguments, *, stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=65_536,
+                 timeout=30, stdin_data=None, binding=None, guard=None):
+    with _read_git_child(root, arguments, binding=binding, guard=guard, timeout=timeout) as child:
+        command, environment, descriptors, deadline, original, view = child
+        result = _run_capped(command, cwd=original.root, env=environment,
+            stdout_limit=stdout_limit, stderr_limit=stderr_limit,
+            timeout=_bounded_git_timeout(timeout, deadline), stdin_data=stdin_data,
+            pass_fds=descriptors)
+        code, output, error = result
+        if code == 0 and arguments[:1] == ['rev-parse']:
+            if fsx.WINDOWS:
+                # Git emits forward slashes even when the held path uses native
+                # backslashes. Translate only an exact metadata-directory line;
+                # a foreign or merely prefixed path must retain its identity.
+                private = ntpath.normcase(str(view.path))
+                translated = []
+                for line in output.splitlines(keepends=True):
+                    body = line.rstrip(b'\r\n')
+                    if ntpath.normcase(os.fsdecode(body)) == private:
+                        line = os.fsencode(original.git_directory) + line[len(body):]
+                    translated.append(line)
+                output = b''.join(translated)
+            else:
+                output = output.replace(os.fsencode(view.path), os.fsencode(original.git_directory))
+            if arguments == ['rev-parse', '--git-common-dir']:
+                output = os.fsencode(original.common_directory)+b'\n'
+            if len(arguments) == 3 and arguments[:2] == ['rev-parse', '--git-path']:
+                name = arguments[2]
+                if name in {'HEAD', 'index'}:
+                    target = original.git_directory/name
+                elif name in {'objects', 'refs', 'config', 'packed-refs', 'shallow'}:
+                    target = original.common_directory/name
+                else:
+                    raise ValueError('Git metadata path observation unsupported')
+                output = os.fsencode(target)+b'\n'
+        return code, output, error
+
+
 def run_git_bounded(
     root: Path,
     arguments: list[str],
@@ -821,15 +1001,13 @@ def run_git_bounded(
             return run_git_bounded(root, arguments, allow_failure=allow_failure, limit=limit,
                                    stdin_data=stdin_data, _scope=scope)
     binding = _scope.check(root)
-    if _scope.guard is not None and not guarded:
+    native = isinstance(_scope.guard,NativeGitGraph)
+    if _scope.guard is not None and not native and not guarded:
         raise ArchitectureError("Git operation binding read graph is unsupported", code="git")
     try:
-        returncode, output, error = _run_capped(
-            _git_command(arguments, safe_directory=binding.root,
-                         git_directory=binding.git_directory, work_tree=binding.root),
-            cwd=binding.root, env=_git_environment(), stdout_limit=limit,
-            stderr_limit=65_536, timeout=_scope.remaining(), stdin_data=stdin_data,
-        )
+        returncode, output, error = run_git_read(root, arguments, binding=binding,
+            guard=_scope.guard, stdout_limit=limit, stderr_limit=65_536,
+            timeout=_scope.remaining(), stdin_data=stdin_data)
     except OSError as exc:
         raise ArchitectureError("Git object operation is unavailable", code="git") from exc
     finally:
@@ -871,7 +1049,7 @@ def _exact_commit(root: Path, value: str, *, label: str, _scope: _GitOperation |
     if _scope is None:
         with _GitOperation(root) as scope:
             return _exact_commit(root, value, label=label, _scope=scope)
-    binding = _scope.check(root)
+    _scope.check(root)
     object_id_length = _git_object_id_length(root, _scope=_scope)
     if not isinstance(value, str) or len(value) != object_id_length or _EXACT_SHA.fullmatch(value) is None:
         raise ArchitectureError(f"{label} must match the exact repository commit format", code="git")
@@ -880,19 +1058,7 @@ def _exact_commit(root: Path, value: str, *, label: str, _scope: _GitOperation |
     if cached is True:
         _scope.check()
         return value
-    try:
-        returncode, kind, _error = _run_capped(
-            _git_command(["cat-file", "-t", value], safe_directory=binding.root,
-                         git_directory=binding.git_directory, work_tree=binding.root),
-            cwd=binding.root, env=_git_environment(), stdout_limit=64,
-            stderr_limit=65_536, timeout=_scope.remaining(),
-        )
-    except OSError as exc:
-        raise ArchitectureError("Git object operation is unavailable", code="git") from exc
-    finally:
-        _scope.check()
-    if returncode:
-        kind = None
+    kind = _git(root,["cat-file","-t",value],allow_failure=True,limit=64,_scope=_scope)
     if kind != b"commit\n":
         raise ArchitectureError(f"{label} is not an available commit object", code="git")
     _scope.stage("commit", key, True)
@@ -941,27 +1107,91 @@ def _git_blob(root: Path, sha: str, path: str, *, required: bool = False,
     return value
 
 
+def _required_blob(values: dict[str, bytes | None], path: str) -> bytes:
+    value = values[path]
+    if value is None:
+        raise ArchitectureError(f"required Git object path is missing: {path}", code="missing")
+    return value
+
+
+def _git_blobs_each(root: Path, sha: str, paths: tuple[str, ...], *, _scope: _GitOperation | None = None) -> dict[str, bytes | None]:
+    """Read paths that used to be read one at a time in one bounded `cat-file --batch`.
+
+    The values and per-path cache entries are those of one read per path. Only the batch's
+    aggregate caps are new, so a batch they refuse falls back to one read per path, which
+    succeeds or fails exactly as those reads always did.
+    """
+    try:
+        return _git_blobs(root, sha, paths, _scope=_scope)
+    except ArchitectureError as exc:
+        if exc.code != "limit":
+            raise
+    return {path: _git_blob(root, sha, path, _scope=_scope) for path in paths}
+
+
 @dataclass(frozen=True)
 class ArchitectureBaseSelection:
     route_base_sha: str
     comparison_base_sha: str
     base_kind: str
     bootstrap_baseline: bool
+    candidate_sha: str | None = None
+    target_sha: str | None = None
+    target_ref: str | None = None
+    ranges_digest: str | None = None
+    model_digest: str | None = None
+    range_mode: str = 'pr'
 
 
+def _comparison_ranges_digest(selection: ArchitectureBaseSelection) -> str:
+    # These are proved comparison operands, not a moving target observation.
+    return _digest({name: getattr(selection, name) for name in (
+        'route_base_sha', 'comparison_base_sha', 'base_kind', 'bootstrap_baseline',
+        'candidate_sha', 'target_sha', 'target_ref', 'model_digest', 'range_mode')})
+
+
+def _comparison_model_digest(root: Path, commits: tuple[str, ...]) -> str:
+    values = []
+    for commit in commits:
+        for path in (*_MODEL_PATHS, _ADOPTION_PATH):
+            raw = _git_blob(root, commit, path, required=True)
+            if raw is None:
+                raise ArchitectureError('comparison model or adoption is absent', code='missing')
+            if path == _ADOPTION_PATH:
+                parse_adoption_marker(raw)
+            values.append((commit, path, hashlib.sha256(raw).hexdigest()))
+    return _digest(values)
+
+
+@git_binding_scope()
 def select_architecture_comparison_base(
     root: Path,
     route: dict[str, Any] | None,
+    *,
+    _trusted_ranges: Any = None,
 ) -> ArchitectureBaseSelection:
+    from .git_ranges import GitRangeSelection, _git_range_selection, _RANGE_MODES
+    range_mode = 'pr'
+    if _trusted_ranges is not None:
+        if (type(_trusted_ranges) is not GitRangeSelection
+                or type(_trusted_ranges.mode) is not str
+                or _trusted_ranges.mode not in {'fast', *_RANGE_MODES}):
+            raise ArchitectureError('architecture ranges are foreign or stale', code='git')
+        range_mode = _trusted_ranges.mode
     candidate = (route or {}).get("base_commit")
     route_base = _exact_commit(
         root,
         candidate if isinstance(candidate, str) else _head_commit(root),
         label="architecture_route_base_sha",
     )
-    marker_present = _git_blob(root, route_base, _ADOPTION_PATH) is not None
+    head = _head_commit(root)
+    ranges = _git_range_selection(root, route, range_mode)
+    if ranges.head_sha != head or (_trusted_ranges is not None and _trusted_ranges != ranges):
+        raise ArchitectureError('architecture ranges are foreign or stale', code='git')
+    route_values = _git_blobs(root, route_base, (*_MODEL_PATHS, _ADOPTION_PATH))
+    marker_present = route_values[_ADOPTION_PATH] is not None
     model_present = tuple(
-        _git_blob(root, route_base, path) is not None for path in _MODEL_PATHS
+        route_values[path] is not None for path in _MODEL_PATHS
     )
     if model_present not in {(False, False), (True, True)}:
         raise ArchitectureError(
@@ -974,14 +1204,42 @@ def select_architecture_comparison_base(
             code="missing",
         )
     if model_present == (True, True):
-        marker_value = _git_blob(root, route_base, _ADOPTION_PATH, required=True)
-        parse_adoption_marker(
-            _required_output(marker_value, operation="read route-base adoption marker")
-        )
+        parse_adoption_marker(_required_blob(route_values, _ADOPTION_PATH))
     if model_present == (True, True):
         comparison_base = route_base
         base_kind = "route_model"
         bootstrap_baseline = False
+        if ranges.findings:
+            raise ArchitectureError('architecture ranges are unproved', code='git')
+        targets = [entry for entry in ranges.bases if entry.kind == 'pr-target']
+        if len(targets) > 1:
+            raise ArchitectureError('architecture target is ambiguous', code='git')
+        if targets:
+            target = targets[0]
+            if target.comparison_base_sha not in (target.target_sha, head):
+                raise ArchitectureError('architecture target is not contained by candidate', code='git')
+            if target.comparison_base_sha == head and route_base != head:
+                from .git_ranges import _qualified_architecture_comparison
+                qualified = _qualified_architecture_comparison(root, route or {}, head)
+                if qualified is not None:
+                    old_base = _git(root, ['merge-base', '--all', qualified.comparison_base_sha, head])
+                    if (old_base is None or old_base.decode().splitlines() != [qualified.comparison_base_sha]
+                            or _comparison_model_digest(root, (route_base, qualified.target_sha, head)) != qualified.model_digest):
+                        raise ArchitectureError('qualified architecture comparison is stale', code='git')
+                    if _head_commit(root) != head or _git_range_selection(root, route, range_mode) != ranges:
+                        raise ArchitectureError('qualified comparison operands changed', code='git')
+                    current = replace(qualified, range_mode=range_mode)
+                    return replace(current, ranges_digest=_comparison_ranges_digest(current))
+            if target.comparison_base_sha != head and target.target_sha != route_base:
+                ancestor = _git(root, ['merge-base', '--all', route_base, target.target_sha])
+                if ancestor is None or ancestor.decode().splitlines() != [route_base]:
+                    raise ArchitectureError('architecture target does not descend from anchor', code='git')
+                identity = _comparison_model_digest(root, (route_base, target.target_sha, head))
+                result = ArchitectureBaseSelection(route_base, target.target_sha, 'accepted_target', False,
+                    head, target.target_sha, target.source, None, identity, range_mode)
+                if _head_commit(root) != head or _git_range_selection(root, route, range_mode) != ranges:
+                    raise ArchitectureError('architecture comparison operands changed', code='git')
+                return replace(result, ranges_digest=_comparison_ranges_digest(result))
     else:
         bootstrap_baseline = True
         try:
@@ -994,12 +1252,17 @@ def select_architecture_comparison_base(
         except ArchitectureError:
             comparison_base = route_base
             base_kind = "route_pre_adoption"
-    return ArchitectureBaseSelection(
+    if _head_commit(root) != head or _git_range_selection(root, route, range_mode) != ranges:
+        raise ArchitectureError('architecture comparison operands changed', code='git')
+    result = ArchitectureBaseSelection(
         route_base_sha=route_base,
         comparison_base_sha=comparison_base,
         base_kind=base_kind,
         bootstrap_baseline=bootstrap_baseline,
+        candidate_sha=head,
+        range_mode=range_mode,
     )
+    return replace(result, ranges_digest=_comparison_ranges_digest(result))
 
 
 def _worktree_open_flags() -> tuple[int, int, int]:
@@ -1183,25 +1446,29 @@ def _stream_git_blob(root: Path, object_id: str, expected_size: int, path: str,
         raise ArchitectureError("Git operation binding read graph is unsupported", code="git")
     timeout = _scope.remaining()
     try:
-        process = subprocess.Popen(  # nosec B603
-            _git_command(["cat-file", "blob", object_id], safe_directory=binding.root,
-                         git_directory=binding.git_directory, work_tree=binding.root),
-            cwd=binding.root,
-            env=_git_environment(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            **fsx.process_group_kwargs(),
-        )
-        if fsx.WINDOWS:
-            returncode, digest, total, binary, stderr = _drain_blob_threaded(
-                process, expected_size=expected_size, path=path, timeout=timeout
+        with _read_git_child(root, ["cat-file", "blob", object_id], binding=binding,
+                             guard=_scope.guard, timeout=timeout) as child:
+            command, environment, descriptors, deadline, _, _ = child
+            timeout = _bounded_git_timeout(timeout, deadline)
+            process = subprocess.Popen(  # nosec B603
+                command,
+                cwd=binding.root,
+                env=environment,
+                pass_fds=descriptors,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                **fsx.process_group_kwargs(),
             )
-        else:
-            returncode, digest, total, binary, stderr = _drain_blob_selector(
-                process, expected_size=expected_size, path=path, timeout=timeout
-            )
+            if fsx.WINDOWS:
+                returncode, digest, total, binary, stderr = _drain_blob_threaded(
+                    process, expected_size=expected_size, path=path, timeout=timeout
+                )
+            else:
+                returncode, digest, total, binary, stderr = _drain_blob_selector(
+                    process, expected_size=expected_size, path=path, timeout=timeout
+                )
     except OSError as exc:
         raise ArchitectureError("Git blob stream is unavailable", code="git") from exc
     finally:
@@ -1472,8 +1739,9 @@ def _materialized_state(
     if found:
         _scope.check()
         return cached
-    model_values = tuple(_git_blob(root, sha, path, _scope=_scope) for path in _MODEL_PATHS)
-    marker_value = _git_blob(root, sha, _ADOPTION_PATH, _scope=_scope)
+    model_and_marker = _git_blobs_each(root, sha, (*_MODEL_PATHS, _ADOPTION_PATH), _scope=_scope)
+    model_values = tuple(model_and_marker[path] for path in _MODEL_PATHS)
+    marker_value = model_and_marker[_ADOPTION_PATH]
     if model_values == (None, None):
         if marker_value is not None:
             raise ArchitectureError(
@@ -1488,7 +1756,8 @@ def _materialized_state(
     if marker_value is None:
         raise ArchitectureError("architecture adoption marker is missing", code="missing")
     adoption = parse_adoption_marker(marker_value)
-    schema_values = tuple(_git_blob(root, sha, path, required=True, _scope=_scope) for path in _SCHEMA_PATHS)
+    schema_blobs = _git_blobs_each(root, sha, _SCHEMA_PATHS, _scope=_scope)
+    schema_values = tuple(_required_blob(schema_blobs, path) for path in _SCHEMA_PATHS)
     with tempfile.TemporaryDirectory(prefix="adaptive-architecture-object-") as directory:
         materialized = Path(directory)
         for path, value in zip((*_MODEL_PATHS, *_SCHEMA_PATHS), (*model_values, *schema_values)):
@@ -1496,8 +1765,10 @@ def _materialized_state(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(_required_output(value, operation=f"materialize {path}"))
         snapshot = load_architecture(materialized)
-        for contract in snapshot.system["contracts"]:
-            value = _git_blob(root, sha, contract["path"], required=True, _scope=_scope)
+        contracts = snapshot.system["contracts"]
+        contract_blobs = _git_blobs_each(root, sha, tuple(contract["path"] for contract in contracts), _scope=_scope)
+        for contract in contracts:
+            value = _required_blob(contract_blobs, contract["path"])
             target = materialized / contract["path"]
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(_required_output(value, operation=f"materialize {contract['path']}"))
@@ -1671,20 +1942,32 @@ def _changed_paths(root: Path, base: str, head: str | None, *, worktree: bool) -
     return unique
 
 
-def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int | None]:
+def _line_stat_text(old: bytes | None, new: bytes | None) -> tuple[bytes, bytes] | None:
+    """The bounded text pair an exact line stat compares, or None when the pair has none."""
     before = old or b""
     after = new or b""
     if len(before) > MAX_ANALYZED_FILE_BYTES or len(after) > MAX_ANALYZED_FILE_BYTES:
         raise ArchitectureError("line-stat byte limit exceeded", code="limit")
     if b"\0" in before or b"\0" in after:
-        return None, None
+        return None
     try:
         before_lines = before.decode("utf-8").splitlines()
         after_lines = after.decode("utf-8").splitlines()
     except UnicodeDecodeError:
-        return None, None
+        return None
     if len(before_lines) > MAX_LINE_STAT_LINES or len(after_lines) > MAX_LINE_STAT_LINES:
         raise ArchitectureError("line-stat line limit exceeded", code="limit")
+    return before, after
+
+
+def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int | None]:
+    text = _line_stat_text(old, new)
+    if text is None:
+        return None, None
+    return _numstat_pair(*text)
+
+
+def _numstat_pair(before: bytes, after: bytes) -> tuple[int, int]:
     with tempfile.TemporaryDirectory(prefix="adaptive-line-stat-") as directory:
         root = Path(directory)
         (root / "before").write_bytes(before)
@@ -1728,6 +2011,109 @@ def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int |
         raise ArchitectureError("invalid exact line-stat counts", code="git") from exc
 
 
+def _numstat_batch(pairs: list[tuple[bytes, bytes]]) -> list[tuple[int, int]]:
+    """Exact line stats for several text pairs from one `git diff --no-index` over two directories.
+
+    The whole batch gets the deadline and per-pair output cap of a single pair, so it can only
+    succeed where every pair alone would have.
+    """
+    names = [f"{index:05d}".encode("ascii") for index in range(len(pairs))]
+    with tempfile.TemporaryDirectory(prefix="adaptive-line-stat-") as directory:
+        root = Path(directory)
+        for side in ("before", "after"):
+            (root / side).mkdir()
+        for name, (before, after) in zip(names, pairs):
+            (root / "before" / name.decode("ascii")).write_bytes(before)
+            (root / "after" / name.decode("ascii")).write_bytes(after)
+        returncode, output, error = _run_capped(
+            _git_command(
+                [
+                    "diff",
+                    "--no-index",
+                    "--numstat",
+                    "-z",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--",
+                    "before",
+                    "after",
+                ]
+            ),
+            cwd=root,
+            env=_git_environment(),
+            stdout_limit=4_096 * len(pairs),
+            stderr_limit=65_536,
+            timeout=_LINE_STAT_TIMEOUT_SECONDS,
+        )
+    if returncode not in {0, 1}:
+        message = error.decode("utf-8", "replace").strip()
+        raise ArchitectureError(f"exact line-stat operation failed: {message}", code="git")
+    counts = [(0, 0)] * len(pairs)
+    if returncode == 0:
+        if output:
+            raise ArchitectureError("unchanged line-stat operation emitted output", code="git")
+        return counts
+    # Each changed pair is `added<TAB>deleted<TAB><NUL>before/NAME<NUL>after/NAME<NUL>`.
+    tokens = output.split(b"\0")
+    if not output.endswith(b"\0") or (len(tokens) - 1) % 3:
+        raise ArchitectureError("unexpected exact line-stat output", code="git")
+    position = {name: index for index, name in enumerate(names)}
+    seen: set[bytes] = set()
+    for cursor in range(0, len(tokens) - 1, 3):
+        record, before_path, after_path = tokens[cursor:cursor + 3]
+        fields = record.split(b"\t")
+        name = before_path.removeprefix(b"before/")
+        if (
+            len(fields) != 3
+            or fields[2]
+            or before_path != b"before/" + name
+            or after_path != b"after/" + name
+            or name not in position
+            or name in seen
+        ):
+            raise ArchitectureError("unexpected exact line-stat output", code="git")
+        if fields[0] == b"-" or fields[1] == b"-":
+            raise ArchitectureError("exact text line-stat output is unavailable", code="git")
+        if not fields[0].isdigit() or not fields[1].isdigit():
+            raise ArchitectureError("invalid exact line-stat counts", code="git")
+        seen.add(name)
+        counts[position[name]] = int(fields[0]), int(fields[1])
+    return counts
+
+
+def _line_stat_chunks(pairs: list[tuple[bytes, bytes]]) -> Iterator[list[tuple[bytes, bytes]]]:
+    chunk: list[tuple[bytes, bytes]] = []
+    size = 0
+    for pair in pairs:
+        pair_size = len(pair[0]) + len(pair[1])
+        if chunk and (
+            len(chunk) >= MAX_LINE_STAT_BATCH_PATHS or size + pair_size > MAX_LINE_STAT_BATCH_BYTES
+        ):
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(pair)
+        size += pair_size
+    if chunk:
+        yield chunk
+
+
+def _line_stats_many(pairs: list[tuple[bytes, bytes]]) -> list[tuple[int, int]]:
+    """Exact line stats for checked text pairs with the outcome of one `_line_stats` per pair."""
+    counts: list[tuple[int, int]] = []
+    for chunk in _line_stat_chunks(pairs):
+        if len(chunk) > 1:
+            try:
+                counts.extend(_numstat_batch(chunk))
+                continue
+            except ArchitectureError:
+                # The batch only saves processes. Re-run each pair alone, with its own
+                # deadline, so the first pair that fails alone fails exactly as before.
+                pass
+        counts.extend(_numstat_pair(*pair) for pair in chunk)
+    return counts
+
+
 def read_diff_file(root: Path, diff: ArchitectureDiff, path: str, side: str = "head") -> bytes | None:
     repository = Path(root).resolve(strict=True)
     if side not in {"base", "head"}:
@@ -1763,7 +2149,11 @@ def _git_blobs(root: Path, sha: str, paths: tuple[str, ...],
         _git(
             root,
             ["--literal-pathspecs", "ls-tree", "-lr", "-z", "--full-tree", sha, "--", *requested],
-            limit=min(MAX_GIT_OUTPUT_BYTES, 4_096 + sum(map(len, encoded))),
+            # Per record: six mode bytes, four type bytes, exact object-id
+            # width, at most twenty decimal size bytes, and five separators.
+            # Keep the absolute capture ceiling; size validation below still
+            # rejects objects above the unchanged analyzed-file limit.
+            limit=min(MAX_GIT_OUTPUT_BYTES, sum(len(path) + 6 + 4 + len(sha) + 20 + 5 for path in encoded)),
             _scope=_scope,
         ),
         operation="read Git batch tree metadata",
@@ -1907,6 +2297,7 @@ def _tree_inventory_digest(
     return _digest(os.fsdecode(raw))
 
 
+@git_binding_scope()
 def diff_architecture(
     root: Path | str,
     *,
@@ -1919,9 +2310,21 @@ def diff_architecture(
     base = _exact_commit(repository, base_sha, label="base_sha")
     bootstrap_baseline = False
     if _trusted_base_selection is not None:
+        if type(_trusted_base_selection) is not ArchitectureBaseSelection:
+            raise ArchitectureError('architecture base selection is foreign', code='git')
+        from .state import get_active_route
+        from .git_ranges import _git_range_selection, _RANGE_MODES
+        if (type(_trusted_base_selection.range_mode) is not str
+                or _trusted_base_selection.range_mode not in {'fast', *_RANGE_MODES}
+                or _trusted_base_selection.candidate_sha != _head_commit(repository)
+                or not isinstance(_trusted_base_selection.ranges_digest, str)
+                or not re.fullmatch(r'[0-9a-f]{64}', _trusted_base_selection.ranges_digest)):
+            raise ArchitectureError('architecture base selection mode is foreign', code='git')
+        selection_route = get_active_route(repository) or {"base_commit": _trusted_base_selection.route_base_sha}
         verified_selection = select_architecture_comparison_base(
             repository,
-            {"base_commit": _trusted_base_selection.route_base_sha},
+            selection_route,
+            _trusted_ranges=_git_range_selection(repository, selection_route, _trusted_base_selection.range_mode),
         )
         if verified_selection != _trusted_base_selection:
             raise ArchitectureError("architecture base selection is stale", code="git")
@@ -1957,6 +2360,8 @@ def diff_architecture(
         None if worktree else _batch_git_profiles(repository, _required_head(head), paths)
     )
     artifacts: list[ChangedArtifact] = []
+    # Text pairs are checked in path order; their exact line stats are counted in batches after.
+    line_stat_inputs: list[tuple[int, tuple[bytes, bytes]]] = []
     artifact_bytes = 0
     head_side = None if worktree else _required_head(head)
     for path in paths:
@@ -1988,25 +2393,28 @@ def diff_architecture(
         )
         if oversized_text:
             raise ArchitectureError(f"text file exceeds analysis limit: {path}", code="limit")
-        if any(profile.binary for profile in (base_profile, head_profile) if profile is not None):
-            added, deleted = None, None
-        else:
-            added, deleted = _line_stats(
+        if not any(profile.binary for profile in (base_profile, head_profile) if profile is not None):
+            text = _line_stat_text(
                 base_profile.content if base_profile else None,
                 head_profile.content if head_profile else None,
             )
+            if text is not None:
+                line_stat_inputs.append((len(artifacts), text))
         artifacts.append(
             ChangedArtifact(
                 path=path,
                 status=status,
-                added_lines=added,
-                deleted_lines=deleted,
+                added_lines=None,
+                deleted_lines=None,
                 base_size=base_profile.size if base_profile else 0,
                 head_size=head_profile.size if head_profile else 0,
                 base_digest=base_profile.digest if base_profile else None,
                 head_digest=head_profile.digest if head_profile else None,
             )
         )
+    line_stats = _line_stats_many([text for _index, text in line_stat_inputs])
+    for (index, _text), (added, deleted) in zip(line_stat_inputs, line_stats, strict=True):
+        artifacts[index] = replace(artifacts[index], added_lines=added, deleted_lines=deleted)
     changes = _change_records(base_state, head_state)
     base_digest = None if base_state is None else architecture_digests(base_state.snapshot)[
         "architecture_digest"

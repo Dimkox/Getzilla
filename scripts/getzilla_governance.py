@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import sys
+sys.dont_write_bytecode = True
 from datetime import datetime, timezone
 from pathlib import Path
 

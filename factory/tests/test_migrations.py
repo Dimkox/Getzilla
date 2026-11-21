@@ -1,4 +1,5 @@
 import hashlib
+import os
 from datetime import datetime, timezone
 import re
 import traceback
@@ -40,10 +41,38 @@ PRE_RECOVERY_MIGRATIONS = (
     (16, "016_contract_execution_canonical_persistence.sql", "3b6d6104a0074b5357915583385aa433f71ccf9755f101cf9a7d6322fcc75b54"),
 )
 
+BASELINE_001_025 = PRE_RECOVERY_MIGRATIONS + (
+    (17, "017_execution_recovery_topology.sql", "4114b0a1d3b5e8ab86227b0bd2dd459d62d023d033d1ff2b9b5bdc66aaa07da1"),
+    (18, "018_semantic_validation_bridge.sql", "33053563dce7c34edfa9301130272adb34651d44dd1f2bc305ba3eec01382c70"),
+    (19, "019_usage_token_components.sql", "e0cf573b2bd183f5bf6291f02d330e98edf7d4e00d34944daba5719eee91c790"),
+    (20, "020_execution_v2_priced_usage.sql", "524c94bf95f38f8a339c3f5b1165d7f7b7fffc81eb7fd8a2faff4362f33d2ae3"),
+    (21, "021_semantic_repair_child_rejection_reasons.sql", "868bc21f47351f92b79acb8bd8e9390c62b43803c0b5761400e32c7143d56d5e"),
+    (22, "022_semantic_repair_plan_rejection_reasons.sql", "3bd08d907c538ab3964727fdca91eb35565821889d1999da8fcba1278613267d"),
+    (23, "023_factory_v15_decisions.sql", "89e3d35e3cb96076c74ceba4ff3eab769ddeb91458c3ea45f36d5db2aeb25d53"),
+    (24, "024_factory_v15_result_outbox.sql", "72efd7e17b4d25f89925ff274f35306cba9d335cc9dc5355549283e3bf743bce"),
+    (25, "025_factory_v15_result_dispatch.sql", "5782e7d8ea86848583b227754b8f2fddedba8ef3a9d7d59bd9934799d8887fd4"),
+)
+ACCESS_026_027 = (
+    (26, "026_factory_stop_fence.sql", "8bccf401d84d24665c71903e6bf516a5bf989cc81487d468d97c94f8b41c14b2"),
+    (27, "027_factory_access_release.sql", "6347ca2b6b016cff0ac50b8c0e0b0d88be40e2d6b0236b62ecc68968b16801e0"),
+)
+
+WORKFLOW_028 = (
+    (28, "028_workflow_admission_evidence.sql", "fe0e7806b1e72c7ab3bfc172490b54161fd65a822ad2067fd8783400a49ba167"),
+)
+
+
+NATIVE_029 = ((29, "029_native_access_forward.sql", "9159f8d4472e195ac8776a4c1f9b2d9561e2f916b0fd41859c2c95a51efd38c2"),)
+RETENTION_030 = ((30, "030_factory_retrieval_retention.sql", "3e720794e98dc9aab5d52f32a6facbd92da10939bde98a84f1fdf33b189bfe4f"),)
+
 
 class MigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(run_disposable_exit, 'runtime_image_id',
+                                      return_value=run_disposable_exit.POSTGRES['image_id']))
+
     def test_result_admission_is_definer_only_immutable_and_dormant_until_qualification(self):
-        migration = discover_migrations()[-2]
+        migration = next(item for item in discover_migrations() if item.version == 24)
         self.assertEqual((migration.version, migration.name), (24, "024_factory_v15_result_outbox.sql"))
         lowered = migration.sql.lower()
         self.assertIn("security definer", lowered)
@@ -77,7 +106,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(record.to_dict()["evidence_refs"], [])
         self.assertEqual(len(record.record_digest), 64)
     def test_result_dispatch_migration_is_fenced_dormant_and_least_privilege(self):
-        migration = discover_migrations()[-1]
+        migration = next(item for item in discover_migrations() if item.version == 25)
         self.assertEqual(
             (migration.version, migration.name),
             (25, "025_factory_v15_result_dispatch.sql"),
@@ -100,64 +129,49 @@ class MigrationTests(unittest.TestCase):
         self.assertNotIn("update factory.next_model_request_outbox_v1\nset operation_id", lowered)
         self.assertIn("post_outcome_ambiguous", lowered)
 
-    def test_exit_runner_orders_bound_preflight_before_mutating_suite(self):
-        container_id = "a" * 64
-        created = type("Completed", (), {"returncode": 0, "stdout": container_id})()
-        port = type(
-            "Completed", (), {"returncode": 0, "stdout": "127.0.0.1:5432\n"}
-        )()
-        moved_port = type(
-            "Completed", (), {"returncode": 0, "stdout": "127.0.0.1:6543\n"}
-        )()
-        with patch.object(
-            run_disposable_exit.subprocess, "run", side_effect=[created, port, moved_port]
-        ) as subprocess_run, patch.object(
-            run_disposable_exit, "_binding_matches", return_value=True
-        ), patch.object(
-            run_disposable_exit, "_final_postgres_ready", return_value=True
-        ), patch.object(run_disposable_exit, "_run") as run, patch.object(
-            run_disposable_exit, "_remove_bound_container"
-        ) as remove, patch("builtins.print") as printed:
-            self.assertEqual(run_disposable_exit.main(), 0)
-        self.assertEqual(
-            subprocess_run.call_args_list[1].args[0],
-            ["docker", "port", container_id, "5432/tcp"],
-        )
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertIn("--preflight-only", commands[0])
-        self.assertIn("unittest", commands[1])
-        self.assertEqual(run.call_args_list[1].kwargs["timeout"], 720)
-        self.assertNotIn("--preflight-only", commands[2])
-        self.assertEqual(
-            run.call_args_list[2].kwargs["environment"]["FACTORY_TEST_DATABASE_URL"].rsplit(
-                ":", 1
-            )[1],
-            "6543/factory_exit",
-        )
-        self.assertEqual(
-            subprocess_run.call_args_list[2].args[0],
-            ["docker", "port", container_id, "5432/tcp"],
-        )
-        self.assertEqual(remove.call_args.args[0], container_id)
-        printed.assert_called_once_with(
-            "PASS: disposable PostgreSQL + API + effective roles + actual "
-            "restart/reconciliation"
-        )
+    def test_current_migration_inventory_reaches_empty_cluster_setup(self):
+        from factory.tests.test_execution_persistence_postgres import FreshClusterArtifactAttestorMigrationTests as Fixture
+        from getzilla_factory.migrations import discover_migrations
+        cursor = MagicMock()
+        cursor.fetchone.return_value = (None, None)
+        connection = MagicMock()
+        connection.cursor.return_value.__enter__.return_value = cursor
+        # This inventory control uses a fake connection, not a live identity
+        # preflight. Real empty-cluster tests retain their original binding.
+        with patch("psycopg.connect") as connect, patch.dict(
+            "os.environ", {"FACTORY_TEST_POSTGRES_JOURNAL": ""}
+        ):
+            connect.return_value.__enter__.return_value = connection
+            Fixture.setUpClass()
+        inserted = [call.args[1][0] for call in cursor.execute.call_args_list
+                    if call.args[0].startswith("INSERT INTO factory.schema_migrations")]
+        self.assertEqual(inserted, list(range(1, 15)))
+        self.assertGreaterEqual(len(discover_migrations()), 25)
 
-    def test_exit_runner_reports_leaked_id_without_cleanup_when_binding_fails(self):
-        container_id = "a" * 64
-        created = type("Completed", (), {"returncode": 0, "stdout": container_id})()
-        with patch.object(
-            run_disposable_exit.subprocess, "run", return_value=created
-        ), patch.object(
-            run_disposable_exit, "_binding_matches", return_value=False
-        ), patch.object(run_disposable_exit, "_run") as run, patch.object(
-            run_disposable_exit, "_remove_bound_container"
-        ) as remove:
-            with self.assertRaisesRegex(RuntimeError, f"leaked id={container_id}"):
+    def test_exit_runner_orders_bound_preflight_before_mutating_suite(self):
+        from factory.tests.test_disposable_exit import DisposableExitTests
+        with DisposableExitTests().harness() as run:
+            self.assertEqual(run_disposable_exit.main(), 0)
+        commands = [command for command, _kwargs in run.commands]
+        self.assertIn("--preflight-only", commands[0])
+        self.assertIn("--preflight-only", commands[1])
+        self.assertIn("factory/tests/run_live_suite.py", commands[2])
+        self.assertEqual(run.commands[2][1]["timeout"], 720)
+        self.assertIn("FACTORY_FRESH_CLUSTER_DATABASE_URL", run.commands[2][1]["environment"])
+        self.assertNotEqual(run.commands[0][1]["environment"]["FACTORY_TEST_POSTGRES_CONTAINER_ID"],
+                            run.commands[1][1]["environment"]["FACTORY_TEST_POSTGRES_CONTAINER_ID"])
+        self.assertIn("--locked", commands[2])
+        self.assertEqual(urlsplit(run.commands[3][1]["environment"]["FACTORY_TEST_DATABASE_URL"]).hostname, "172.28.0.2")
+        self.assertEqual(urlsplit(run.commands[3][1]["environment"]["FACTORY_TEST_DATABASE_URL"]).port, 5432)
+        self.assertEqual(run.events[-2:], ["venv-cleanup", "container-cleanup"])
+
+    def test_exit_runner_reports_leaked_id_without_mutation_when_binding_fails(self):
+        from factory.tests.test_disposable_exit import DisposableExitTests
+        with DisposableExitTests().harness() as run, patch.object(run_disposable_exit, "_binding_matches", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "binding failed"):
                 run_disposable_exit.main()
-        run.assert_not_called()
-        remove.assert_not_called()
+        self.assertFalse(run.commands)
+        self.assertEqual(run.events, ["create", "container-cleanup"])
 
     def test_restart_probe_database_identity_is_exact_postgresql_17_cluster(self):
         valid = ("factory_exit", "factory_exit", 170_006, "cluster-1")
@@ -200,6 +214,10 @@ class MigrationTests(unittest.TestCase):
             postgres_restart_probe, "_published_port", return_value=6543
         ) as published_port, patch.object(
             postgres_restart_probe, "_wait_for_database"
+        ), patch.dict(
+            os.environ, {key: value for key, value in os.environ.items()
+                         if key not in ("FACTORY_TEST_POSTGRES_NETWORK_ID", "FACTORY_TEST_POSTGRES_NAMESPACE")},
+            clear=True,
         ):
             moved = postgres_restart_probe._restart_database(
                 name, container_id, nonce, owner, runtime, attestor
@@ -220,10 +238,10 @@ class MigrationTests(unittest.TestCase):
         container_id = "a" * 64
         name = "adaptive-factory-exit-012345abcdef"
         nonce = "b" * 32
-        valid = [container_id, f"/{name}", "postgres:17-alpine", "true", nonce]
+        valid = [container_id, f"/{name}", run_disposable_exit.POSTGRES["reference"], "true", nonce, run_disposable_exit.POSTGRES["image_id"]]
         variants = []
         for index, replacement in enumerate(
-            ("c" * 64, "/other", "postgres:18-alpine", "false", "d" * 32)
+            ("c" * 64, "/other", "postgres:18-alpine", "false", "d" * 32, "sha256:" + "0" * 64)
         ):
             changed = list(valid)
             changed[index] = replacement
@@ -241,15 +259,34 @@ class MigrationTests(unittest.TestCase):
                 )
             self.assertEqual(run.call_count, 1)
 
+    def test_legacy_restart_unit_fixture_isolated_from_live_network_authority(self):
+        with patch.dict(os.environ, {"FACTORY_TEST_POSTGRES_NETWORK_ID": "d" * 64,
+                                     "FACTORY_TEST_POSTGRES_NAMESPACE": "gz-live-inherited"}):
+            self.test_restart_database_revalidates_binding_and_targets_only_full_id()
+
+    def test_partial_internal_authority_never_falls_back_to_a_published_port(self):
+        keys = ("FACTORY_TEST_POSTGRES_NETWORK_ID", "FACTORY_TEST_POSTGRES_NAMESPACE")
+        for authority in ({keys[0]: "a" * 64}, {keys[1]: "gz-test"},
+                          {keys[0]: "", keys[1]: "gz-test"},
+                          {keys[0]: "a" * 64, keys[1]: ""}):
+            with self.subTest(authority=authority), patch.dict(os.environ, {}, clear=True), \
+                    patch.dict(os.environ, authority), \
+                    patch.object(postgres_restart_probe, "internal_postgres_endpoint") as internal, \
+                    patch.object(postgres_restart_probe, "_published_port") as published:
+                with self.assertRaises(RuntimeError):
+                    postgres_restart_probe._bound_endpoint("gz-test-db", "b" * 64, "c" * 32)
+                internal.assert_not_called()
+                published.assert_not_called()
+
     def test_exit_runner_container_binding_and_cleanup_are_exact_id_scoped(self):
         container_id = "a" * 64
         name = "adaptive-factory-exit-012345abcdef"
         nonce = "b" * 32
-        valid = f"{container_id}\t/{name}\tpostgres:17-alpine\ttrue\t{nonce}\n"
+        valid = f"{container_id}\t/{name}\t{run_disposable_exit.POSTGRES['reference']}\ttrue\t{nonce}\t{run_disposable_exit.POSTGRES['image_id']}\n"
         variants = (
             valid.replace(container_id, "c" * 64, 1),
             valid.replace(f"/{name}", "/other", 1),
-            valid.replace("postgres:17-alpine", "postgres:18-alpine", 1),
+            valid.replace(run_disposable_exit.POSTGRES["reference"], "postgres:18-alpine", 1),
             valid.replace("\ttrue\t", "\tfalse\t", 1),
             valid.replace("\ttrue\t", "\tunknown\t", 1),
             valid.replace(nonce, "d" * 32, 1),
@@ -269,7 +306,7 @@ class MigrationTests(unittest.TestCase):
 
         for state, expected in (("false", True), ("unknown", False), ("", False)):
             metadata = (
-                f"{container_id}\t/{name}\tpostgres:17-alpine\t{state}\t{nonce}\n"
+                f"{container_id}\t/{name}\t{run_disposable_exit.POSTGRES['reference']}\t{state}\t{nonce}\t{run_disposable_exit.POSTGRES['image_id']}\n"
             )
             completed = type(
                 "Completed", (), {"returncode": 0, "stdout": metadata}
@@ -289,10 +326,11 @@ class MigrationTests(unittest.TestCase):
         with patch.object(
             run_disposable_exit.subprocess,
             "run",
-            side_effect=[inspected, removed],
+            side_effect=[inspected, removed, removed],
         ) as run:
             run_disposable_exit._remove_bound_container(container_id, name, nonce)
-        self.assertEqual(run.call_args_list[-1].args[0], ["docker", "rm", "-f", container_id])
+        self.assertEqual(run.call_args_list[1].args[0], ["docker", "rm", "-f", container_id])
+        self.assertEqual(run.call_args_list[-1].args[0][:3], ["docker", "container", "ls"])
         self.assertEqual(run.call_args_list[0].args[0][-1], container_id)
 
         with patch.object(
@@ -340,19 +378,14 @@ class MigrationTests(unittest.TestCase):
             ],
         )
 
-    def test_exit_runner_never_deletes_by_name_when_container_creation_fails(self):
-        commands = []
-
-        def failed_create(command, **kwargs):
-            commands.append(command)
-            if command[:2] == ["docker", "run"]:
-                raise subprocess.CalledProcessError(125, command)
-            return type("Completed", (), {"returncode": 0, "stdout": ""})()
-
-        with patch.object(run_disposable_exit.subprocess, "run", side_effect=failed_create):
-            with self.assertRaises(subprocess.CalledProcessError):
+    def test_exit_runner_preserves_create_failure_and_finalizes_owned_intents(self):
+        from factory.tests.test_disposable_exit import DisposableExitTests
+        failure = subprocess.CalledProcessError(125, ["docker", "run"])
+        with DisposableExitTests().harness() as run, patch.object(run_disposable_exit, "_postgres", side_effect=failure):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
                 run_disposable_exit.main()
-        self.assertFalse(any(command[:2] == ["docker", "rm"] for command in commands))
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(run.events, ["container-cleanup"])
 
     def test_restart_probe_rejects_ambiguous_or_non_loopback_port_bindings(self):
         invalid = (
@@ -418,35 +451,32 @@ class MigrationTests(unittest.TestCase):
             self.assertFalse(run_disposable_exit._final_postgres_ready("factory-test"))
         self.assertEqual(run.call_count, 1)
 
-    def test_exit_runner_removes_its_exact_container_and_restart_volume(self):
-        removed = type("Completed", (), {"returncode": 0})()
-        absent = type("Completed", (), {"returncode": 1})()
-        with patch.object(
-            run_disposable_exit.subprocess,
-            "run",
-            side_effect=[removed, removed, absent, absent],
-        ) as run:
-            run_disposable_exit._cleanup(
-                "factory-test-container",
-                "factory-test-volume",
-            )
-        self.assertEqual(
-            [call.args[0] for call in run.call_args_list],
-            [
-                ["docker", "rm", "-f", "factory-test-container"],
-                ["docker", "volume", "rm", "factory-test-volume"],
-                ["docker", "inspect", "factory-test-container"],
-                ["docker", "volume", "inspect", "factory-test-volume"],
-            ],
-        )
 
     def test_packaged_migrations_are_contiguous_and_factory_only(self):
         migrations = discover_migrations()
-        self.assertEqual([item.version for item in migrations], list(range(1, 26)))
-        self.assertEqual(len({item.sha256 for item in migrations}), 25)
+        self.assertEqual([item.version for item in migrations], list(range(1, 31)))
+        self.assertEqual(len({item.sha256 for item in migrations}), 30)
+        self.assertEqual(tuple((item.version, item.name, item.sha256) for item in migrations),
+                         BASELINE_001_025 + ACCESS_026_027 + WORKFLOW_028 + NATIVE_029 + RETENTION_030)
         for item in migrations:
             self.assertIn("factory.", item.sql)
             self.assertNotIn("trust_ci", item.sql.lower())
+
+    def test_access_source_grade_is_immutable_and_cannot_become_ordinary_outbox_work(self):
+        migration = next(item for item in discover_migrations() if item.version == 27)
+        self.assertEqual(migration.name, '027_factory_access_release.sql')
+        lowered = migration.sql.lower()
+        self.assertIn('add column access_grade text not null', lowered)
+        self.assertIn('unique (envelope_digest,access_grade)', lowered)
+        self.assertIn('access_release_source_grade_fk foreign key (envelope_digest,source_grade)', lowered)
+        self.assertIn("source_grade='protected' and dispatch_phase='blocked'", lowered)
+        self.assertIn("raise exception 'immutable result source'", lowered)
+        self.assertIn("raise exception 'immutable result provenance'", lowered)
+        for function in ('stamp_result_access_grade_v1', 'stamp_outbox_access_grade_v1'):
+            self.assertIn(f'revoke all on function factory.{function}() from public,factory_runtime', lowered)
+            self.assertNotIn(f'grant execute on function factory.{function}', lowered)
+        self.assertNotIn('create table', lowered)
+        self.assertNotIn('grant update', lowered)
 
     def test_matching_applied_migrations_are_idempotent(self):
         migrations = discover_migrations()

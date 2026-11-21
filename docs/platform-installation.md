@@ -172,3 +172,20 @@ Actions records are observations. They cannot replace the independent
 [GitHub App security verdict in #326](https://github.com/Dimkox/Getzilla/issues/326),
 alter its deployed policy, or authorize a merge or release. No new service,
 signing key, deployment or branch-protection mutation is introduced here.
+
+A fresh consumer can commit the installed `.getzilla/getzilla.zip` without
+moving its default branch or task base. Review planning reads both committed
+containers with the bounded engine decoder. It validates regular Git modes,
+installer archive shape, complete resource closure and matching loose sources.
+The assessment retains each container hash, every logical member hash and every
+member addition, change or deletion. It requires full, high-risk code, security,
+data and release reviews. Other archives and invalid engine containers still
+block source assessment. This inventory does not grant trust to installed code.
+
+Cancellation is terminal. If package cancellation finished but task publication
+failed, run `python scripts/getzilla_route.py --cancel` to close that task.
+Reconciliation of a cancelled task checks its owner, idle workers and closed
+package, then leaves its accounting unchanged. `--complete` cannot turn it into
+a completed verdict. Use `python scripts/getzilla_route.py --new-task "<task>"`
+for a new attempt with fresh context and evidence. The old task, package and
+receipts remain in the audit history.

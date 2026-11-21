@@ -7,7 +7,10 @@ import unittest
 from pilot.workspace import ExactGitWorkspace, WorkspaceError, WorkspacePolicy
 from pilot.tests.support import issue_snapshot, make_control, make_source, run_git
 
+from pilot.tests.support import posix_runtime
 
+
+@posix_runtime
 class ExactGitWorkspaceTests(unittest.TestCase):
     def test_workspace_rejects_control_paths_and_symlink_alias(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

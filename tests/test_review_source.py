@@ -44,6 +44,17 @@ class ReviewSourceTests(unittest.TestCase):
         return write_receipt(self.root, 'code_review', 'pass', report or self.report,
                              reviewed_commit=source or self.source)
 
+    def test_read_only_binding_consumes_framed_active_change_without_new_authority(self):
+        from getzilla.native_state_snapshot import extend
+        from getzilla.review_source import review_source_binding
+        pointer = self.root/'.getzilla/runtime/active-change.json'
+        original = pointer.read_bytes()
+        expected = review_source_binding(self.root,self.source,self.report)
+        pointer.write_bytes(extend(original,original,limit=4096))
+        before = pointer.read_bytes()
+        self.assertEqual(review_source_binding(self.root,self.source,self.report),expected)
+        self.assertEqual(pointer.read_bytes(),before)
+
     def test_micro_route_without_package_admits_global_reports_and_consumption(self):
         (self.root / '.getzilla/runtime/active-change.json').unlink()
         self.route.update(complexity='micro', risk='low')
@@ -102,7 +113,7 @@ class ReviewSourceTests(unittest.TestCase):
             selected.symlink_to(self.root / 'source.py')
         except OSError:
             self.skipTest('symlinks unavailable')
-        with self.assertRaises((RuntimeError, ValueError)):
+        with self.assertRaisesRegex((RuntimeError, ValueError), 'selected active change'):
             self.record()
 
     def test_ignored_runtime_review_binds_exact_source_and_rechecks_content(self):
@@ -220,9 +231,11 @@ class ReviewSourceTests(unittest.TestCase):
 
     def test_rejects_nonancestor(self):
         self.git('checkout', '--orphan', 'other')
-        (self.root / 'source.py').write_text('other history\n')
-        self.commit()
-        with self.assertRaises((RuntimeError, ValueError, OSError)):
+        self.git('add', '.')
+        self.git('commit', '-qm', 'unrelated identical tree')
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'),
+                         self.git('rev-parse', self.source + '^{tree}'))
+        with self.assertRaisesRegex(RuntimeError, 'not an ancestor'):
             self.record()
 
     def test_rejects_deleted_renamed_executable_or_symlink_evidence(self):

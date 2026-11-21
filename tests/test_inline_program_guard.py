@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib
+import io
+import json
 import os
 import shlex
 import subprocess
@@ -26,7 +28,7 @@ class InlineProgramGuardTests(unittest.TestCase):
         cls.addClassCleanup(cls.scratch.cleanup)
         cls.root = Path(cls.scratch.name)
         (cls.root / ".getzilla/config").mkdir(parents=True)
-        (cls.root / ".getzilla/config/policy.json").write_text("{}\n")
+        (cls.root / ".getzilla/config/policy.json").write_text('{"schema_version": 2}\n')
         (cls.root / ".gitignore").write_text(".getzilla/runtime/\n")
         (cls.root / "README.md").write_text("Private native-hook fixture.\n")
         for relative in ("scripts", "nested/deeper", "ordinary/dev", "ordinary/proc/self/fd"):
@@ -48,7 +50,7 @@ class InlineProgramGuardTests(unittest.TestCase):
     def denied_payload(self, payload):
         output = []
         # Only observer/ledger bookkeeping is synthetic; parser, root resolution and policy run normally.
-        with (mock.patch.object(pre, "read_payload", return_value=payload),
+        with (mock.patch.object(pre.sys, "stdin", io.StringIO(json.dumps(payload))),
               mock.patch.object(pre, "emit", side_effect=output.append),
               mock.patch.object(pre, "_record_denial", return_value=(1, 1)),
               mock.patch("getzilla.agent_lifecycle.observe_tool")):
@@ -182,7 +184,7 @@ class InlineProgramGuardTests(unittest.TestCase):
         policy = self.root / '.getzilla/config/policy.json'
         original = policy.read_text()
         self.addCleanup(policy.write_text, original)
-        policy.write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        policy.write_text('{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         for operand in (
             '-c fixture-sensitive.json -- example.py',
             '-cfixture-sensitive.json -- example.py',
@@ -199,21 +201,25 @@ class InlineProgramGuardTests(unittest.TestCase):
                         self.assertNotIn('command.inline-program', hooks._command_directory_aliases(
                             command, cwd=str(self.root)))
                     self.assertTrue(self.denied(command), command)
-        self.assertFalse(self.denied(
+        self.assertTrue(self.denied(
             'cd nested && python3 -m bandit -cpublic.yaml -opublic.json -- example.py'))
+        self.assertFalse(self.denied(
+            'python3 -m bandit -cpublic.yaml -opublic.json -- example.py', workdir=self.root / 'nested'))
         # Native root resolution already refuses ambiguous || directory branches.
         self.assertTrue(self.denied(
             'cd nested || python3 -m bandit -cfixture-sensitive.json -- example.py'))
         self.assertTrue(self.denied('cd "$DESTINATION" && python3 -m bandit -- example.py'))
-        policy.write_text('{}\n')
-        self.assertFalse(self.denied(
+        policy.write_text('{"schema_version": 2}\n')
+        self.assertTrue(self.denied(
             'cd nested && python3 -m bandit -c.env.example -o.env.example -- example.py'))
+        self.assertFalse(self.denied(
+            'python3 -m bandit -c.env.example -o.env.example -- example.py', workdir=self.root / 'nested'))
 
     def test_scanner_paths_use_validated_native_execution_directory(self):
         policy = self.root / '.getzilla/config/policy.json'
         original = policy.read_text()
         self.addCleanup(policy.write_text, original)
-        policy.write_text('{"secret_read_paths": ["nested/fixture-sensitive.json", '
+        policy.write_text('{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json", '
                           '"nested/deeper/fixture-sensitive.json"]}\n')
         contexts = (
             ({'cwd': str(self.root)}, {'workdir': str(self.root / 'nested')}, self.root / 'nested'),
@@ -252,7 +258,9 @@ class InlineProgramGuardTests(unittest.TestCase):
                 self.assertTrue(self.denied_payload(payload), payload)
         payload = {'tool_name': 'exec_command', 'workspaceRoot': str(self.root),
                    'tool_input': {'cmd': 'nice python3 -m unittest'}}
-        self.assertFalse(self.denied_payload(payload), 'Ordinary wrapped Python keeps its existing decision')
+        self.assertTrue(self.denied_payload(payload), 'A wrapped module still requires a trusted execution directory')
+        payload['cwd'] = str(self.root)
+        self.assertFalse(self.denied_payload(payload), 'An explicit native directory preserves the ordinary module control')
 
     def test_native_scanner_mixed_directory_branch_refusal_is_retained(self):
         for prefix in ('cd nested || true; ', 'cd nested || true && '):
@@ -267,7 +275,7 @@ class InlineProgramGuardTests(unittest.TestCase):
         policy = self.root / '.getzilla/config/policy.json'
         original = policy.read_text()
         self.addCleanup(policy.write_text, original)
-        policy.write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        policy.write_text('{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         for separator in ('; ', '\n', ' & '):
             for operand in ('-cfixture-sensitive.json -- example.py',
                             '--configfile=fixture-sensitive.json -- example.py',
@@ -275,9 +283,11 @@ class InlineProgramGuardTests(unittest.TestCase):
                 command = 'false && cd deeper && true' + separator + 'python3 -m bandit ' + operand
                 with self.subTest(command=command):
                     self.assertTrue(self.denied(command, workdir=self.root / 'nested'), command)
-        self.assertFalse(self.denied(
+        self.assertTrue(self.denied(
             'cd deeper && true && python3 -m bandit -cpublic.yaml -- example.py',
             workdir=self.root / 'nested'))
+        self.assertFalse(self.denied(
+            'python3 -m bandit -cpublic.yaml -- example.py', workdir=self.root / 'nested/deeper'))
 
     def test_lexical_stream_and_descriptor_aliases_fail_closed(self):
         paths = (
@@ -314,11 +324,16 @@ class InlineProgramGuardTests(unittest.TestCase):
     def test_ordinary_program_paths_named_stdin_remain_allowed(self):
         for command in ("php -f ./stdin", "python3 ./scripts/../stdin", "php --file=scripts/./stdin",
                         "python3 ordinary/dev/stdin", "php -f ordinary/proc/self/fd/0",
-                        "cd scripts && python3 ./stdin", "cd scripts; php -f ../stdin",
-                        "sh -c 'cd scripts; python3 ./stdin'",
                         "python3 " + shlex.quote(str(self.root / "ordinary/dev/stdin"))):
             with self.subTest(command=command):
                 self.assertFalse(self.denied(command), command)
+        # Shell directory changes leave read authority uncertain; native workdir is explicit.
+        for command in ("cd scripts && python3 ./stdin", "cd scripts; php -f ../stdin",
+                        "sh -c 'cd scripts; python3 ./stdin'"):
+            with self.subTest(command=command):
+                self.assertTrue(self.denied(command), command)
+        self.assertFalse(self.denied("python3 ./stdin", workdir=self.root / "scripts"))
+        self.assertFalse(self.denied("php -f ../stdin", workdir=self.root / "scripts"))
         self.assertFalse(self.denied("python3 ../../stdin", workdir=self.root / "nested/deeper"))
 
     def test_native_alias_controls_depend_on_lexical_normalization(self):

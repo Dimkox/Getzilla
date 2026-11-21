@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import base64
+import binascii
 import copy
+import hashlib
+import os
 import re
 import tomllib
 from pathlib import Path, PurePosixPath
@@ -48,6 +52,8 @@ COPILOT_EVENTS = {
     'SessionEnd': 'sessionEnd',
 }
 COPILOT_HOOKS = '.github/hooks/getzilla.json'
+PAYLOAD_ENGINE = '.getzilla/getzilla/_payload_engine.py'
+FACTORY_PAYLOAD_ENGINE = 'factory/src/getzilla_factory/_payload_engine.py'
 QWEN_READ_ONLY_BLOCK = ('write_file', 'edit')
 COPILOT_READ_ONLY_TOOLS = ('read', 'search', 'shell')
 CLAUDE_READ_ONLY_TOOLS = ('Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch')
@@ -109,7 +115,7 @@ def render_codex_hooks(canonical_hooks: bytes, overlay: bytes | None) -> bytes:
     return _codex_hooks(_events_from_bytes(canonical_hooks), overlay)
 
 
-def _command(script: str, harness: str) -> str:
+def _command(script: str, harness: str, *, windows: bool = False) -> str:
     """A launcher that runs the project's own hook wherever the agent was started.
 
     The project directory the agent reports (CLAUDE_PROJECT_DIR, QWEN_PROJECT_DIR or
@@ -117,8 +123,8 @@ def _command(script: str, harness: str) -> str:
     An installed project has the engine initializer and the requested canonical hook, so a
     hook-only subdirectory cannot replace its project. A relative path would also fail from a subdirectory with exit code
     2, which Claude-compatible agents treat as a blocking error. The hook learns which
-    agent launched it through --harness. Only single quotes are used inside, so the
-    same text works in sh, cmd and PowerShell.
+    agent launched it through --harness. Discovery probes never read hook stdin.
+    Once selected, the interpreter runs the hook once, including on DENY 2.
     """
     target = f".getzilla/hooks/{script}"
     code = (
@@ -132,7 +138,41 @@ def _command(script: str, harness: str) -> str:
         f"sys.argv=[str(f),'--harness','{harness}'];"
         "runpy.run_path(str(f),run_name='__main__')"
     )
-    return f'python3 -c "{code}" || python -c "{code}"'
+    probe = 'import sys;sys.exit(0 if sys.version_info >= (3,11) else 1)'
+    if not windows:
+        return (f'for p in python3 python; do if command -v "$p" >/dev/null 2>&1 && '
+                f'"$p" -c "{probe}" </dev/null >/dev/null 2>&1; then '
+                f'exec "$p" -c "{code}"; fi; done; exit 127')
+    # ProcessStartInfo bypasses PowerShell's native pipeline text encoding. The
+    # hook inherits the original handles; JSON bytes never pass through $input.
+    # The probe alone redirects and closes stdin. No hook result causes a retry.
+    powershell = (
+        f"# {target}\n"
+        "$ProgressPreference='SilentlyContinue';"
+        "$ErrorActionPreference='Stop';"
+        "foreach($name in @('python3.exe','python.exe','py.exe')){"
+        "$cmd=Get-Command $name -CommandType Application -ErrorAction SilentlyContinue;"
+        "if(!$cmd){continue};"
+        "$prefix=if($name -eq 'py.exe'){'-3 '}else{''};"
+        "$info=New-Object System.Diagnostics.ProcessStartInfo;"
+        "$info.FileName=$cmd.Source;$info.UseShellExecute=$false;"
+        "$info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;"
+        "$info.RedirectStandardError=$true;"
+        f"$info.Arguments=$prefix+'-c \"{probe}\"';"
+        "try{$check=[System.Diagnostics.Process]::Start($info)}catch{continue};"
+        "$check.StandardInput.Close();$null=$check.StandardOutput.ReadToEnd();"
+        "$null=$check.StandardError.ReadToEnd();$check.WaitForExit();"
+        "$status=$check.ExitCode;$check.Dispose();if($status -ne 0){continue};"
+        "$info.RedirectStandardInput=$false;$info.RedirectStandardOutput=$false;"
+        "$info.RedirectStandardError=$false;"
+        "$code=[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"
+        + base64.b64encode(code.encode('utf-8')).decode('ascii') + "'));"
+        "$info.Arguments=$prefix+'-c \"'+$code+'\"';"
+        "$hook=[System.Diagnostics.Process]::Start($info);$hook.WaitForExit();"
+        "$status=$hook.ExitCode;$hook.Dispose();exit $status};exit 127"
+    )
+    encoded = base64.b64encode(powershell.encode('utf-16le')).decode('ascii')
+    return f'powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}'
 
 
 def _hooks_block(events: list[tuple[str, str, int]], *, harness: str, milliseconds: bool,
@@ -141,11 +181,14 @@ def _hooks_block(events: list[tuple[str, str, int]], *, harness: str, millisecon
     for event, script, timeout in events:
         if only is not None and event not in only:
             continue
-        block.setdefault(event, []).append({'hooks': [{
+        hook = {
             'type': 'command',
             'command': _command(script, harness),
             'timeout': timeout * 1000 if milliseconds else timeout,
-        }]})
+        }
+        if harness == 'codex':
+            hook['commandWindows'] = _command(script, harness, windows=True)
+        block.setdefault(event, []).append({'hooks': [hook]})
     return block
 
 
@@ -169,7 +212,7 @@ def _copilot_hooks(events: list[tuple[str, str, int]]) -> dict:
             block.setdefault(COPILOT_EVENTS[event], []).append({
                 'type': 'command',
                 'bash': command,
-                'powershell': command,
+                'powershell': _powershell_command(script, 'copilot'),
                 'cwd': '.',
                 'timeoutSec': timeout,
             })
@@ -178,6 +221,51 @@ def _copilot_hooks(events: list[tuple[str, str, int]]) -> dict:
 
 def _json(data: dict) -> bytes:
     return (json.dumps(data, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+
+
+def _powershell_command(script: str, harness: str) -> str:
+    # -Command otherwise maps a failing native executable's status to 1.
+    return _command(script, harness, windows=True) + '; exit $LASTEXITCODE'
+
+
+def _source_hook_command(script: str, harness: str) -> str:
+    return f'getzilla hook --script .getzilla/hooks/{script} --harness {harness}'
+
+
+def platform_hook_payload(path: str, content: bytes, *, windows: bool | None = None,
+                          source_launcher: bool = False) -> bytes:
+    """Render command-only clients inside the existing ownership transaction.
+
+    Only exact generated commands are changed. Consumer overlays and unrelated
+    settings remain intact. Codex and Copilot carry both platform commands.
+    """
+    clients = {'.grok/hooks.json': 'grok', '.qwen/settings.json': 'qwen',
+               '.claude/settings.json': 'claude', '.gemini/settings.json': 'gemini'}
+    if path not in clients:
+        return content
+    windows = os.name == 'nt' if windows is None else windows
+    data = json.loads(content)
+    harness = clients[path]
+    changed = False
+    for groups in data.get('hooks', {}).values():
+        for group in groups:
+            for hook in group.get('hooks', []):
+                command = hook.get('command', '')
+                script = _SCRIPT.search(command)
+                if not script and command.startswith('powershell.exe -NoProfile -NonInteractive -EncodedCommand '):
+                    try:
+                        decoded = base64.b64decode(command.rsplit(' ', 1)[1], validate=True).decode('utf-16le')
+                        script = _SCRIPT.search(decoded)
+                    except (ValueError, UnicodeError, binascii.Error):
+                        pass
+                if script and command in (_command(script.group(1), harness),
+                                           _command(script.group(1), harness, windows=True),
+                                           _source_hook_command(script.group(1), harness)):
+                    desired = (_source_hook_command(script.group(1), harness) if source_launcher else
+                               _command(script.group(1), harness, windows=windows))
+                    changed |= command != desired
+                    hook['command'] = desired
+    return _json(data) if changed else content
 
 
 def _yaml_string(value: str) -> str:
@@ -306,7 +394,17 @@ def _render(binding: BoundRoot | ComponentTransaction, selected: tuple[str, ...]
         out[f'.gemini/skills/{rel}'] = content
     if 'cursor' in selected:
         out.update(_cursor_rules(binding))
-    return {path: content for path, content in out.items() if agent_of(path) in selected}
+    # Source generation is reproducible across hosts and never activates a
+    # platform by changing tracked files. Consumer payloads use their host OS.
+    source_checkout = all(binding.read(path) is not None for path in
+                          ('scripts/install_into.py', 'factory/pyproject.toml'))
+    rendered = {path: content for path, content in out.items() if agent_of(path) in selected}
+    # Fixed full-source output only. A selected consumer install must never
+    # acquire Factory files merely by regenerating its native client hooks.
+    if all(binding.read(path) is not None for path in ('scripts/install_into.py', 'factory/pyproject.toml')):
+        rendered[FACTORY_PAYLOAD_ENGINE] = _source(binding, PAYLOAD_ENGINE)
+    return {path: platform_hook_payload(path, content, windows=os.name == 'nt', source_launcher=source_checkout)
+            for path, content in rendered.items()}
 
 
 _GENERATED_PATH = re.compile(
@@ -346,6 +444,16 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
     }
     kept, kept_digests = read_keep_contract(binding)
     kept, kept_digests = match_kept_local(kept, kept_digests, generated)
+    if FACTORY_PAYLOAD_ENGINE in expected and FACTORY_PAYLOAD_ENGINE in kept:
+        # A keep declaration cannot select a different executable engine for
+        # the standalone Factory layout while reporting successful generation.
+        try:
+            current = binding.read(FACTORY_PAYLOAD_ENGINE)
+            if (current is None or current.content != expected[FACTORY_PAYLOAD_ENGINE]
+                    or not mode_matches(current.mode, 0o644)):
+                problems.append('conflict kept Factory payload engine')
+        except (OSError, ValueError):
+            problems.append('conflict kept Factory payload engine')
     codex_pair = {'.codex/hooks.json', '.codex/config.toml'}
     if 'codex' in selected and codex_pair & kept:
         # A keep declaration never activates or rebuilds the other half of the
@@ -386,7 +494,15 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
                 continue
             problems.append(f'stale {relative}')
             changes.append((relative, content, current))
-        record_owned(manifest, relative, content, 0o644)
+        mode = 0o644
+        proof = owned_proof(manifest, relative)
+        if (current is not None and current.content == content and mode_matches(current.mode, mode)
+                and proof is not None and proof['sha256'] == hashlib.sha256(content).hexdigest()
+                and mode_matches(proof['mode'], mode)):
+            # Windows preserves writability rather than POSIX permission bits.
+            # Keep already matched metadata instead of creating a no-op write.
+            mode = proof['mode']
+        record_owned(manifest, relative, content, mode)
     for record in manifest['components'].values():
         for relative, proof in list(record.get('owned', {}).items()):
             if relative in expected or relative in kept or agent_of(relative) not in selected or not _GENERATED_PATH.fullmatch(relative):

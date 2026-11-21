@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import codecs
 import json
 import os
 import subprocess
@@ -86,6 +87,27 @@ class DispositionTests(unittest.TestCase):
         entry['match_sha256'] = digest(match.group().encode())
         self.policy([entry])
         return _secret_scan(self.root, ['protocol.ts'])
+
+    def test_normal_changed_file_inventory_keeps_non_utf8_secret_inputs(self):
+        sentinel = 'public-inventory-fixture-value'
+        assignment = 'api_key = ' + repr(sentinel) + '\n'
+        inputs = {
+            'latin.py': ('# coding: latin-1\n# café\n' + assignment).encode('latin-1'),
+            'wide.ps1': codecs.BOM_UTF16_LE + assignment.encode('utf-16-le'),
+        }
+        for relative, raw in inputs.items():
+            self.write(relative, raw)
+        self.git('add', '--', *inputs)
+        files, metadata = verification._changed_file_inventory(
+            self.root, {'base_commit': self.base}, 'fast', GitRangeSelection())
+        self.assertEqual(files, sorted(inputs))
+        self.assertEqual(metadata['union_count'], 2)
+        result = _secret_scan(self.root, files)
+        self.assertEqual(result.status, 'fail')
+        observed = {item['path']: item['file_sha256'] for item in result.details
+                    if item.get('code') == 'generic-secret'}
+        self.assertEqual(observed, {name: digest(raw) for name, raw in inputs.items()})
+        self.assertNotIn(sentinel, json.dumps(result.to_dict()))
 
     def range_check(self):
         return _git_diff_check(self.root, 'pr', GitRangeSelection(bases=[
@@ -468,7 +490,8 @@ class DispositionTests(unittest.TestCase):
 
     def test_evidence_mutation_during_scan_fails_closed(self) -> None:
         self.policy([self.entry()])
-        original = verification.read_text_limited
+        from getzilla import security_tools
+        original = security_tools._regular
 
         def mutate(path, *args, **kwargs):
             result = original(path, *args, **kwargs)
@@ -476,7 +499,7 @@ class DispositionTests(unittest.TestCase):
                 self.write(EVIDENCE, b'Changed during scan.\n')
             return result
 
-        with patch.object(verification, 'read_text_limited', side_effect=mutate):
+        with patch.object(security_tools, '_regular', side_effect=mutate):
             self.assertEqual(_secret_scan(self.root, ['protocol.ts']).status, 'fail')
 
 

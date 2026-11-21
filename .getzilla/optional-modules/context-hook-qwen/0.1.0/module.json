@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "context-hook-qwen",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {
+    "context-retrieval": "0.1.0"
+  },
+  "permissions": [
+    "context.hook.qwen"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "sink.json",
+      "sha256": "7bcb0fa7be4ba333a35a068a61d777e8a385e3e55692e57d54ec30770a4f5395",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}

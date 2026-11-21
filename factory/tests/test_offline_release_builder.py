@@ -1,6 +1,7 @@
 """Deterministic, network-free Factory release builder contracts."""
 
 import hashlib
+import io
 from contextlib import contextmanager
 import importlib.util
 import json
@@ -9,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 import warnings
@@ -89,6 +91,7 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         package.mkdir(parents=True)
         (package / "__init__.py").write_text("__version__='1.2.3'\n")
         (package / "server.py").write_text("raise SystemExit(0)\n")
+        (self.repo / "LICENSE").write_bytes((Path(__file__).parent / "fixtures/project-license.txt").read_bytes())
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.name", "test"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.repo, check=True)
@@ -126,6 +129,272 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
             enforce_host=False, target_environment=self.environment,
         )
 
+    def assert_no_release(self, stem):
+        for suffix in ('.zip', '.manifest.json', '.sha256'):
+            self.assertFalse(Path(str(self.base / stem) + suffix).exists())
+
+    def test_project_license_retained_in_archive_and_manifest(self):
+        expected = (self.repo / 'LICENSE').read_bytes()
+        self.assertIn(b'Copyright (c) 2026 Dimkox', expected)
+        result = self.build('project-license')
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(archive.read('legal/project/LICENSE'), expected)
+        manifest = json.loads(Path(result['manifest']).read_bytes())
+        entry = next(item for item in manifest['files'] if item['path'] == 'legal/project/LICENSE')
+        self.assertEqual(entry, {'path': 'legal/project/LICENSE', 'size': len(expected),
+                                'sha256': hashlib.sha256(expected).hexdigest(), 'mode': 0o644})
+
+    def test_project_license_missing_refuses_without_output(self):
+        (self.repo / 'LICENSE').unlink()
+        self.commit_fixture('missing project license')
+        with self.assertRaisesRegex(setup.InstallerError, 'PROJECT_LICENSE_MISMATCH'):
+            self.build('missing-license')
+        self.assert_no_release('missing-license')
+
+    def test_project_license_symlink_refuses_without_output(self):
+        license_path = self.repo / 'LICENSE'
+        external = self.base / 'external-license'
+        external.write_bytes(license_path.read_bytes())
+        license_path.unlink()
+        license_path.symlink_to(external)
+        self.commit_fixture('linked project license')
+        with self.assertRaisesRegex(setup.InstallerError, 'PROJECT_LICENSE_MISMATCH'):
+            self.build('linked-license')
+        self.assert_no_release('linked-license')
+
+    def test_project_license_changed_after_clean_check_refuses_without_output(self):
+        original = self.builder._git
+        def git(repository, *arguments):
+            result = original(repository, *arguments)
+            if arguments == ('ls-tree', self.head, '--', 'LICENSE'):
+                (self.repo / 'LICENSE').write_bytes(b'replaced after clean source check\n')
+            return result
+        with patch.object(self.builder, '_git', side_effect=git):
+            with self.assertRaisesRegex(setup.InstallerError, 'PROJECT_LICENSE_MISMATCH'):
+                self.build('changed-license')
+        self.assert_no_release('changed-license')
+
+    def test_project_license_copies_changed_committed_terms_verbatim(self):
+        expected = b'Future source license fixture: retain actual bytes, including \xff.\n'
+        (self.repo / 'LICENSE').write_bytes(expected)
+        self.commit_fixture('different committed license')
+        result = self.build('future-license')
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(archive.read('legal/project/LICENSE'), expected)
+
+    @contextmanager
+    def selected_legal_fixture(self):
+        # Tiny synthetic wheel exercises the real archive/manifest publication seam.
+        # It is not a qualification of the publisher wheel or target interpreter.
+        relative = Path('.getzilla/config/license-exception-inputs/factory-source-delivery-v1')
+        source = RUNTIME.parents[1] / relative
+        for original in source.rglob('*'):
+            if not original.is_file():
+                continue
+            destination = self.repo / relative / original.relative_to(source)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(original.read_bytes())
+            destination.chmod(stat.S_IMODE(original.stat().st_mode))
+        filename = 'certifi-2026.10.19-py3-none-any.whl'
+        wheel = self.wheelhouse / filename
+        with zipfile.ZipFile(wheel, 'w') as archive:
+            archive.writestr('certifi/cacert.pem', b'fixture certificate data\n')
+            archive.writestr('certifi-2026.10.19.dist-info/licenses/LICENSE', b'original fixture notice\n')
+        digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+        lock = self.repo / 'factory/uv.lock'
+        text = lock.read_text().replace('dependencies = [{name = "demo"}]',
+                    'dependencies = [{name = "demo"}, {name = "certifi"}]')
+        text += ('\n[[package]]\nname = "certifi"\nversion = "2026.10.19"\n'
+                 'wheels = [{url = "https://invalid.example/' + filename + '", hash = "sha256:' + digest + '"}]\n')
+        lock.write_text(text)
+        self.inventory.write_text(json.dumps(self.builder.derive_inventory(lock, target_environment=self.environment)))
+        source_map_path = self.repo / relative / 'certifi-2026.10.19-source-map.json'
+        source_map = json.loads(source_map_path.read_text())
+        source_map['wheel']['sha256'] = digest
+        source_map_path.write_text(json.dumps(source_map, sort_keys=True, indent=2) + '\n')
+        provenance = {'certifi': (source_map_path.name, hashlib.sha256(source_map_path.read_bytes()).hexdigest())}
+        self.commit_fixture('selected legal fixture')
+        subject = {'certifi': ('2026.10.19', filename, digest)}
+        with patch.object(self.builder, '_LEGAL_SUBJECTS', subject, create=True), \
+             patch.object(self.builder, '_LEGAL_PROVENANCE', provenance):
+            yield self.repo / relative
+
+    def commit_fixture(self, message):
+        subprocess.run(['git', 'add', '-f', '.'], cwd=self.repo, check=True)
+        subprocess.run(['git', 'commit', '-qm', message], cwd=self.repo, check=True)
+        self.head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.repo, text=True).strip()
+
+    def test_selected_legal_payload_is_retained_in_real_archive_and_manifest(self):
+        with self.selected_legal_fixture() as inputs:
+            result = self.build('legal')
+            verified = setup.verify_release(archive=Path(result['archive']), manifest=Path(result['manifest']),
+                archive_sha256=result['archive_sha256'], manifest_sha256=result['manifest_sha256'])
+            contents = {name: body for name, body, _ in verified.files}
+            self.assertIn('legal/sources/certifi-2026.10.19.tar.gz', contents)
+            snapshot = json.loads((inputs / 'certifi-2026.10.19-snapshot.json').read_text())
+            with tarfile.open(fileobj=io.BytesIO(contents['legal/sources/certifi-2026.10.19.tar.gz'])) as archive:
+                files = {member.name: member for member in archive}
+                self.assertEqual({member['original_path'] for member in snapshot['members']}, set(files))
+                for member in snapshot['members']:
+                    observed = files[member['original_path']]
+                    body = archive.extractfile(observed).read()
+                    self.assertEqual((inputs / 'vendor/certifi-2026.10.19' / member['path']).read_bytes(), body)
+                    self.assertEqual(member['mode'], observed.mode)
+                    self.assertEqual((0, 0, 0, '', ''),
+                                     (observed.mtime, observed.uid, observed.gid, observed.uname, observed.gname))
+            self.assertEqual((inputs / 'MPL-2.0.txt').read_bytes(), contents['legal/licenses/MPL-2.0.txt'])
+            self.assertEqual(b'original fixture notice\n',
+                             contents['site-packages/certifi-2026.10.19.dist-info/licenses/LICENSE'])
+            source_map = json.loads(contents['legal/source-map.json'])
+            self.assertEqual(['certifi'], [x['package'] for x in source_map['packages']])
+            self.assertFalse(any('psycopg' in name or 'GPL-3.0' in name for name in contents))
+            repeated = self.build('legal-repeat')
+            self.assertEqual(result['archive_sha256'], repeated['archive_sha256'])
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('legal')
+            self.assertEqual('OUTPUT_EXISTS', error.exception.code)
+
+    def test_changed_legal_source_or_unknown_subject_refuses_before_publication(self):
+        with self.selected_legal_fixture() as inputs:
+            archive = inputs / 'vendor/certifi-2026.10.19/certifi/core.py'
+            archive.write_bytes(archive.read_bytes() + b'changed')
+            self.commit_fixture('tampered source fixture')
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('tampered-legal')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('tampered-legal*')))
+            subject = dict(self.builder._LEGAL_SUBJECTS)
+            subject['certifi'] = ('different', *subject['certifi'][1:])
+            with patch.object(self.builder, '_LEGAL_SUBJECTS', subject):
+                with self.assertRaises(setup.InstallerError) as error:
+                    self.build('wrong-subject')
+            self.assertEqual('LEGAL_DEPENDENCY_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('wrong-subject*')))
+
+    def test_symlinked_legal_input_refuses_before_publication(self):
+        with self.selected_legal_fixture() as inputs:
+            source = inputs / 'MPL-2.0.txt'
+            target = self.base / 'external-license'
+            target.write_bytes(source.read_bytes())
+            source.unlink()
+            source.symlink_to(target)
+            self.commit_fixture('linked legal fixture')
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('linked-legal')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('linked-legal*')))
+
+    def test_source_delivery_distinguishes_repacked_container_from_original(self):
+        with self.selected_legal_fixture():
+            result = self.build('source-repack')
+            with zipfile.ZipFile(result['archive']) as archive:
+                source_map = json.loads(archive.read('legal/source-map.json'))
+                package = source_map['packages'][0]
+                self.assertIn('source_delivery', package)
+                delivered = archive.read('legal/sources/certifi-2026.10.19.tar.gz')
+                self.assertEqual(hashlib.sha256(delivered).hexdigest(), package['source_delivery']['sha256'])
+                self.assertNotEqual(package['source']['original_archive_sha256'], package['source_delivery']['sha256'])
+                self.assertEqual('canonical-repack-of-unchanged-source', package['source_delivery']['representation'])
+
+    def test_unlisted_snapshot_member_refuses_before_publication(self):
+        with self.selected_legal_fixture() as inputs:
+            extra = inputs / 'vendor/certifi-2026.10.19/unlisted.py'
+            extra.parent.mkdir(parents=True, exist_ok=True)
+            extra.write_text('UNLISTED = True\n')
+            self.commit_fixture('unexpected snapshot member')
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('extra-snapshot')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('extra-snapshot*')))
+
+    def test_snapshot_original_mode_and_missing_member_are_required(self):
+        with self.selected_legal_fixture() as inputs:
+            manifest = json.loads((inputs / 'certifi-2026.10.19-snapshot.json').read_text())
+            executable = next(member for member in manifest['members'] if member['mode'] == 0o755)
+            source = inputs / 'vendor/certifi-2026.10.19' / executable['path']
+            source.chmod(0o644)
+            self.commit_fixture('source executable mode changed')
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('mode-snapshot')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('mode-snapshot*')))
+            source.unlink()
+            self.commit_fixture('required source member missing')
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('missing-snapshot')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('missing-snapshot*')))
+
+    def test_snapshot_extra_empty_directory_and_source_symlink_refuse(self):
+        with self.selected_legal_fixture() as inputs:
+            extra = inputs / 'vendor/certifi-2026.10.19/extra-empty-directory'
+            extra.mkdir()
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('directory-snapshot')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('directory-snapshot*')))
+            extra.rmdir()
+            source = inputs / 'vendor/certifi-2026.10.19/certifi/core.py'
+            target = self.base / 'linked-source-body'
+            target.write_bytes(source.read_bytes())
+            source.unlink()
+            source.symlink_to(target)
+            self.commit_fixture('linked snapshot source member')
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('symlink-snapshot')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('symlink-snapshot*')))
+
+    def test_literal_upstream_cfg_whitespace_keeps_text_diffs_and_other_checks(self):
+        with self.selected_legal_fixture() as inputs:
+            result = subprocess.run(['git', 'diff', '--check', 'HEAD~', 'HEAD'], cwd=self.repo,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            prefix = '.getzilla/config/license-exception-inputs/factory-source-delivery-v1/'
+            for package in ('certifi-2026.10.19', 'psycopg-3.3.4'):
+                relative = prefix + 'vendor/' + package + '/setup.cfg'
+                manifest = json.loads((inputs / (package + '-snapshot.json')).read_text())
+                member = next(row for row in manifest['members'] if row['path'] == 'setup.cfg')
+                self.assertEqual(member['sha256'], hashlib.sha256((self.repo / relative).read_bytes()).hexdigest())
+                changed = subprocess.check_output(['git', 'diff', '--numstat', 'HEAD~', 'HEAD', '--', relative],
+                                                  cwd=self.repo, text=True)
+                self.assertRegex(changed, r'^\d+\t\d+\t')
+                attributes = subprocess.check_output(['git', 'check-attr', 'diff', '--', relative],
+                                                     cwd=self.repo, text=True)
+                self.assertIn(': diff: unspecified', attributes)
+            source = self.repo / 'factory/src/getzilla_factory/server.py'
+            source.write_text(source.read_text() + '# product whitespace remains checked  \n')
+            result = subprocess.run(['git', 'diff', '--check'], cwd=self.repo,
+                                    capture_output=True, text=True, check=False)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('trailing whitespace', result.stdout)
+
+    def test_missing_legal_text_refuses_before_publication(self):
+        with self.selected_legal_fixture() as inputs:
+            (inputs / 'MPL-2.0.txt').unlink()
+            self.commit_fixture('missing required text')
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('missing-legal')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('missing-legal*')))
+
+    def test_linked_legal_parent_and_duplicate_destination_refuse(self):
+        with self.selected_legal_fixture() as inputs:
+            files = self.builder._LEGAL_FILES['certifi']
+            with patch.object(self.builder, '_LEGAL_FILES', {'certifi': (files[0], files[0])}):
+                with self.assertRaises(setup.InstallerError) as error:
+                    self.build('collision-legal')
+            self.assertEqual('LEGAL_FILE_COLLISION', error.exception.code)
+            self.assertFalse(any(self.base.glob('collision-legal*')))
+            moved = inputs.with_name('retained-inputs')
+            inputs.rename(moved)
+            inputs.symlink_to(moved.name, target_is_directory=True)
+            self.commit_fixture('linked legal parent')
+            with self.assertRaises(setup.InstallerError) as error:
+                self.build('parent-legal')
+            self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
+            self.assertFalse(any(self.base.glob('parent-legal*')))
+
     def test_same_clean_head_and_wheels_produce_identical_self_verified_release(self):
         first = self.build("first")
         second = self.build("second")
@@ -138,6 +407,33 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         names = {name for name, _, _ in verified.files}
         self.assertIn("app/getzilla_factory/server.py", names)
         self.assertIn("site-packages/demo/__init__.py", names)
+        self.assertEqual({"legal/project/LICENSE"}, {name for name in names if name.startswith("legal/")})
+
+    def test_sqlite_catalog_is_complete_and_loads_from_offline_app_only(self):
+        import shutil
+        import sys
+        source = RUNTIME.parents[0] / 'src/getzilla_factory/landing_sqlite'
+        target = self.repo / 'factory/src/getzilla_factory/landing_sqlite'
+        shutil.copytree(source, target, ignore=shutil.ignore_patterns('__pycache__'))
+        self.commit_fixture('include checked SQLite runtime catalog')
+        result = self.build('sqlite-catalog')
+        extracted = self.base / 'sqlite-app'
+        with zipfile.ZipFile(result['archive']) as archive:
+            for original in source.rglob('*'):
+                if original.is_file() and original.suffix in ('.py', '.sql'):
+                    relative = original.relative_to(source).as_posix()
+                    name = 'app/getzilla_factory/landing_sqlite/' + relative
+                    self.assertEqual(archive.read(name), original.read_bytes())
+            archive.extractall(extracted)
+        script = self.base / 'read-offline-catalog.py'
+        script.write_text(
+            'import sys\n'
+            'sys.path.insert(0, sys.argv[1])\n'
+            'from getzilla_factory.landing_sqlite.migrations import discover_migrations\n'
+            'assert [m.version for m in discover_migrations()] == [1, 2, 3, 4]\n'
+        )
+        subprocess.run([sys.executable, '-I', '-B', str(script), str(extracted / 'app')],
+                       check=True, capture_output=True, text=True, timeout=10)
 
     def test_output_stem_with_dotted_version_is_preserved(self):
         result = self.build("factory-1.2.3")

@@ -1,6 +1,7 @@
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import json
 import os
 import threading
@@ -74,6 +75,16 @@ from factory.tests.test_execution_service import (
 )
 from factory.tests.test_postgres_integration import DATABASE_URL, NOW, OPERATOR, WORKER
 from factory.tests.postgres_fixture_reset import reset_fixture_tables
+
+
+def _pre_revision_is_killed(cursor, repositories):
+    """Historical claim consumer, only for constructing pre-026 fixture rows."""
+    scopes = ['global', *(f'repository:{item}' for item in repositories)]
+    cursor.execute(
+        'SELECT bool_or(enabled) FROM (SELECT DISTINCT ON (scope_key) scope_key,enabled '
+        'FROM factory.kill_switches WHERE scope_key=ANY(%s) '
+        'ORDER BY scope_key,created_at DESC,switch_id DESC) current', (scopes,))
+    return bool(cursor.fetchone()[0])
 
 
 class TrustedArtifactBroker:
@@ -519,17 +530,19 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
             "artifact": ["artifacts", "structured_output"],
         }[proposal_kind]
         selection = self.selection(capabilities=capabilities)
-        execution = FactoryService(
-            store, execution_registry=trusted_registry(selection)
-        ).claim_execution(
-            owner=WORKER.actor_id,
-            role=RunRole.WRITER,
-            repositories=(task.repository_id,),
-            lease_seconds=60,
-            selection=selection,
-            actor=WORKER,
-            now=NOW,
-        )
+        # Restore the current consumer before returning the store to upgrade tests.
+        with mock.patch.object(store, '_is_killed', side_effect=_pre_revision_is_killed):
+            execution = FactoryService(
+                store, execution_registry=trusted_registry(selection)
+            ).claim_execution(
+                owner=WORKER.actor_id,
+                role=RunRole.WRITER,
+                repositories=(task.repository_id,),
+                lease_seconds=60,
+                selection=selection,
+                actor=WORKER,
+                now=NOW,
+            )
         context = store.proposal_context(execution.lease, execution.packet_digest)
         event = CanonicalEvent.from_payload(
             task_id=execution.lease.task_id,
@@ -660,6 +673,69 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
             (list(names),),
         )
         return {row[0]: row[1:] for row in cursor.fetchall()}
+
+    def test_workflow_native_claim_concurrent_replay_and_stale_owner(self):
+        """Real native compile and SQL admission; fixture profiles remain test-only."""
+        from copy import deepcopy
+        from factory.tests.test_workflow_claim import NativeBoundaryTests
+        from getzilla_factory.workflow import NativeWorkflowBoundary, WorkflowRejected
+        fixture = NativeBoundaryTests()
+        fixture.setUp()
+        fixture.route['session_id'] = WORKER.actor_id
+        (fixture.root / '.getzilla/runtime/active-route.json').write_text(json.dumps(fixture.route))
+        self.addCleanup(fixture.doCleanups)
+        rows = []
+        descriptors = {node['source_id']: node for node in fixture.boundary.describe()['nodes']}
+        for index, row in enumerate(fixture.rows):
+            body = deepcopy(row[3])
+            body.pop('intent_digest')
+            body.pop('idempotency_key')
+            body['request_id'] = f'workflow-native-{index}'
+            body['source_digest'] = descriptors[body['source_id']]['source_digest']
+            body['m0_authority'] = valid_intake()['m0_authority']
+            body['m0_authority']['observed_at'] = NOW.isoformat()
+            task = self.service.intake(body, actor=OPERATOR, now=NOW).task
+            rows.append(task)
+        self.assertIsNone(self.service.claim(owner=WORKER.actor_id, role=RunRole.WRITER,
+            repositories=('owner/repository',), lease_seconds=60, actor=WORKER, now=NOW))
+        boundary = NativeWorkflowBoundary(fixture.root, 'owner/repository',
+            verify_authority=self.store._verify_m0_authority)
+        self.store.workflow_boundary = boundary
+        # Database locks and actual SKIP LOCKED claim run here, rather than a
+        # second in-memory queue or a fixture-written accepted result.
+        with boundary.locked(), self.store._transaction() as cursor:
+            candidate = boundary.candidate(cursor, 'a')
+        selection = self.selection(capabilities=['notes', 'structured_output'])
+        service = FactoryService(self.store, execution_registry=trusted_registry(selection))
+        def claim(key):
+            return service.claim_execution(owner=WORKER.actor_id, role=RunRole.WRITER,
+                repositories=('owner/repository',), lease_seconds=60, selection=selection,
+                actor=WORKER, now=NOW, idempotency_key=key, workflow_candidate=candidate)
+        # The route principal is part of the fixture and of every real claim.
+        self.assertEqual(WORKER.actor_id, fixture.route['session_id'])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            values = list(pool.map(claim, ('workflow-command-a', 'workflow-command-b')))
+        winners = [value for value in values if value is not None]
+        self.assertEqual(len(winners), 1)
+        winner_key = 'workflow-command-a' if values[0] is not None else 'workflow-command-b'
+        self.assertEqual(claim(winner_key), winners[0])
+        import psycopg
+        with psycopg.connect(DATABASE_URL) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT count(*) FROM factory.runs WHERE task_id=%s', (candidate.factory_task_id,))
+                self.assertEqual(cursor.fetchone()[0], 1)
+        self.assertEqual(self.service.release(winners[0].lease, outcome=FailureClass.WORKER_LOST,
+            actor=WORKER, now=NOW).value, 'retry')
+        retried = claim('workflow-defined-retry')
+        self.assertEqual(retried.lease.task_id, winners[0].lease.task_id)
+        self.assertNotEqual(retried.lease.run_id, winners[0].lease.run_id)
+        self.assertGreater(retried.lease.fence, winners[0].lease.fence)
+        with self.assertRaises(FenceError):
+            claim(winner_key)
+        fixture.route['session_id'] = 'handed-off-owner'
+        (fixture.root / '.getzilla/runtime/active-route.json').write_text(json.dumps(fixture.route))
+        with self.assertRaisesRegex(WorkflowRejected, 'owner'):
+            claim(winner_key)
 
     def submit(self, source: str):
         payload = valid_intake()
@@ -1878,7 +1954,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
                 )
             self.drop_disposable_database(database_url, admin_url)
 
-    def populate_prefix_semantic_lifecycle(self, database_url):
+    def populate_prefix_semantic_lifecycle(self, database_url, *, schema_version):
         import psycopg
         from psycopg import sql
         from psycopg.conninfo import make_conninfo
@@ -1912,10 +1988,13 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
             self.addCleanup(drop_login, login)
             setattr(fixture_owner, f"semantic_{capability}_url",
                     make_conninfo(database_url, user=login, password=password))
-        fixture = fixture_owner.semantic_repair_fixture(
-            namespace="prefix-semantic", source_id="prefix-semantic", result_head_sha="4" * 40,
-            database_url=database_url,
-        )
+        historical_claim = (mock.patch.object(fixture_owner.store, '_is_killed', side_effect=_pre_revision_is_killed)
+                            if schema_version < 26 else nullcontext())
+        with historical_claim:
+            fixture = fixture_owner.semantic_repair_fixture(
+                namespace="prefix-semantic", source_id="prefix-semantic", result_head_sha="4" * 40,
+                database_url=database_url,
+            )
         coordinator = PostgresSemanticCoordinatorStore(fixture_owner.semantic_coordinator_url)
         repair_request = fixture_owner.semantic_repair_request(fixture)
         repaired = coordinator.request_repair(
@@ -1958,7 +2037,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
         FactoryService(store, snapshot_broker=TrustedSnapshotBroker()).finalize_execution(
             execution.lease, packet_digest=execution.packet_digest, actor=WORKER,
         )
-        self.populate_prefix_semantic_lifecycle(database_url)
+        self.populate_prefix_semantic_lifecycle(database_url, schema_version=packaged[-2].version)
         before = self.current_prefix_snapshot(database_url)
         self.assertEqual(
             [row[:3] for row in before["ledger"]],
@@ -6152,11 +6231,20 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
     def setUpClass(cls):
         import psycopg
 
+        if os.environ.get('FACTORY_TEST_POSTGRES_JOURNAL'):
+            from factory.tests.postgres_restart_probe import _assert_disposable_target
+            _assert_disposable_target(
+                FRESH_CLUSTER_DATABASE_URL,
+                os.environ['FACTORY_FRESH_POSTGRES_CONTAINER'],
+                os.environ['FACTORY_FRESH_POSTGRES_CONTAINER_ID'],
+                os.environ['FACTORY_TEST_POSTGRES_NONCE'],
+            )
+
         migrations = discover_migrations()
-        if (len(migrations) != 25 or
-                [item.version for item in migrations] != list(range(1, 26)) or
+        if (len(migrations) != 30 or
+                [item.version for item in migrations] != list(range(1, 31)) or
                 migrations[14].name != "015_execution_canonical_persistence.sql"):
-            raise AssertionError("fresh-cluster test requires the complete current migration history 001..025")
+            raise AssertionError("fresh-cluster test requires the complete current migration history 001..030")
         with psycopg.connect(FRESH_CLUSTER_DATABASE_URL) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT to_regnamespace('factory'),to_regrole('factory_artifact_attestor')")

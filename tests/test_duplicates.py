@@ -1,6 +1,5 @@
 """Source-only duplicate scan and pinned updater contracts."""
 import json
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -183,17 +182,15 @@ class DuplicateTests(unittest.TestCase):
             self.assertEqual(result['status'], 'error')
             self.assertEqual(list(outside.iterdir()), [])
     def test_updater_installs_exact_pin_and_checks_version(self):
-        calls = []
-        def run(command, cwd):
-            calls.append(command)
-            return subprocess.CompletedProcess(command, 0, '4.0.5\n', '')
-        update = getattr(updater, 'update_jscpd', None)
-        self.assertIsNotNone(update, 'jscpd updater is missing')
-        result = update(run, {'npm': '/tools/npm', 'jscpd': '/tools/jscpd'}.get)
+        """Historical ID: exact current target replaces historical install pin."""
+        report = {'components': [dict(component='jscpd', status='complete', target='4.0.5', actual='4.0.5')]}
+        runner = mock.Mock(side_effect=AssertionError('no global npm'))
+        with mock.patch('getzilla.managed_software.install_software', return_value=report) as install:
+            result = updater.update_jscpd(runner, fetch=mock.sentinel.fetch)
         self.assertEqual(result[0].status, 'ok')
-        self.assertIn('jscpd@4.0.5', calls[0])
-        self.assertIn('--ignore-scripts', calls[0])
-        self.assertEqual(calls[1], ['/tools/jscpd', '--version'])
+        self.assertEqual(install.call_args.kwargs['tools'], ('jscpd',))
+        self.assertIs(install.call_args.kwargs['fetch'], mock.sentinel.fetch)
+        runner.assert_not_called()
 
     def test_scanner_exists(self):
         import importlib.util
@@ -223,17 +220,19 @@ class DuplicateTests(unittest.TestCase):
         self.assertIsNone(result['pairs'])
 
     def test_updater_rejects_wrong_version_and_missing_npm(self):
-        result = updater.update_jscpd(lambda argv, cwd: subprocess.CompletedProcess(argv, 0, '5.0.0', ''),
-                                      {'npm': 'npm', 'jscpd': 'jscpd'}.get)
+        """Historical ID: incompatible/missing current prerequisites remain incomplete."""
+        report = {'components': [dict(component='jscpd', status='incomplete', target='5.0.0', error='no old fallback')]}
+        with mock.patch('getzilla.managed_software.install_software', return_value=report):
+            result = updater.update_jscpd(mock.Mock(), fetch=mock.sentinel.fetch)
         self.assertEqual(result[0].status, 'fail')
-        self.assertEqual(updater.update_jscpd(mock.Mock(), lambda name: None)[0].status, 'skip')
+        self.assertIn('no old fallback', result[0].detail)
 
     def test_offline_selection_never_calls_npm(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = mock.Mock(side_effect=AssertionError('must stay offline'))
             result = updater.run_all(Path(temporary), run=run, components=('jscpd',),
                                      mirror=updater.Mirror(Path(temporary), {}, {}))
-        self.assertEqual([(item.component, item.status) for item in result], [('tool:jscpd', 'skip')])
+        self.assertEqual([(item.component, item.status) for item in result], [('tool:jscpd', 'skip'), ('freshness', 'fail')])
 
     def test_default_and_selective_updater_dispatch(self):
         with tempfile.TemporaryDirectory() as temporary, \

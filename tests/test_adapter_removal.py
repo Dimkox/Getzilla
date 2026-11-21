@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests._support import public_source_copy
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,30 +161,31 @@ finally:
                  + [(0o022, mode, 'ordinary', False) for mode in ('600', '640', '664', 'absent', 'symlink')]
                  + [(0o002, '644', 'linked', True), (0o022, '600', 'linked', False)]
                  if os.name == 'posix' else [(-1, '644', 'ordinary', True)])
-    for mask, index_kind, layout, success in scenarios:
-        with case.subTest(operation=operation, caller_mask=mask, index=index_kind, layout=layout):
-            options = {'umask': 0o022} if os.name == 'posix' else {}
-            completed = subprocess.run([sys.executable, '-B', '-c', program, str(ROOT), str(mask), operation,
-                                        index_kind, layout],
-                                       capture_output=True, text=True, timeout=90, **options)
-            case.assertEqual(completed.returncode, 0, completed.stderr)
-            result = json.loads(completed.stdout)
-            for name in ('retained_preserved', 'caller_mask_preserved', 'caller_state_unchanged', 'canary_exact'):
-                case.assertTrue(result[name], json.dumps({'failed_contract': name, **result}, sort_keys=True))
-            if success:
-                for name in ('operation_succeeded', 'head_moved', 'parent_is_original', 'expected_branch',
-                             'working_tree_clean', 'planned_modes_preserved', 'admin_modes_preserved'):
+    with public_source_copy(ROOT) as source_home:
+        for mask, index_kind, layout, success in scenarios:
+            with case.subTest(operation=operation, caller_mask=mask, index=index_kind, layout=layout):
+                options = {'umask': 0o022} if os.name == 'posix' else {}
+                completed = subprocess.run([sys.executable, '-B', '-c', program, str(source_home), str(mask), operation,
+                                            index_kind, layout],
+                                           capture_output=True, text=True, timeout=90, **options)
+                case.assertEqual(completed.returncode, 0, completed.stderr)
+                result = json.loads(completed.stdout)
+                for name in ('retained_preserved', 'caller_mask_preserved', 'caller_state_unchanged', 'canary_exact'):
                     case.assertTrue(result[name], json.dumps({'failed_contract': name, **result}, sort_keys=True))
-                case.assertEqual(result['commit_calls'], 1)
-                case.assertGreater(result['changed_present_count'], 0)
-                if operation == 'update':
-                    case.assertTrue(result['executable_mode_preserved'])
-            else:
-                case.assertFalse(result['operation_succeeded'], json.dumps(result, sort_keys=True))
-                case.assertTrue(result['unsupported_checkout_reason'], json.dumps(result, sort_keys=True))
-                case.assertEqual(result['commit_calls'], 0)
-                case.assertTrue(result['refusal_admin_exact'], json.dumps(result, sort_keys=True))
-                case.assertTrue(result['refusal_state_exact'], json.dumps(result, sort_keys=True))
+                if success:
+                    for name in ('operation_succeeded', 'head_moved', 'parent_is_original', 'expected_branch',
+                                 'working_tree_clean', 'planned_modes_preserved', 'admin_modes_preserved'):
+                        case.assertTrue(result[name], json.dumps({'failed_contract': name, **result}, sort_keys=True))
+                    case.assertEqual(result['commit_calls'], 1)
+                    case.assertGreater(result['changed_present_count'], 0)
+                    if operation == 'update':
+                        case.assertTrue(result['executable_mode_preserved'])
+                else:
+                    case.assertFalse(result['operation_succeeded'], json.dumps(result, sort_keys=True))
+                    case.assertTrue(result['unsupported_checkout_reason'], json.dumps(result, sort_keys=True))
+                    case.assertEqual(result['commit_calls'], 0)
+                    case.assertTrue(result['refusal_admin_exact'], json.dumps(result, sort_keys=True))
+                    case.assertTrue(result['refusal_state_exact'], json.dumps(result, sort_keys=True))
 
 
 class RemovalPlanTests(unittest.TestCase):
@@ -194,7 +196,8 @@ class RemovalPlanTests(unittest.TestCase):
         self.project.mkdir()
         self.selected = (*harnesses.HARNESSES, 'cursor')
         with BoundRoot(ROOT) as source:
-            self.outputs = harnesses._render(source, self.selected)
+            self.outputs = {path: harnesses.platform_hook_payload(path, content, source_launcher=False)
+                            for path, content in harnesses._render(source, self.selected).items()}
         self.manifest = {'schema_version': V2, 'agents': list(self.selected), 'components': {}}
         for path, content in self.outputs.items():
             self.put(path, content)

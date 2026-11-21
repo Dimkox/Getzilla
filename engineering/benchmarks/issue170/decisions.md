@@ -1,0 +1,1 @@
+Use a container mount view for Zero-Git input below a Git checkout. It preserved the installer Git-ancestor check and allowed real adoption without changing product code. Keep overload declarations in raw inventory, but classify them before interpreting duplicate rankings.

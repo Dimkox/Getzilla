@@ -41,6 +41,12 @@ def _run_cli_process(root: str, argv: list[str]) -> tuple[int, str]:
 
 
 class WorkflowArtifactsCliTests(unittest.TestCase):
+    def setUp(self):
+        # These are ordinary public legacy metadata fixtures, not writable
+        # shared files admitted as native private state.
+        previous = os.umask(0o022)
+        self.addCleanup(os.umask,previous)
+
     def _project(self, tmp: str) -> tuple[Path, str]:
         root = Path(tmp)
         change_id = "change"

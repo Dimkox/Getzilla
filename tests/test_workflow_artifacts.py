@@ -11,6 +11,8 @@ import unittest
 import unicodedata
 from pathlib import Path
 
+from factory.tests.workflow_fixture import workflow_root, write_manifest as _write_manifest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -21,13 +23,6 @@ def _load_module():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
-
-
-def _write_manifest(root: Path, sources: list[dict[str, str]]) -> Path:
-    path = root / ".getzilla/runtime/changes/change/workflow/manifest.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"schema_version": 1, "sources": sources}), encoding="utf-8")
-    return path
 
 
 class WorkflowSourceTests(unittest.TestCase):
@@ -228,28 +223,7 @@ class WorkflowCompileTests(unittest.TestCase):
         cls.artifacts = _load_module()
 
     def _root(self, tmp: str, docs: list[tuple[str, str, str, str]]) -> tuple[Path, object]:
-        root = Path(tmp)
-        entries = []
-        for source_type, role, path, content in docs:
-            target = root / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            entries.append({"source_type": source_type, "source_version": "1", "role": role, "path": path})
-        bundle = self.artifacts.load_source_manifest(root, _write_manifest(root, entries))
-        (root / ".getzilla/runtime/changes/change/change-spec.yaml").write_text(
-            json.dumps(
-                {
-                    "schema_version": 2,
-                    "change_id": "change",
-                    "objective": {"id": "OBJ-001", "statement": "native goal"},
-                    "acceptance_criteria": [{"id": "AC-001", "statement": "safe import"}],
-                    "invariants": [{"id": "INV-001", "statement": "native authority"}],
-                    "forbidden_outcomes": [{"id": "FORBID-001", "statement": "no elevation"}],
-                }
-            ),
-            encoding="utf-8",
-        )
-        return root, bundle
+        return workflow_root(self.artifacts, tmp, docs)
 
     def test_closed_adapters_map_only_advisory_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1088,6 +1062,8 @@ for prior in ('absent', 'none', 'loaded'):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / 'workflow_artifacts.py'
         path.write_bytes(original.read_bytes())
+        path.with_name('workflow_inputs.py').write_bytes(original.with_name('workflow_inputs.py').read_bytes())
+        path.with_name('workflow_storage.py').write_bytes(original.with_name('workflow_storage.py').read_bytes())
         path.with_name('fsx.py').write_text(
             "import sys\nassert sys.modules.get(__name__).__dict__ is globals()\n"
             "raise RuntimeError('public sibling import failure')\n",

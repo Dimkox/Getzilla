@@ -1,0 +1,9 @@
+{
+  "profile": "elf64-le-x86_64-v1",
+  "file_type": "shared-or-pie",
+  "needed": ["libc.so.6"],
+  "exports": ["public_add", "public_banner"],
+  "excluded_exports": ["probe_hidden"],
+  "target_execution": "never",
+  "behavior": "unknown"
+}

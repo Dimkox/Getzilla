@@ -54,6 +54,49 @@ def factory_builder():
     return sys.modules['build_offline_release']
 
 
+class NewOciTarFamilyTests(unittest.TestCase):
+    """NEW owned real-format artifact; no real Factory fixture/helper execution."""
+    def test_native_tar_preserves_complete_component_partition_and_missing_license_refuses(self):
+        from getzilla import security_artifacts as artifacts
+        from getzilla import security_oci_layout as layout
+        from tests.test_security_oci_layout import owned_image, tiny_tar
+        import os
+        objects, reference = owned_image()
+        validated = layout.validate_layout(objects, reference, 'linux/amd64')
+        raw = tiny_tar(objects)
+        base = Path(os.environ.get('GETZILLA_OCI_TEST_ROOT', str(ROOT / '.getzilla/runtime')))
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='new-oci-family-', dir=base) as temporary:
+            directory = Path(temporary)
+            subject = {'kind': 'oci-image', 'reference': reference, 'manifest': 'owned/compose.yaml',
+                       'line': 2, 'source_sha256': 'd' * 64, 'platform': 'linux/amd64',
+                       'usage': 'runtime', 'distribution': 'internal'}
+            files = [{'path': name, 'sha256': item['sha256'], 'bytes': item['size']}
+                     for name, item in validated['members'].items()]
+            proof = {'schema_version': 1, 'kind': 'artifact-component-inventory', 'artifact_sha256': sha(raw),
+                     'complete': True, 'unresolved': [], 'components': [{'id': 'owned', 'expression': 'MIT',
+                     'requires': [], 'files': files, 'license_paths': list(validated['files']), 'notice_paths': []}]}
+            body = json.dumps(proof).encode()
+            (directory / 'owned.tar').write_bytes(raw)
+            (directory / 'components.json').write_bytes(body)
+            record = {'schema_version': 1, 'kind': 'image', 'subject': subject, 'filename': 'owned.tar',
+                      'path': 'owned.tar', 'sha256': sha(raw), 'bytes': len(raw),
+                      'context': artifacts.artifact_context(subject), 'acquired_at': NOW.isoformat(),
+                      'origin': {'kind': 'oci-layout', 'manifest_digest': reference.rsplit('@', 1)[1]},
+                      'components': {'path': 'components.json', 'sha256': sha(body)}}
+            try:
+                evidence = artifacts.family_evidence(directory, record)
+            except artifacts.ArtifactError as exc:
+                self.fail('native OCI TAR consumer is missing: ' + str(exc))
+            self.assertEqual(set(evidence['members']), set(validated['members']))
+            proof['components'][0]['files'].pop()
+            body = json.dumps(proof).encode()
+            (directory / 'components.json').write_bytes(body)
+            record['components']['sha256'] = sha(body)
+            with self.assertRaises(artifacts.ArtifactError):
+                artifacts.family_evidence(directory, record)
+
+
 class ArtifactFixture(unittest.TestCase):
     def setUp(self):
         runtime = ROOT / '.getzilla/runtime'
@@ -131,6 +174,9 @@ class FactoryArchiveCustodyTests(ArtifactFixture):
         source = repo / 'factory/src/getzilla_factory/__init__.py'
         source.parent.mkdir(parents=True)
         source.write_text("__version__='1.0.0'\n")
+        # The real builder requires the exact committed project license.
+        (repo / 'LICENSE').write_bytes((ROOT / 'LICENSE').read_bytes())
+        (repo / 'LICENSE').chmod(0o644)
         filename = self.record['filename']
         lock = repo / 'factory/uv.lock'
         lock.write_text('version = 1\nrevision = 3\nrequires-python = ">=3.12,<3.13"\n'
@@ -161,6 +207,12 @@ class FactoryArchiveCustodyTests(ArtifactFixture):
                          'sidecar_path': 'release.sha256',
                          'components': [{'artifact_id': component_id(self.record), 'prefix': 'site-packages/'}]}
         self.save()
+
+    def test_project_license_needs_exact_approved_bytes_after_archive_rebinding(self):
+        self.prepare()
+        self.assertEqual(self.evaluate()['status'], 'pass')
+        self.rewrite_release(change='legal/project/LICENSE')
+        self.assertIn('license-obligation-missing', {gap['code'] for gap in self.evaluate()['gaps']})
 
     def test_explicit_synthetic_target_is_independent_of_the_test_host(self):
         builder = factory_builder()
@@ -281,10 +333,12 @@ class FactoryArchiveCustodyTests(ArtifactFixture):
                 with tempfile.TemporaryDirectory(dir=self.root) as temporary:
                     original = self.root
                     self.root = Path(temporary)
-                    self.prepare()
-                    self.rewrite_release(**{mutation: 'site-packages/example-1.0.0.dist-info/licenses/NOTICE'})
-                    self.assertEqual(self.evaluate()['status'], 'fail')
-                    self.root = original
+                    try:
+                        self.prepare()
+                        self.rewrite_release(**{mutation: 'site-packages/example-1.0.0.dist-info/licenses/NOTICE'})
+                        self.assertEqual(self.evaluate()['status'], 'fail')
+                    finally:
+                        self.root = original
 
     def test_absent_composition_wrong_digest_or_profile_and_detached_bytes_fail(self):
         self.prepare()

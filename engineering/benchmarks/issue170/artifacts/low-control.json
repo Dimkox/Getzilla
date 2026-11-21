@@ -1,0 +1,50 @@
+{
+  "a": "src/itsdangerous/encoding.py:28:base64_decode",
+  "b": "src/itsdangerous/timed.py:35:TimestampSigner.timestamp_to_datetime",
+  "cosine": 0.036763995885849,
+  "classification": "related_distinct",
+  "reason": "base64_decode accepts bytes/text, adds padding, calls urlsafe_b64decode and raises BadData on invalid input. timestamp_to_datetime accepts an integer timestamp and returns an aware UTC datetime through datetime.fromtimestamp. Types, contracts, errors and dependencies differ. Neither performs external writes. This is a low-similarity negative control, not evidence of global retrieval recall.",
+  "source_evidence": [
+    {
+      "id": "src/itsdangerous/encoding.py:28:base64_decode",
+      "path": "src/itsdangerous/encoding.py",
+      "qualified_name": "base64_decode",
+      "start": 28,
+      "end": 38,
+      "signature": "string: str | bytes",
+      "returns": "bytes",
+      "decorators": [],
+      "is_overload": false,
+      "source": "def base64_decode(string: str | bytes) -> bytes:\n    \"\"\"Base64 decode a URL-safe string of bytes or text. The result is\n    bytes.\n    \"\"\"\n    string = want_bytes(string, encoding=\"ascii\", errors=\"ignore\")\n    string += b\"=\" * (-len(string) % 4)\n\n    try:\n        return base64.urlsafe_b64decode(string)\n    except (TypeError, ValueError) as e:\n        raise BadData(\"Invalid base64-encoded data\") from e",
+      "sha256": "260068c30859f9affde7aa8bb913fa369f67165db4e485d35bafd65b6b50f024",
+      "calls": [
+        "BadData",
+        "base64.urlsafe_b64decode",
+        "len",
+        "want_bytes"
+      ],
+      "kind": "production"
+    },
+    {
+      "id": "src/itsdangerous/timed.py:35:TimestampSigner.timestamp_to_datetime",
+      "path": "src/itsdangerous/timed.py",
+      "qualified_name": "TimestampSigner.timestamp_to_datetime",
+      "start": 35,
+      "end": 43,
+      "signature": "self, ts: int",
+      "returns": "datetime",
+      "decorators": [],
+      "is_overload": false,
+      "source": "    def timestamp_to_datetime(self, ts: int) -> datetime:\n        \"\"\"Convert the timestamp from :meth:`get_timestamp` into an\n        aware :class`datetime.datetime` in UTC.\n\n        .. versionchanged:: 2.0\n            The timestamp is returned as a timezone-aware ``datetime``\n            in UTC rather than a naive ``datetime`` assumed to be UTC.\n        \"\"\"\n        return datetime.fromtimestamp(ts, tz=timezone.utc)",
+      "sha256": "4e1a9fc0d2718ed34aadf348348d393aadefa4b7200e06a124c5910657cdfe92",
+      "calls": [
+        "datetime.fromtimestamp"
+      ],
+      "kind": "production"
+    }
+  ],
+  "test_references": [
+    "test_encoding.py",
+    "test_timed.py:TestTimestampSigner.test_return_timestamp"
+  ]
+}

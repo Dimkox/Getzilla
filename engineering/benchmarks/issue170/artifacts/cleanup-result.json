@@ -1,0 +1,26 @@
+{
+  "owned_directories_removed": [
+    "work",
+    "model",
+    "core",
+    "downloads",
+    "original"
+  ],
+  "owned_image_tags_removed": [
+    "getzilla-issue170:20261023",
+    "getzilla-issue170-tests:20261023"
+  ],
+  "shared_cache_pruned": false,
+  "post_cleanup_image_checks": {
+    "getzilla-issue170:20261023": {
+      "absent": true,
+      "exit_code": 1,
+      "stderr": "Error response from daemon: No such image: getzilla-issue170:20261023"
+    },
+    "getzilla-issue170-tests:20261023": {
+      "absent": true,
+      "exit_code": 1,
+      "stderr": "Error response from daemon: No such image: getzilla-issue170-tests:20261023"
+    }
+  }
+}

@@ -1,0 +1,3130 @@
+{
+  "assurance": "publisher-declared-source-association-and-exact-retained-notices",
+  "cryptographic_compilation_verified": false,
+  "kind": "getzilla-private-research-image-source-conditions/v1",
+  "manifest_sha256": "7f205d7cf800d4e045305344eab3ebbee4b177005912613f74110412807c926f",
+  "native_sdk_closure_complete": false,
+  "packages": [
+    {
+      "architecture": "all",
+      "declared_source_package": "adduser",
+      "name": "adduser",
+      "notices": [
+        {
+          "bytes": 12432,
+          "path": "usr/share/doc/adduser/copyright",
+          "retained_key": "retained/b143053a4862ab354831487b5f8bd31dc9ffdc589d15de9d9c764332a0209796",
+          "sha256": "b143053a4862ab354831487b5f8bd31dc9ffdc589d15de9d9c764332a0209796"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "3.134"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "apt",
+      "name": "apt",
+      "notices": [
+        {
+          "bytes": 7668,
+          "path": "usr/share/doc/apt/copyright",
+          "retained_key": "retained/b4701305243d8d746f4acaafe15d94f946251b05691bd6917fef41dd15e9ee12",
+          "sha256": "b4701305243d8d746f4acaafe15d94f946251b05691bd6917fef41dd15e9ee12"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "2.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "base-files",
+      "name": "base-files",
+      "notices": [
+        {
+          "bytes": 1208,
+          "path": "usr/share/doc/base-files/copyright",
+          "retained_key": "retained/fd7e4aae7e7b05f217bcf2d02322825c360e66c52c4c2f1b28d784d6297a1c23",
+          "sha256": "fd7e4aae7e7b05f217bcf2d02322825c360e66c52c4c2f1b28d784d6297a1c23"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "12.4+deb12u15"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "base-passwd",
+      "name": "base-passwd",
+      "notices": [
+        {
+          "bytes": 798,
+          "path": "usr/share/doc/base-passwd/copyright",
+          "retained_key": "retained/0f1cde79bd80a75f9029ae9a8c252b642223027ef36f6989c63a8230aae576a7",
+          "sha256": "0f1cde79bd80a75f9029ae9a8c252b642223027ef36f6989c63a8230aae576a7"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "3.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "bash (5.2.15-2)",
+      "name": "bash",
+      "notices": [
+        {
+          "bytes": 9764,
+          "path": "usr/share/doc/bash/copyright",
+          "retained_key": "retained/06319d84c3e5ed096036f6a9310a030c7e84e50dff2b8a6792285c83ec0ada73",
+          "sha256": "06319d84c3e5ed096036f6a9310a030c7e84e50dff2b8a6792285c83ec0ada73"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "5.2.15-2+b13"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "util-linux (2.38.1-5+deb12u3)",
+      "name": "bsdutils",
+      "notices": [
+        {
+          "bytes": 23237,
+          "path": "usr/share/doc/bsdutils/copyright",
+          "retained_key": "retained/30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+          "sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "1:2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "ca-certificates",
+      "name": "ca-certificates",
+      "notices": [
+        {
+          "bytes": 18940,
+          "path": "usr/share/doc/ca-certificates/copyright",
+          "retained_key": "retained/e85e1bcad3a915dc7e6f41412bc5bdeba275cadd817896ea0451f2140a93967c",
+          "sha256": "e85e1bcad3a915dc7e6f41412bc5bdeba275cadd817896ea0451f2140a93967c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "20250419~deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "coreutils",
+      "name": "coreutils",
+      "notices": [
+        {
+          "bytes": 5552,
+          "path": "usr/share/doc/coreutils/copyright",
+          "retained_key": "retained/24e86c5ca53d6bfd8e0c47988160daa62d10a74997fe11f651e1d9533c78bff6",
+          "sha256": "24e86c5ca53d6bfd8e0c47988160daa62d10a74997fe11f651e1d9533c78bff6"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "9.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "dash",
+      "name": "dash",
+      "notices": [
+        {
+          "bytes": 3878,
+          "path": "usr/share/doc/dash/copyright",
+          "retained_key": "retained/d98c53f281321baad38164aa9ae6e368a9253be6ec51bd26a759b5e72b326f4a",
+          "sha256": "d98c53f281321baad38164aa9ae6e368a9253be6ec51bd26a759b5e72b326f4a"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "0.5.12-2"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "debconf",
+      "name": "debconf",
+      "notices": [
+        {
+          "bytes": 2764,
+          "path": "usr/share/doc/debconf/copyright",
+          "retained_key": "retained/57163c71bd8a5289660892827dd0dfaa7fef47f89deedc9dc6711ced7d0a28d7",
+          "sha256": "57163c71bd8a5289660892827dd0dfaa7fef47f89deedc9dc6711ced7d0a28d7"
+        }
+      ],
+      "version": "1.5.82"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "debian-archive-keyring",
+      "name": "debian-archive-keyring",
+      "notices": [
+        {
+          "bytes": 1243,
+          "path": "usr/share/doc/debian-archive-keyring/copyright",
+          "retained_key": "retained/b32aecaae84643700a33bc9ee83fa9b36938d35aa7b61b5042092eca77ddb732",
+          "sha256": "b32aecaae84643700a33bc9ee83fa9b36938d35aa7b61b5042092eca77ddb732"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "2023.3+deb12u2\n /etc/apt/trusted.gpg.d/debian-archive-bookworm-automatic.asc 55eec060916a9d4a0db7560ab4d7bdce\n /etc/apt/trusted.gpg.d/debian-archive-bookworm-security-automatic.asc bec0a1224f667bcd1e231b874db9bc4f\n /etc/apt/trusted.gpg.d/debian-archive-bookworm-stable.asc fac2ec9faba2c2d82c70a6e2805c5b79\n /etc/apt/trusted.gpg.d/debian-archive-bullseye-automatic.asc 1f30ce1ba8532d523017acb1a69c106a\n /etc/apt/trusted.gpg.d/debian-archive-bullseye-security-automatic.asc 9fbe7b0d8ebb38e240aeec6b0830ac7b\n /etc/apt/trusted.gpg.d/debian-archive-bullseye-stable.asc 85a4c0e5c747a38509b33562d4c950be\n /etc/apt/trusted.gpg.d/debian-archive-trixie-automatic.asc 556202307f6f23e343c1ba12790507be\n /etc/apt/trusted.gpg.d/debian-archive-trixie-security-automatic.asc f421db9e00d9a98c66c396b2a210f52c\n /etc/apt/trusted.gpg.d/debian-archive-trixie-stable.asc 91c5c0b4f6878239622087c64866c909"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "debianutils",
+      "name": "debianutils",
+      "notices": [
+        {
+          "bytes": 9055,
+          "path": "usr/share/doc/debianutils/copyright",
+          "retained_key": "retained/fd2d797e208bcfb713510e47a89867191180943e1167d44c2acd8ff1b88e5c10",
+          "sha256": "fd2d797e208bcfb713510e47a89867191180943e1167d44c2acd8ff1b88e5c10"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "5.7-0.5~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "diffutils",
+      "name": "diffutils",
+      "notices": [
+        {
+          "bytes": 16112,
+          "path": "usr/share/doc/diffutils/copyright",
+          "retained_key": "retained/8654d7cc7cdae1f31bb67a3ce5bf35d512c0bdfffd071df757edc54153cc7930",
+          "sha256": "8654d7cc7cdae1f31bb67a3ce5bf35d512c0bdfffd071df757edc54153cc7930"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "1:3.8-4"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "dpkg",
+      "name": "dpkg",
+      "notices": [
+        {
+          "bytes": 7943,
+          "path": "usr/share/doc/dpkg/copyright",
+          "retained_key": "retained/7442bdadcd44e818fddd786057db07639cc68225c389c7c240d3bb3984b05173",
+          "sha256": "7442bdadcd44e818fddd786057db07639cc68225c389c7c240d3bb3984b05173"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.21.23"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "e2fsprogs (1.47.0-2)",
+      "name": "e2fsprogs",
+      "notices": [
+        {
+          "bytes": 15209,
+          "path": "usr/share/doc/e2fsprogs/copyright",
+          "retained_key": "retained/1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+          "sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "findutils",
+      "name": "findutils",
+      "notices": [
+        {
+          "bytes": 24782,
+          "path": "usr/share/doc/findutils/copyright",
+          "retained_key": "retained/8fbcc77ed31f480a85654e9b6d1d25cbb95b62e9dc5159ae1565bca684c3e1dc",
+          "sha256": "8fbcc77ed31f480a85654e9b6d1d25cbb95b62e9dc5159ae1565bca684c3e1dc"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "4.9.0-4"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "gcc-12",
+      "name": "gcc-12-base",
+      "notices": [
+        {
+          "bytes": 68194,
+          "path": "usr/share/doc/gcc-12-base/copyright",
+          "retained_key": "retained/da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+          "sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3"
+        },
+        {
+          "bytes": 6111,
+          "path": "usr/share/common-licenses/Artistic",
+          "retained_key": "retained/b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88",
+          "sha256": "b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88"
+        },
+        {
+          "bytes": 20432,
+          "path": "usr/share/common-licenses/GFDL-1.2",
+          "retained_key": "retained/d8e94ae5fdb5433fcae2961aeb1a8cf17174d6f4a0465d24bf37dd8a038bd439",
+          "sha256": "d8e94ae5fdb5433fcae2961aeb1a8cf17174d6f4a0465d24bf37dd8a038bd439"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "gnupg2",
+      "name": "gpgv",
+      "notices": [
+        {
+          "bytes": 10555,
+          "path": "usr/share/doc/gpgv/copyright",
+          "retained_key": "retained/84dab06b5c1baf3a7a45c3cdc5f98fb121234e98fdd6266c3f773d54fcdc4f54",
+          "sha256": "84dab06b5c1baf3a7a45c3cdc5f98fb121234e98fdd6266c3f773d54fcdc4f54"
+        },
+        {
+          "bytes": 7048,
+          "path": "usr/share/common-licenses/CC0-1.0",
+          "retained_key": "retained/a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.2.40-1.1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "grep",
+      "name": "grep",
+      "notices": [
+        {
+          "bytes": 1807,
+          "path": "usr/share/doc/grep/copyright",
+          "retained_key": "retained/42d9b4d610396b1e8d1303dcb9487af3f5a2d2709623cf03a04cf76acdf6c5e3",
+          "sha256": "42d9b4d610396b1e8d1303dcb9487af3f5a2d2709623cf03a04cf76acdf6c5e3"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "3.8-5"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "gzip",
+      "name": "gzip",
+      "notices": [
+        {
+          "bytes": 2895,
+          "path": "usr/share/doc/gzip/copyright",
+          "retained_key": "retained/1ca5dd5098fe2e1c0f0d05196f5b3da8b414a807702e6ca8b536eb5fd3059130",
+          "sha256": "1ca5dd5098fe2e1c0f0d05196f5b3da8b414a807702e6ca8b536eb5fd3059130"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "1.12-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "hostname",
+      "name": "hostname",
+      "notices": [
+        {
+          "bytes": 1273,
+          "path": "usr/share/doc/hostname/copyright",
+          "retained_key": "retained/94189fc5a9a7b7224d96e1a0cfdfe9be0df2018b04bf21d591627ab96b30cad1",
+          "sha256": "94189fc5a9a7b7224d96e1a0cfdfe9be0df2018b04bf21d591627ab96b30cad1"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "3.23+nmu1"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "init-system-helpers",
+      "name": "init-system-helpers",
+      "notices": [
+        {
+          "bytes": 3133,
+          "path": "usr/share/doc/init-system-helpers/copyright",
+          "retained_key": "retained/7534601cc4fa513804d16490359f5831e7b6a1212da3bbf948bebdd4c8799783",
+          "sha256": "7534601cc4fa513804d16490359f5831e7b6a1212da3bbf948bebdd4c8799783"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.65.2+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "acl",
+      "name": "libacl1",
+      "notices": [
+        {
+          "bytes": 2048,
+          "path": "usr/share/doc/libacl1/copyright",
+          "retained_key": "retained/9a2dfb4a5abc7e84be2cc41f1089be665519c9409549296f6c19de57ab1d37c2",
+          "sha256": "9a2dfb4a5abc7e84be2cc41f1089be665519c9409549296f6c19de57ab1d37c2"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "2.3.1-3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "apt",
+      "name": "libapt-pkg6.0",
+      "notices": [
+        {
+          "bytes": 7668,
+          "path": "usr/share/doc/libapt-pkg6.0/copyright",
+          "retained_key": "retained/b4701305243d8d746f4acaafe15d94f946251b05691bd6917fef41dd15e9ee12",
+          "sha256": "b4701305243d8d746f4acaafe15d94f946251b05691bd6917fef41dd15e9ee12"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "2.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "attr",
+      "name": "libattr1",
+      "notices": [
+        {
+          "bytes": 1947,
+          "path": "usr/share/doc/libattr1/copyright",
+          "retained_key": "retained/0cbec745d85ea775450b2d54fac55277197f429e52d611f72852ed420450620e",
+          "sha256": "0cbec745d85ea775450b2d54fac55277197f429e52d611f72852ed420450620e"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "1:2.5.1-4"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "audit",
+      "name": "libaudit-common",
+      "notices": [
+        {
+          "bytes": 1596,
+          "path": "usr/share/doc/libaudit-common/copyright",
+          "retained_key": "retained/6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc",
+          "sha256": "6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc"
+        },
+        {
+          "bytes": 12632,
+          "path": "usr/share/common-licenses/GPL-1",
+          "retained_key": "retained/d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912",
+          "sha256": "d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "1:3.0.9-1\n /etc/libaudit.conf cdc703f9d27f0d980271a9e95d0f18b2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "audit",
+      "name": "libaudit1",
+      "notices": [
+        {
+          "bytes": 1596,
+          "path": "usr/share/doc/libaudit1/copyright",
+          "retained_key": "retained/6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc",
+          "sha256": "6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc"
+        },
+        {
+          "bytes": 12632,
+          "path": "usr/share/common-licenses/GPL-1",
+          "retained_key": "retained/d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912",
+          "sha256": "d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "1:3.0.9-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "util-linux",
+      "name": "libblkid1",
+      "notices": [
+        {
+          "bytes": 23237,
+          "path": "usr/share/doc/libblkid1/copyright",
+          "retained_key": "retained/30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+          "sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "bzip2 (1.0.8-5)",
+      "name": "libbz2-1.0",
+      "notices": [
+        {
+          "bytes": 2228,
+          "path": "usr/share/doc/libbz2-1.0/copyright",
+          "retained_key": "retained/832ed535ff3c3d025a8d2348eb1b697b89addcf2eaadbc17650262040b9145e2",
+          "sha256": "832ed535ff3c3d025a8d2348eb1b697b89addcf2eaadbc17650262040b9145e2"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.0.8-5+b1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "glibc",
+      "name": "libc-bin",
+      "notices": [
+        {
+          "bytes": 25467,
+          "path": "usr/share/doc/libc-bin/copyright",
+          "retained_key": "retained/40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987",
+          "sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "glibc",
+      "name": "libc6",
+      "notices": [
+        {
+          "bytes": 25467,
+          "path": "usr/share/doc/libc6/copyright",
+          "retained_key": "retained/40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987",
+          "sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libcap-ng (0.8.3-1)",
+      "name": "libcap-ng0",
+      "notices": [
+        {
+          "bytes": 2035,
+          "path": "usr/share/doc/libcap-ng0/copyright",
+          "retained_key": "retained/49b5db19990a3e3cc1a9ed716aed231f6f3c1c217e58f62ae4dc2818c6d3e9cc",
+          "sha256": "49b5db19990a3e3cc1a9ed716aed231f6f3c1c217e58f62ae4dc2818c6d3e9cc"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "0.8.3-1+b3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libcap2 (1:2.66-4+deb12u3)",
+      "name": "libcap2",
+      "notices": [
+        {
+          "bytes": 4631,
+          "path": "usr/share/doc/libcap2/copyright",
+          "retained_key": "retained/e60a5642e12e340060e4e519a65b2eb0330be2917854841c644e36268f607d54",
+          "sha256": "e60a5642e12e340060e4e519a65b2eb0330be2917854841c644e36268f607d54"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1:2.66-4+deb12u3+b1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "e2fsprogs (1.47.0-2)",
+      "name": "libcom-err2",
+      "notices": [
+        {
+          "bytes": 15209,
+          "path": "usr/share/doc/libcom-err2/copyright",
+          "retained_key": "retained/1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+          "sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libxcrypt",
+      "name": "libcrypt1",
+      "notices": [
+        {
+          "bytes": 6010,
+          "path": "usr/share/doc/libcrypt1/copyright",
+          "retained_key": "retained/5a5e7ca0e9f3f9679977e3a3e9ede45ad92885a3297ea78e766979f9866c5a16",
+          "sha256": "5a5e7ca0e9f3f9679977e3a3e9ede45ad92885a3297ea78e766979f9866c5a16"
+        }
+      ],
+      "version": "1:4.4.33-2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "db5.3",
+      "name": "libdb5.3",
+      "notices": [
+        {
+          "bytes": 17177,
+          "path": "usr/share/doc/libdb5.3/copyright",
+          "retained_key": "retained/8b53da37d73289d9df7317b3a2dbe16491f1fa9fec8b77b86d69704b40ce2c26",
+          "sha256": "8b53da37d73289d9df7317b3a2dbe16491f1fa9fec8b77b86d69704b40ce2c26"
+        },
+        {
+          "bytes": 6111,
+          "path": "usr/share/common-licenses/Artistic",
+          "retained_key": "retained/b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88",
+          "sha256": "b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "5.3.28+dfsg2-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "cdebconf",
+      "name": "libdebconfclient0",
+      "notices": [
+        {
+          "bytes": 5856,
+          "path": "usr/share/doc/libdebconfclient0/copyright",
+          "retained_key": "retained/cf63099896d1c0f6529c41b8d95738e6fea342ffba609187d339c4f38ce36ecc",
+          "sha256": "cf63099896d1c0f6529c41b8d95738e6fea342ffba609187d339c4f38ce36ecc"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "0.270"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "e2fsprogs (1.47.0-2)",
+      "name": "libext2fs2",
+      "notices": [
+        {
+          "bytes": 15209,
+          "path": "usr/share/doc/libext2fs2/copyright",
+          "retained_key": "retained/1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+          "sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libffi",
+      "name": "libffi8",
+      "notices": [
+        {
+          "bytes": 10165,
+          "path": "usr/share/doc/libffi8/copyright",
+          "retained_key": "retained/f83d2ecba1ea4d99957e81c50bebbd076a128194288a3ec22cc8ccdb77c43087",
+          "sha256": "f83d2ecba1ea4d99957e81c50bebbd076a128194288a3ec22cc8ccdb77c43087"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "3.4.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "gcc-12",
+      "name": "libgcc-s1",
+      "notices": [
+        {
+          "bytes": 68194,
+          "path": "usr/share/doc/gcc-12-base/copyright",
+          "retained_key": "retained/da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+          "sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3"
+        },
+        {
+          "bytes": 6111,
+          "path": "usr/share/common-licenses/Artistic",
+          "retained_key": "retained/b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88",
+          "sha256": "b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88"
+        },
+        {
+          "bytes": 20432,
+          "path": "usr/share/common-licenses/GFDL-1.2",
+          "retained_key": "retained/d8e94ae5fdb5433fcae2961aeb1a8cf17174d6f4a0465d24bf37dd8a038bd439",
+          "sha256": "d8e94ae5fdb5433fcae2961aeb1a8cf17174d6f4a0465d24bf37dd8a038bd439"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libgcrypt20",
+      "name": "libgcrypt20",
+      "notices": [
+        {
+          "bytes": 24896,
+          "path": "usr/share/doc/libgcrypt20/copyright",
+          "retained_key": "retained/95db2f9da663f2bfe2aabe9c72fce9d6c9ae767b912f397d7823f50bd55a1a7d",
+          "sha256": "95db2f9da663f2bfe2aabe9c72fce9d6c9ae767b912f397d7823f50bd55a1a7d"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "1.10.1-3+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "gdbm",
+      "name": "libgdbm6",
+      "notices": [
+        {
+          "bytes": 2701,
+          "path": "usr/share/doc/libgdbm6/copyright",
+          "retained_key": "retained/8bea8cf2f94cd8b37a0b8b3a2b974122b9194c1165e6ad508e366c74679e8817",
+          "sha256": "8bea8cf2f94cd8b37a0b8b3a2b974122b9194c1165e6ad508e366c74679e8817"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "1.23-3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "gmp",
+      "name": "libgmp10",
+      "notices": [
+        {
+          "bytes": 4153,
+          "path": "usr/share/doc/libgmp10/copyright",
+          "retained_key": "retained/7d366aef5ba325150246de1d7820c4c9926cd27ca61a69948492b26cd3b61601",
+          "sha256": "7d366aef5ba325150246de1d7820c4c9926cd27ca61a69948492b26cd3b61601"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2:6.2.1+dfsg1-1.1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "gnutls28",
+      "name": "libgnutls30",
+      "notices": [
+        {
+          "bytes": 51588,
+          "path": "usr/share/doc/libgnutls30/copyright",
+          "retained_key": "retained/bb7e5c24b3e27bbba5671dd710d159a0066833bda4caa1d55d8027ffed539337",
+          "sha256": "bb7e5c24b3e27bbba5671dd710d159a0066833bda4caa1d55d8027ffed539337"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "3.7.9-2+deb12u7"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libgpg-error",
+      "name": "libgpg-error0",
+      "notices": [
+        {
+          "bytes": 4903,
+          "path": "usr/share/doc/libgpg-error0/copyright",
+          "retained_key": "retained/8760fd36efa1d7186f8769d4e76a3e678045b94d54465bf6f2db5eb871c7c27f",
+          "sha256": "8760fd36efa1d7186f8769d4e76a3e678045b94d54465bf6f2db5eb871c7c27f"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "1.46-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "krb5",
+      "name": "libgssapi-krb5-2",
+      "notices": [
+        {
+          "bytes": 63047,
+          "path": "usr/share/doc/libgssapi-krb5-2/copyright",
+          "retained_key": "retained/936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+          "sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "nettle",
+      "name": "libhogweed6",
+      "notices": [
+        {
+          "bytes": 24923,
+          "path": "usr/share/doc/libhogweed6/copyright",
+          "retained_key": "retained/ca2ca597320220c00ef6dc0fe5d0d82025548d6d4ba80e85615eb691f9021f93",
+          "sha256": "ca2ca597320220c00ef6dc0fe5d0d82025548d6d4ba80e85615eb691f9021f93"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "3.8.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libidn2 (2.3.3-1)",
+      "name": "libidn2-0",
+      "notices": [
+        {
+          "bytes": 5348,
+          "path": "usr/share/doc/libidn2-0/copyright",
+          "retained_key": "retained/41702469f28e8ff406345e3d1dd0c741f11bdfca319264f67036efd6aaa79e4b",
+          "sha256": "41702469f28e8ff406345e3d1dd0c741f11bdfca319264f67036efd6aaa79e4b"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.3.3-1+b1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "krb5",
+      "name": "libk5crypto3",
+      "notices": [
+        {
+          "bytes": 63047,
+          "path": "usr/share/doc/libk5crypto3/copyright",
+          "retained_key": "retained/936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+          "sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "keyutils",
+      "name": "libkeyutils1",
+      "notices": [
+        {
+          "bytes": 2104,
+          "path": "usr/share/doc/libkeyutils1/copyright",
+          "retained_key": "retained/c62fe37d22203046611112bc10a9e03a39a7f73bec1b061e7c615326166d9ff5",
+          "sha256": "c62fe37d22203046611112bc10a9e03a39a7f73bec1b061e7c615326166d9ff5"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.6.3-2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "krb5",
+      "name": "libkrb5-3",
+      "notices": [
+        {
+          "bytes": 63047,
+          "path": "usr/share/doc/libkrb5-3/copyright",
+          "retained_key": "retained/936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+          "sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "krb5",
+      "name": "libkrb5support0",
+      "notices": [
+        {
+          "bytes": 63047,
+          "path": "usr/share/doc/libkrb5support0/copyright",
+          "retained_key": "retained/936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+          "sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "lz4",
+      "name": "liblz4-1",
+      "notices": [
+        {
+          "bytes": 3275,
+          "path": "usr/share/doc/liblz4-1/copyright",
+          "retained_key": "retained/d3be0f43fe14da244f97c451bbae789c0acf868612598a69f5f22a289abeca40",
+          "sha256": "d3be0f43fe14da244f97c451bbae789c0acf868612598a69f5f22a289abeca40"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.9.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "xz-utils",
+      "name": "liblzma5",
+      "notices": [
+        {
+          "bytes": 15465,
+          "path": "usr/share/doc/liblzma5/copyright",
+          "retained_key": "retained/a2dc8fac0f496e1c58aff67018cf0c6b88336316afa5642f9335b71642e28aa8",
+          "sha256": "a2dc8fac0f496e1c58aff67018cf0c6b88336316afa5642f9335b71642e28aa8"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "5.4.1-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libmd",
+      "name": "libmd0",
+      "notices": [
+        {
+          "bytes": 8018,
+          "path": "usr/share/doc/libmd0/copyright",
+          "retained_key": "retained/4365ef6255ad553fce69dd4bc0e093472c5d0e41b8ea493a545cc926ce171aa6",
+          "sha256": "4365ef6255ad553fce69dd4bc0e093472c5d0e41b8ea493a545cc926ce171aa6"
+        }
+      ],
+      "version": "1.0.4-2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "util-linux",
+      "name": "libmount1",
+      "notices": [
+        {
+          "bytes": 23237,
+          "path": "usr/share/doc/libmount1/copyright",
+          "retained_key": "retained/30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+          "sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "ncurses",
+      "name": "libncursesw6",
+      "notices": [
+        {
+          "bytes": 4670,
+          "path": "usr/share/doc/libtinfo6/copyright",
+          "retained_key": "retained/f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+          "sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e"
+        }
+      ],
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "nettle",
+      "name": "libnettle8",
+      "notices": [
+        {
+          "bytes": 24923,
+          "path": "usr/share/doc/libnettle8/copyright",
+          "retained_key": "retained/ca2ca597320220c00ef6dc0fe5d0d82025548d6d4ba80e85615eb691f9021f93",
+          "sha256": "ca2ca597320220c00ef6dc0fe5d0d82025548d6d4ba80e85615eb691f9021f93"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "3.8.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libnsl",
+      "name": "libnsl2",
+      "notices": [
+        {
+          "bytes": 13646,
+          "path": "usr/share/doc/libnsl2/copyright",
+          "retained_key": "retained/7d9c79b73fd956319a90cd210441498b225e00960352c4c6d447436481bb0eec",
+          "sha256": "7d9c79b73fd956319a90cd210441498b225e00960352c4c6d447436481bb0eec"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "1.3.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "p11-kit",
+      "name": "libp11-kit0",
+      "notices": [
+        {
+          "bytes": 8646,
+          "path": "usr/share/doc/libp11-kit0/copyright",
+          "retained_key": "retained/ed139379f7c874f0ee75f3ddcc2e01091dd828d84ee1a0bdff6a1c5673ee6e58",
+          "sha256": "ed139379f7c874f0ee75f3ddcc2e01091dd828d84ee1a0bdff6a1c5673ee6e58"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "0.24.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "pam",
+      "name": "libpam-modules",
+      "notices": [
+        {
+          "bytes": 9477,
+          "path": "usr/share/doc/libpam-modules/copyright",
+          "retained_key": "retained/9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+          "sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.5.2-6+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "pam",
+      "name": "libpam-modules-bin",
+      "notices": [
+        {
+          "bytes": 9477,
+          "path": "usr/share/doc/libpam-modules-bin/copyright",
+          "retained_key": "retained/9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+          "sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.5.2-6+deb12u2"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "pam",
+      "name": "libpam-runtime",
+      "notices": [
+        {
+          "bytes": 9477,
+          "path": "usr/share/doc/libpam-runtime/copyright",
+          "retained_key": "retained/9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+          "sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.5.2-6+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "pam",
+      "name": "libpam0g",
+      "notices": [
+        {
+          "bytes": 9477,
+          "path": "usr/share/doc/libpam0g/copyright",
+          "retained_key": "retained/9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+          "sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.5.2-6+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "pcre2",
+      "name": "libpcre2-8-0",
+      "notices": [
+        {
+          "bytes": 6626,
+          "path": "usr/share/doc/libpcre2-8-0/copyright",
+          "retained_key": "retained/030511beb4d9d620ad09914c369c36ec0528dcf301d1923cc643c948ee7c6a38",
+          "sha256": "030511beb4d9d620ad09914c369c36ec0528dcf301d1923cc643c948ee7c6a38"
+        }
+      ],
+      "version": "10.42-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "readline",
+      "name": "libreadline8",
+      "notices": [
+        {
+          "bytes": 4414,
+          "path": "usr/share/doc/libreadline8/copyright",
+          "retained_key": "retained/3591a8e4de849d910c5ee9045388344ef151c23b10cf8c6b1950f89f1ba1569c",
+          "sha256": "3591a8e4de849d910c5ee9045388344ef151c23b10cf8c6b1950f89f1ba1569c"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "8.2-1.3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libseccomp",
+      "name": "libseccomp2",
+      "notices": [
+        {
+          "bytes": 1429,
+          "path": "usr/share/doc/libseccomp2/copyright",
+          "retained_key": "retained/6da0653a365b80ab31478dbfe9e7c358e80d58b6d2b52b4e16b4dbb42d7d9f5c",
+          "sha256": "6da0653a365b80ab31478dbfe9e7c358e80d58b6d2b52b4e16b4dbb42d7d9f5c"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "2.5.4-1+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libselinux (3.4-1)",
+      "name": "libselinux1",
+      "notices": [
+        {
+          "bytes": 3131,
+          "path": "usr/share/doc/libselinux1/copyright",
+          "retained_key": "retained/641806738b0c6a3d03168c2649e6b94205198bb66cd557e6bae3a20b71c9bb0b",
+          "sha256": "641806738b0c6a3d03168c2649e6b94205198bb66cd557e6bae3a20b71c9bb0b"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "3.4-1+b6"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "libsemanage",
+      "name": "libsemanage-common",
+      "notices": [
+        {
+          "bytes": 1830,
+          "path": "usr/share/doc/libsemanage-common/copyright",
+          "retained_key": "retained/e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51",
+          "sha256": "e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "3.4-1\n /etc/selinux/semanage.conf 8e8dfac33a09c1b53ca08bf6d4201b10"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libsemanage (3.4-1)",
+      "name": "libsemanage2",
+      "notices": [
+        {
+          "bytes": 1830,
+          "path": "usr/share/doc/libsemanage2/copyright",
+          "retained_key": "retained/e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51",
+          "sha256": "e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "3.4-1+b5"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libsepol",
+      "name": "libsepol2",
+      "notices": [
+        {
+          "bytes": 3750,
+          "path": "usr/share/doc/libsepol2/copyright",
+          "retained_key": "retained/78d2a34606a0302057ec499a3b3c07bcbc43ca334064ce4c80891a0f69c8f6c6",
+          "sha256": "78d2a34606a0302057ec499a3b3c07bcbc43ca334064ce4c80891a0f69c8f6c6"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "3.4-2.1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "util-linux",
+      "name": "libsmartcols1",
+      "notices": [
+        {
+          "bytes": 23237,
+          "path": "usr/share/doc/libsmartcols1/copyright",
+          "retained_key": "retained/30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+          "sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "sqlite3",
+      "name": "libsqlite3-0",
+      "notices": [
+        {
+          "bytes": 1833,
+          "path": "usr/share/doc/libsqlite3-0/copyright",
+          "retained_key": "retained/78e9df8f8153c91c762ec970b82d224ac4d30f05aa7773e7e17e268141e53873",
+          "sha256": "78e9df8f8153c91c762ec970b82d224ac4d30f05aa7773e7e17e268141e53873"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "3.40.1-2+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "e2fsprogs (1.47.0-2)",
+      "name": "libss2",
+      "notices": [
+        {
+          "bytes": 15209,
+          "path": "usr/share/doc/libss2/copyright",
+          "retained_key": "retained/1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+          "sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "openssl",
+      "name": "libssl3",
+      "notices": [
+        {
+          "bytes": 2543,
+          "path": "usr/share/doc/libssl3/copyright",
+          "retained_key": "retained/6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35",
+          "sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 6111,
+          "path": "usr/share/common-licenses/Artistic",
+          "retained_key": "retained/b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88",
+          "sha256": "b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88"
+        },
+        {
+          "bytes": 12632,
+          "path": "usr/share/common-licenses/GPL-1",
+          "retained_key": "retained/d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912",
+          "sha256": "d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912"
+        }
+      ],
+      "version": "3.0.22-1~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "gcc-12",
+      "name": "libstdc++6",
+      "notices": [
+        {
+          "bytes": 68194,
+          "path": "usr/share/doc/gcc-12-base/copyright",
+          "retained_key": "retained/da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+          "sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3"
+        },
+        {
+          "bytes": 6111,
+          "path": "usr/share/common-licenses/Artistic",
+          "retained_key": "retained/b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88",
+          "sha256": "b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88"
+        },
+        {
+          "bytes": 20432,
+          "path": "usr/share/common-licenses/GFDL-1.2",
+          "retained_key": "retained/d8e94ae5fdb5433fcae2961aeb1a8cf17174d6f4a0465d24bf37dd8a038bd439",
+          "sha256": "d8e94ae5fdb5433fcae2961aeb1a8cf17174d6f4a0465d24bf37dd8a038bd439"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "systemd",
+      "name": "libsystemd0",
+      "notices": [
+        {
+          "bytes": 12776,
+          "path": "usr/share/doc/libsystemd0/copyright",
+          "retained_key": "retained/a7d06854714a1ca99f6dbd1a1641dde5bcf28635be149f6554449618f8f427f3",
+          "sha256": "a7d06854714a1ca99f6dbd1a1641dde5bcf28635be149f6554449618f8f427f3"
+        },
+        {
+          "bytes": 7048,
+          "path": "usr/share/common-licenses/CC0-1.0",
+          "retained_key": "retained/a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "252.39-1~deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libtasn1-6",
+      "name": "libtasn1-6",
+      "notices": [
+        {
+          "bytes": 3451,
+          "path": "usr/share/doc/libtasn1-6/copyright",
+          "retained_key": "retained/572ad60ad184d8f52c6dc66d83a61a68f137db560b3452ce00588c9ecf128a65",
+          "sha256": "572ad60ad184d8f52c6dc66d83a61a68f137db560b3452ce00588c9ecf128a65"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "4.19.0-2+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "ncurses",
+      "name": "libtinfo6",
+      "notices": [
+        {
+          "bytes": 4670,
+          "path": "usr/share/doc/libtinfo6/copyright",
+          "retained_key": "retained/f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+          "sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e"
+        }
+      ],
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "libtirpc",
+      "name": "libtirpc-common",
+      "notices": [
+        {
+          "bytes": 13121,
+          "path": "usr/share/doc/libtirpc-common/copyright",
+          "retained_key": "retained/401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217",
+          "sha256": "401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "1.3.3+ds-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libtirpc",
+      "name": "libtirpc3",
+      "notices": [
+        {
+          "bytes": 13121,
+          "path": "usr/share/doc/libtirpc3/copyright",
+          "retained_key": "retained/401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217",
+          "sha256": "401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "1.3.3+ds-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "systemd",
+      "name": "libudev1",
+      "notices": [
+        {
+          "bytes": 12776,
+          "path": "usr/share/doc/libudev1/copyright",
+          "retained_key": "retained/a7d06854714a1ca99f6dbd1a1641dde5bcf28635be149f6554449618f8f427f3",
+          "sha256": "a7d06854714a1ca99f6dbd1a1641dde5bcf28635be149f6554449618f8f427f3"
+        },
+        {
+          "bytes": 7048,
+          "path": "usr/share/common-licenses/CC0-1.0",
+          "retained_key": "retained/a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "252.39-1~deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libunistring",
+      "name": "libunistring2",
+      "notices": [
+        {
+          "bytes": 6068,
+          "path": "usr/share/doc/libunistring2/copyright",
+          "retained_key": "retained/0035f89e5317f3cec389383e8727788521b0fde3e75cea881fa0e92e1d48cb57",
+          "sha256": "0035f89e5317f3cec389383e8727788521b0fde3e75cea881fa0e92e1d48cb57"
+        },
+        {
+          "bytes": 20432,
+          "path": "usr/share/common-licenses/GFDL-1.2",
+          "retained_key": "retained/d8e94ae5fdb5433fcae2961aeb1a8cf17174d6f4a0465d24bf37dd8a038bd439",
+          "sha256": "d8e94ae5fdb5433fcae2961aeb1a8cf17174d6f4a0465d24bf37dd8a038bd439"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "1.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "util-linux",
+      "name": "libuuid1",
+      "notices": [
+        {
+          "bytes": 23237,
+          "path": "usr/share/doc/libuuid1/copyright",
+          "retained_key": "retained/30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+          "sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "xxhash",
+      "name": "libxxhash0",
+      "notices": [
+        {
+          "bytes": 2579,
+          "path": "usr/share/doc/libxxhash0/copyright",
+          "retained_key": "retained/a123c93b07e781919ae996276ac02bb1c8b19dfde88176cd1240ab277c14a4ce",
+          "sha256": "a123c93b07e781919ae996276ac02bb1c8b19dfde88176cd1240ab277c14a4ce"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "0.8.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "libzstd",
+      "name": "libzstd1",
+      "notices": [
+        {
+          "bytes": 5389,
+          "path": "usr/share/doc/libzstd1/copyright",
+          "retained_key": "retained/35e85e8e9bbb71492c5f5dddf39ed65b68775a02ad8d710c25d097b497f06c49",
+          "sha256": "35e85e8e9bbb71492c5f5dddf39ed65b68775a02ad8d710c25d097b497f06c49"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.5.4+dfsg2-5"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "shadow",
+      "name": "login",
+      "notices": [
+        {
+          "bytes": 7044,
+          "path": "usr/share/doc/login/copyright",
+          "retained_key": "retained/a4c3e5b19700dd3cc5961663d204bd7150f65f913314682aede5931548c436d5",
+          "sha256": "a4c3e5b19700dd3cc5961663d204bd7150f65f913314682aede5931548c436d5"
+        },
+        {
+          "bytes": 12632,
+          "path": "usr/share/common-licenses/GPL-1",
+          "retained_key": "retained/d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912",
+          "sha256": "d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1:4.13+dfsg1-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "e2fsprogs (1.47.0-2)",
+      "name": "logsave",
+      "notices": [
+        {
+          "bytes": 15209,
+          "path": "usr/share/doc/logsave/copyright",
+          "retained_key": "retained/1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+          "sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        }
+      ],
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "mawk",
+      "name": "mawk",
+      "notices": [
+        {
+          "bytes": 22591,
+          "path": "usr/share/doc/mawk/copyright",
+          "retained_key": "retained/167d04422f2fdf76ab565878c23be8ba0c2ebb2c57a5dac0a5a59ccd27e747a5",
+          "sha256": "167d04422f2fdf76ab565878c23be8ba0c2ebb2c57a5dac0a5a59ccd27e747a5"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1.3.4.20200120-3.1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "util-linux",
+      "name": "mount",
+      "notices": [
+        {
+          "bytes": 23237,
+          "path": "usr/share/doc/mount/copyright",
+          "retained_key": "retained/30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+          "sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "ncurses",
+      "name": "ncurses-base",
+      "notices": [
+        {
+          "bytes": 4670,
+          "path": "usr/share/doc/ncurses-base/copyright",
+          "retained_key": "retained/f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+          "sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e"
+        }
+      ],
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "ncurses",
+      "name": "ncurses-bin",
+      "notices": [
+        {
+          "bytes": 4670,
+          "path": "usr/share/doc/ncurses-bin/copyright",
+          "retained_key": "retained/f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+          "sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e"
+        }
+      ],
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "netbase",
+      "name": "netbase",
+      "notices": [
+        {
+          "bytes": 1234,
+          "path": "usr/share/doc/netbase/copyright",
+          "retained_key": "retained/795b66147ea5ad692991caa7008ece551fb0fa88b9c53656223bd1518dc58ab2",
+          "sha256": "795b66147ea5ad692991caa7008ece551fb0fa88b9c53656223bd1518dc58ab2"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "6.4"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "openssl",
+      "name": "openssl",
+      "notices": [
+        {
+          "bytes": 2543,
+          "path": "usr/share/doc/openssl/copyright",
+          "retained_key": "retained/6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35",
+          "sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35"
+        },
+        {
+          "bytes": 11358,
+          "path": "usr/share/common-licenses/Apache-2.0",
+          "retained_key": "retained/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 6111,
+          "path": "usr/share/common-licenses/Artistic",
+          "retained_key": "retained/b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88",
+          "sha256": "b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88"
+        },
+        {
+          "bytes": 12632,
+          "path": "usr/share/common-licenses/GPL-1",
+          "retained_key": "retained/d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912",
+          "sha256": "d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912"
+        }
+      ],
+      "version": "3.0.22-1~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "shadow",
+      "name": "passwd",
+      "notices": [
+        {
+          "bytes": 7044,
+          "path": "usr/share/doc/passwd/copyright",
+          "retained_key": "retained/a4c3e5b19700dd3cc5961663d204bd7150f65f913314682aede5931548c436d5",
+          "sha256": "a4c3e5b19700dd3cc5961663d204bd7150f65f913314682aede5931548c436d5"
+        },
+        {
+          "bytes": 12632,
+          "path": "usr/share/common-licenses/GPL-1",
+          "retained_key": "retained/d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912",
+          "sha256": "d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "1:4.13+dfsg1-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "perl",
+      "name": "perl-base",
+      "notices": [
+        {
+          "bytes": 109772,
+          "path": "usr/share/doc/perl-base/copyright",
+          "retained_key": "retained/b52f3ca17b45473cb0da6ec46748949101fcf0dda1fd5d8b306e6c97fd41af4d",
+          "sha256": "b52f3ca17b45473cb0da6ec46748949101fcf0dda1fd5d8b306e6c97fd41af4d"
+        },
+        {
+          "bytes": 6111,
+          "path": "usr/share/common-licenses/Artistic",
+          "retained_key": "retained/b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88",
+          "sha256": "b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88"
+        },
+        {
+          "bytes": 12632,
+          "path": "usr/share/common-licenses/GPL-1",
+          "retained_key": "retained/d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912",
+          "sha256": "d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ],
+      "version": "5.36.0-7+deb12u4"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "readline",
+      "name": "readline-common",
+      "notices": [
+        {
+          "bytes": 4414,
+          "path": "usr/share/doc/readline-common/copyright",
+          "retained_key": "retained/3591a8e4de849d910c5ee9045388344ef151c23b10cf8c6b1950f89f1ba1569c",
+          "sha256": "3591a8e4de849d910c5ee9045388344ef151c23b10cf8c6b1950f89f1ba1569c"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "8.2-1.3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "sed",
+      "name": "sed",
+      "notices": [
+        {
+          "bytes": 8618,
+          "path": "usr/share/doc/sed/copyright",
+          "retained_key": "retained/719320e425e8e6da53a55e0fcfa2f2ed9b1332cea16abd65321bd651b2a88568",
+          "sha256": "719320e425e8e6da53a55e0fcfa2f2ed9b1332cea16abd65321bd651b2a88568"
+        },
+        {
+          "bytes": 22955,
+          "path": "usr/share/common-licenses/GFDL-1.3",
+          "retained_key": "retained/110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "4.9-1+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "sysvinit",
+      "name": "sysvinit-utils",
+      "notices": [
+        {
+          "bytes": 4689,
+          "path": "usr/share/doc/sysvinit-utils/copyright",
+          "retained_key": "retained/ad7cb339e58a88918a883d553ca236795191f027e158788a8b33f747ff502fb2",
+          "sha256": "ad7cb339e58a88918a883d553ca236795191f027e158788a8b33f747ff502fb2"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "version": "3.06-4"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "tar",
+      "name": "tar",
+      "notices": [
+        {
+          "bytes": 3798,
+          "path": "usr/share/doc/tar/copyright",
+          "retained_key": "retained/bea61e0c172868e07845cf50423f97f093a9a46de167dbbe333a38be610c8e00",
+          "sha256": "bea61e0c172868e07845cf50423f97f093a9a46de167dbbe333a38be610c8e00"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "1.34+dfsg-1.2+deb12u1"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "tzdata",
+      "name": "tzdata",
+      "notices": [
+        {
+          "bytes": 375,
+          "path": "usr/share/doc/tzdata/copyright",
+          "retained_key": "retained/cb61132bc0fc7b26ef5a82ee18b2fb644a1362f4f286ed980ff22e408471f59a",
+          "sha256": "cb61132bc0fc7b26ef5a82ee18b2fb644a1362f4f286ed980ff22e408471f59a"
+        }
+      ],
+      "version": "2026c-0+deb12u1"
+    },
+    {
+      "architecture": "all",
+      "declared_source_package": "usrmerge",
+      "name": "usr-is-merged",
+      "notices": [
+        {
+          "bytes": 987,
+          "path": "usr/share/doc/usr-is-merged/copyright",
+          "retained_key": "retained/9836bfe2ef94505bbf29701e8c90799ab1a5fd966d26d60d019a822cdbf3d61a",
+          "sha256": "9836bfe2ef94505bbf29701e8c90799ab1a5fd966d26d60d019a822cdbf3d61a"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        }
+      ],
+      "version": "37~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "util-linux",
+      "name": "util-linux",
+      "notices": [
+        {
+          "bytes": 23237,
+          "path": "usr/share/doc/util-linux/copyright",
+          "retained_key": "retained/30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+          "sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "util-linux",
+      "name": "util-linux-extra",
+      "notices": [
+        {
+          "bytes": 23237,
+          "path": "usr/share/doc/util-linux-extra/copyright",
+          "retained_key": "retained/30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+          "sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c"
+        },
+        {
+          "bytes": 18092,
+          "path": "usr/share/common-licenses/GPL-2",
+          "retained_key": "retained/8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35149,
+          "path": "usr/share/common-licenses/GPL-3",
+          "retained_key": "retained/3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        },
+        {
+          "bytes": 25381,
+          "path": "usr/share/common-licenses/LGPL-2",
+          "retained_key": "retained/681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366",
+          "sha256": "681e386e44a19d7d0674b4320272c90e66b6610b741e7e6305f8219c42e85366"
+        },
+        {
+          "bytes": 26530,
+          "path": "usr/share/common-licenses/LGPL-2.1",
+          "retained_key": "retained/dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "bytes": 7652,
+          "path": "usr/share/common-licenses/LGPL-3",
+          "retained_key": "retained/e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "declared_source_package": "zlib",
+      "name": "zlib1g",
+      "notices": [
+        {
+          "bytes": 2927,
+          "path": "usr/share/doc/zlib1g/copyright",
+          "retained_key": "retained/9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6",
+          "sha256": "9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6"
+        }
+      ],
+      "version": "1:1.2.13.dfsg-1"
+    }
+  ],
+  "profile": "public-research162/cpython312-linux-amd64",
+  "project_repository": "github.com/Dimkox/Getzilla",
+  "python_source_sha256": "c2c4321961fab0fb999d66e0cecf521c2ab3994c7992873ea99e306c1094fd5a",
+  "python_terms": [
+    {
+      "bytes": 54130,
+      "path": "Python-3.12.15/Doc/license.rst",
+      "retained_key": "retained/341832873fd316a37927e79385093fbbfd40a467428480835fe435a80cadf4e5",
+      "sha256": "341832873fd316a37927e79385093fbbfd40a467428480835fe435a80cadf4e5"
+    },
+    {
+      "bytes": 13936,
+      "path": "Python-3.12.15/LICENSE",
+      "retained_key": "retained/3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf",
+      "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+    },
+    {
+      "bytes": 15068,
+      "path": "Python-3.12.15/Mac/BuildScript/resources/License.rtf",
+      "retained_key": "retained/ab6df6040a4e24babad38f98454eb3263722fa6a1c441bfaa271798efbe55f27",
+      "sha256": "ab6df6040a4e24babad38f98454eb3263722fa6a1c441bfaa271798efbe55f27"
+    },
+    {
+      "bytes": 1144,
+      "path": "Python-3.12.15/Modules/expat/COPYING",
+      "retained_key": "retained/31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87",
+      "sha256": "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87"
+    },
+    {
+      "bytes": 1738,
+      "path": "Python-3.12.15/PC/crtlicense.txt",
+      "retained_key": "retained/3c71b3ae243121f6f227374cd1ef7c59ed07b1969b330d0e947f91a3a1b3fd73",
+      "sha256": "3c71b3ae243121f6f227374cd1ef7c59ed07b1969b330d0e947f91a3a1b3fd73"
+    },
+    {
+      "bytes": 3273,
+      "path": "Python-3.12.15/Tools/msi/bundle/bootstrap/LICENSE.txt",
+      "retained_key": "retained/cb95daf98edda8e08a242e1060691b6941f0911692bf468a3f9c5e4b58c09b8f",
+      "sha256": "cb95daf98edda8e08a242e1060691b6941f0911692bf468a3f9c5e4b58c09b8f"
+    }
+  ],
+  "python_version": "3.12.15",
+  "schema_version": 1,
+  "subject": {
+    "config": {
+      "digest": "sha256:3c4d812a6efe003770aafbdba65f9c1960ba8234ab23a133934205a70bdcda77",
+      "mediaType": "application/vnd.oci.image.config.v1+json",
+      "size": 5680
+    },
+    "layers": [
+      {
+        "digest": "sha256:11422d7ca1a44390a32bd8d8d9dc5946b4d053b3bbd9507d682e35584ba84a26",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 28247935
+      },
+      {
+        "digest": "sha256:fd4548892b7d74acf5f52391380b45441b4ec55f6c2e1506030c2af26fd3e3f6",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 3341049
+      },
+      {
+        "digest": "sha256:87463122edacdc60df8c7840549960acce4dfb91a2b2aa36f563f62e0cd991db",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 13678701
+      },
+      {
+        "digest": "sha256:b52d28f2ade3944bb78458d2d77f25816d73cb5566d86dd897c9b8829a853ad8",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 249
+      }
+    ],
+    "pinned_index_digest": "sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70",
+    "rootfs_diff_ids": [
+      "sha256:9b35de7893378218e365c34c2c735fb0032a859112fb7345ca8ea73f9aa1db70",
+      "sha256:535ecd2088497f5955e24fd33c534fc9ba37fb717a33a841315a358dd4ff8b35",
+      "sha256:536ebec0f9d8119e620ed0e261faa2cfdeab88621f35924fb0ec74f646b5c53b",
+      "sha256:b8a5c0b25a3657c3b43a3a4cf1815f27fd7ca6c8bc3ffd36164f90731ca83db4"
+    ],
+    "selected_manifest_digest": "sha256:57d96f71de145a98e7ceca18ee4ade77bba4103a33a72dfaea026b23625c6bf0",
+    "selected_platform": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "use": "private-unmodified-no-conveyance"
+}

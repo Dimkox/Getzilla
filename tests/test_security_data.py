@@ -1,7 +1,6 @@
-"""Snapshot contract: bytes, acquisition, exact coverage and an atomic pointer."""
 from __future__ import annotations
-
 import hashlib
+import contextlib
 import io
 import json
 import os
@@ -13,54 +12,67 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
-
+import errno
+import importlib
+from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
-from getzilla import security_data as SD  # noqa: E402
+EXPANDED_NOW = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
+from getzilla.security_publication import SnapshotWriter
+NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
+from getzilla import security_data as SD
 
-NOW = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
-
-
-def osv_bytes(ecosystem: str = 'PyPI', *, name: str = 'example', version: str = '1.0.0') -> bytes:
+def osv_bytes(ecosystem: str='PyPI', *, name: str='example', version: str='1.0.0') -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_STORED) as archive:
-        archive.writestr(zipfile.ZipInfo('OSV-1.json', date_time=(2026, 1, 1, 0, 0, 0)), json.dumps({'id': 'OSV-1', 'affected': [{
-            'package': {'ecosystem': ecosystem, 'name': name}, 'versions': [version],
-        }]}))
+        archive.writestr(zipfile.ZipInfo('OSV-1.json', date_time=(2026, 1, 1, 0, 0, 0)), json.dumps({'id': 'OSV-1', 'affected': [{'package': {'ecosystem': ecosystem, 'name': name}, 'versions': [version]}]}))
     return output.getvalue()
 
-
-def publish(database: Path, *, acquired: datetime = NOW, payload: bytes | None = None,
-            source_id: str = 'osv:PyPI') -> dict:
-    return SD.publish_snapshot(database, source_id, payload if payload is not None else osv_bytes(),
-                               acquisition={'last_verified_sync_utc': acquired.isoformat(),
-                                            'retrieval_kind': 'download'},
-                               coverage={'scopes': ['PyPI'], 'complete': True,
-                                         'record_count': 1, 'schema': 'osv-1'}, now=acquired)
-
+def publish(database: Path, *, acquired: datetime=EXPANDED_NOW, payload: bytes | None=None, source_id: str='osv:PyPI') -> dict:
+    return SD.publish_snapshot(database, source_id, payload if payload is not None else osv_bytes(), acquisition={'last_verified_sync_utc': acquired.isoformat(), 'retrieval_kind': 'download'}, coverage={'scopes': ['PyPI'], 'complete': True, 'record_count': 1, 'schema': 'osv-1'}, now=acquired)
 
 @unittest.skipUnless(SD.DESCRIPTOR_IO_AVAILABLE, 'snapshot I/O requires qualified POSIX directory descriptors')
 class SnapshotTests(unittest.TestCase):
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         self.database = self.root / 'database'
+        self.data = importlib.import_module('getzilla.security_data')
+        self.parent = self.root
+        self.payload = archive([record()])
+
+    def test_recovery_hints_name_only_real_source_kind_producers(self):
+        for source_id in ('osv:PyPI', 'osv-query:native', 'kev', 'epss'):
+            with self.subTest(source_id=source_id), self.assertRaises(SD.SecurityDataError) as caught:
+                SD.read_snapshot(self.database, source_id, now=EXPANDED_NOW)
+            message = str(caught.exception)
+            if source_id == 'osv-query:native':
+                self.assertIn('scripts/getzilla_vulns.py --online --db DIR', message)
+                self.assertNotIn('--download-db', message)
+                self.assertNotIn('getzilla_security.py', message)
+            else:
+                self.assertIn('scripts/getzilla_security.py --root ROOT --database DIR', message)
+                if source_id.startswith('osv:'):
+                    self.assertIn('scripts/getzilla_vulns.py --download-db DIR --ecosystem PyPI', message)
+                else:
+                    self.assertNotIn('getzilla_vulns.py', message)
 
     def test_inclusive_72_hour_boundary_uses_verified_sync(self) -> None:
         publish(self.database)
         for seconds in (0, 259199, 259200):
             with self.subTest(seconds=seconds):
-                payload, evidence = SD.read_snapshot(self.database, 'osv:PyPI',
-                                                     now=NOW + timedelta(seconds=seconds), required_scope={'PyPI'})
+                payload, evidence = SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW + timedelta(seconds=seconds), required_scope={'PyPI'})
                 self.assertEqual(payload, osv_bytes())
                 self.assertEqual(evidence['age_seconds'], seconds)
         with self.assertRaisesRegex(SD.SecurityDataError, 'stale'):
-            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW + timedelta(seconds=259201))
+            SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW + timedelta(seconds=259201))
 
     def test_future_unknown_and_naive_clocks_fail(self) -> None:
         publish(self.database)
-        for clock in (NOW - timedelta(seconds=1), NOW.replace(tzinfo=None), 'unknown'):
+        for clock in (EXPANDED_NOW - timedelta(seconds=1), EXPANDED_NOW.replace(tzinfo=None), 'unknown'):
             with self.subTest(clock=clock), self.assertRaises(SD.SecurityDataError):
                 SD.read_snapshot(self.database, 'osv:PyPI', now=clock)
         pointer = self.database / 'PyPI/snapshot.json'
@@ -70,70 +82,68 @@ class SnapshotTests(unittest.TestCase):
             edited['acquisition']['last_verified_sync_utc'] = timestamp
             pointer.write_text(json.dumps(edited))
             with self.subTest(timestamp=timestamp), self.assertRaises(SD.SecurityDataError):
-                SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+                SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
 
     def test_copy_keeps_original_acquisition_and_age(self) -> None:
-        old = NOW - timedelta(hours=71)
+        old = EXPANDED_NOW - timedelta(hours=71)
         original = publish(self.database, acquired=old)
         destination = self.root / 'copy'
-        copied = SD.copy_snapshot(self.database, destination, 'osv:PyPI', now=NOW)
+        copied = SD.copy_snapshot(self.database, destination, 'osv:PyPI', now=EXPANDED_NOW)
         self.assertEqual(copied['acquisition'], original['acquisition'])
-        payload, evidence = SD.read_snapshot(destination, 'osv:PyPI', now=NOW)
+        payload, evidence = SD.read_snapshot(destination, 'osv:PyPI', now=EXPANDED_NOW)
         self.assertEqual(evidence['age_seconds'], 255600)
         self.assertEqual(payload, osv_bytes())
         for path in destination.rglob('*'):
             if path.is_file():
-                os.utime(path, (NOW.timestamp(), NOW.timestamp()))
+                os.utime(path, (EXPANDED_NOW.timestamp(), EXPANDED_NOW.timestamp()))
         with self.assertRaisesRegex(SD.SecurityDataError, 'stale'):
-            SD.read_snapshot(destination, 'osv:PyPI', now=NOW + timedelta(hours=2))
+            SD.read_snapshot(destination, 'osv:PyPI', now=EXPANDED_NOW + timedelta(hours=2))
 
     def test_copy_of_stale_nonempty_snapshot_refuses_and_keeps_destination(self) -> None:
-        publish(self.database, acquired=NOW - timedelta(hours=73))
+        publish(self.database, acquired=EXPANDED_NOW - timedelta(hours=73))
         destination = self.root / 'copy'
         publish(destination)
         before = (destination / 'PyPI/snapshot.json').read_bytes()
         with self.assertRaisesRegex(SD.SecurityDataError, 'stale'):
-            SD.copy_snapshot(self.database, destination, 'osv:PyPI', now=NOW)
+            SD.copy_snapshot(self.database, destination, 'osv:PyPI', now=EXPANDED_NOW)
         self.assertEqual((destination / 'PyPI/snapshot.json').read_bytes(), before)
 
     def test_digest_size_source_and_coverage_are_validated(self) -> None:
         publish(self.database)
         pointer = self.database / 'PyPI/snapshot.json'
         original = json.loads(pointer.read_text())
-        edits = [('content_sha256', '0' * 64), ('payload_size', 1), ('source_id', 'osv:npm'),
-                 ('source_url', 'https://example.invalid/changed'), ('schema_version', 99)]
+        edits = [('content_sha256', '0' * 64), ('payload_size', 1), ('source_id', 'osv:npm'), ('source_url', 'https://example.invalid/changed'), ('schema_version', 99)]
         for field, value in edits:
             document = json.loads(json.dumps(original))
             document[field] = value
             pointer.write_text(json.dumps(document))
             with self.subTest(field=field), self.assertRaises(SD.SecurityDataError):
-                SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
-        for field, value in [('record_count', 0), ('record_count', True), ('complete', False),
-                             ('scopes', ['npm']), ('schema', 'unknown')]:
+                SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
+        for field, value in [('record_count', 0), ('record_count', True), ('complete', False), ('scopes', ['npm']), ('schema', 'unknown')]:
             document = json.loads(json.dumps(original))
             document['coverage'][field] = value
             pointer.write_text(json.dumps(document))
             with self.subTest(field=field, value=value), self.assertRaises(SD.SecurityDataError):
-                SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+                SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
 
     def test_reader_uses_verified_immutable_bytes_not_mutable_export(self) -> None:
         publish(self.database)
         (self.database / 'PyPI/all.zip').write_bytes(b'changed compatibility export')
-        payload, _ = SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+        payload, _ = SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
         self.assertEqual(payload, osv_bytes())
         digest = hashlib.sha256(payload).hexdigest()
         (self.database / '.snapshots/sha256' / digest).write_bytes(b'tampered object')
         with self.assertRaises(SD.SecurityDataError):
-            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+            SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
 
     def test_wrong_missing_or_incomplete_ecosystem_is_not_coverage(self) -> None:
         with self.assertRaises(SD.SecurityDataError):
             publish(self.database, payload=osv_bytes('npm'))
         publish(self.database)
         with self.assertRaises(SD.SecurityDataError):
-            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW, required_scope={'npm'})
+            SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW, required_scope={'npm'})
         with self.assertRaisesRegex(SD.SecurityDataError, 'refresh'):
-            SD.read_snapshot(self.database, 'osv:npm', now=NOW)
+            SD.read_snapshot(self.database, 'osv:npm', now=EXPANDED_NOW)
 
     def test_invalid_refresh_preserves_previous_pointer_and_payload(self) -> None:
         publish(self.database)
@@ -142,19 +152,21 @@ class SnapshotTests(unittest.TestCase):
         empty = io.BytesIO()
         with zipfile.ZipFile(empty, 'w'):
             pass
-        for payload in (b'', b'PK\x03\x04partial', empty.getvalue(), osv_bytes('npm')):
+        with patch.object(zipfile, 'ZIP_FILECOUNT_LIMIT', 1):
+            damaged_zip64 = bytearray(archive([record(), record('PUBLIC-2')]))
+        footer = damaged_zip64.rfind(zipfile.stringEndArchive64)
+        damaged_zip64[footer + 32:footer + 40] = (3).to_bytes(8, 'little')
+        for payload in (b'', b'PK\x03\x04partial', empty.getvalue(), osv_bytes('npm'), bytes(damaged_zip64)):
             with self.subTest(payload=payload[:16]), self.assertRaises(SD.SecurityDataError):
                 publish(self.database, payload=payload)
             self.assertEqual(pointer.read_bytes(), previous)
-            self.assertEqual(SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], osv_bytes())
+            self.assertEqual(SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)[0], osv_bytes())
 
     def test_malformed_withdrawal_cannot_hide_an_active_advisory(self) -> None:
         for withdrawn in (True, 1, 'unknown', '2026-11-03T12:00:00'):
             output = io.BytesIO()
             with zipfile.ZipFile(output, 'w') as archive:
-                archive.writestr('OSV-1.json', json.dumps({'id': 'OSV-1', 'withdrawn': withdrawn, 'affected': [{
-                    'package': {'ecosystem': 'PyPI', 'name': 'example'}, 'versions': ['1.0.0'],
-                }]}))
+                archive.writestr('OSV-1.json', json.dumps({'id': 'OSV-1', 'withdrawn': withdrawn, 'affected': [{'package': {'ecosystem': 'PyPI', 'name': 'example'}, 'versions': ['1.0.0']}]}))
             with self.subTest(withdrawn=withdrawn), self.assertRaises(SD.SecurityDataError):
                 publish(self.database, payload=output.getvalue())
 
@@ -167,26 +179,25 @@ class SnapshotTests(unittest.TestCase):
             if Path(destination).name == 'snapshot.json':
                 raise OSError('simulated interruption before pointer commit')
             replace(source, destination, **kwargs)
-
         with mock.patch.object(SD.os, 'replace', side_effect=fail_pointer), self.assertRaises(SD.SecurityDataError):
-            publish(self.database, acquired=NOW + timedelta(hours=1), payload=osv_bytes(version='2.0.0'))
+            publish(self.database, acquired=EXPANDED_NOW + timedelta(hours=1), payload=osv_bytes(version='2.0.0'))
         self.assertEqual((self.database / 'PyPI/snapshot.json').read_bytes(), before)
-        self.assertEqual(SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], osv_bytes())
+        self.assertEqual(SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)[0], osv_bytes())
         self.assertFalse(list(self.database.rglob('*.partial')))
 
     def test_legacy_raw_zip_never_supplies_freshness(self) -> None:
         archive = self.database / 'PyPI/all.zip'
         archive.parent.mkdir(parents=True)
         archive.write_bytes(osv_bytes())
-        with self.assertRaisesRegex(SD.SecurityDataError, r'python3 scripts/getzilla_security.py --root ROOT --database DIR'):
-            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+        with self.assertRaisesRegex(SD.SecurityDataError, 'python3 scripts/getzilla_security.py --root ROOT --database DIR'):
+            SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
 
     def test_recovery_command_drives_the_explicit_strict_refresh_entrypoint(self):
         from getzilla import security_cli
         from getzilla.security_acquisition import FetchResult, refresh_feeds
         from tests.test_security_intelligence import epss_payload, kev_payload
         with self.assertRaises(SD.SecurityDataError) as caught:
-            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+            SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
         command = str(caught.exception).split('refresh with ', 1)[1].split(' on a network-enabled host', 1)[0]
         arguments = shlex.split(command)
         self.assertEqual(arguments[:2], ['python3', 'scripts/getzilla_security.py'])
@@ -201,9 +212,8 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(args.input_profile, Path(locations['PROFILE']))
             self.assertTrue(args.refresh)
             def fetch(url):
-                body = (osv_bytes() if url == SD.SOURCE_URLS['osv:PyPI'] else
-                        kev_payload() if url == SD.SOURCE_URLS['kev'] else epss_payload())
-                return FetchResult(body,url,url,200)
+                body = osv_bytes() if url == SD.SOURCE_URLS['osv:PyPI'] else kev_payload() if url == SD.SOURCE_URLS['kev'] else epss_payload()
+                return FetchResult(body, url, url, 200)
             from getzilla.security_inventory import collect_inventory
             ecosystems = sorted({d['ecosystem'] for d in collect_inventory(args.root)['dependencies']})
             reports = refresh_feeds(args.database,ecosystems,fetch=fetch,now=NOW) if args.refresh else []
@@ -219,25 +229,341 @@ class SnapshotTests(unittest.TestCase):
     def test_arbitrary_source_ids_never_select_files(self) -> None:
         for source_id in ('../outside', 'osv:../../outside', 'osv:Hex', 'https://example.invalid'):
             with self.subTest(source_id=source_id), self.assertRaises(SD.SecurityDataError):
-                SD.read_snapshot(self.database, source_id, now=NOW)
+                SD.read_snapshot(self.database, source_id, now=EXPANDED_NOW)
         self.assertFalse(self.database.exists())
 
     def test_oversize_metadata_is_rejected_before_replacing_pointer(self) -> None:
-        acquisition = {'last_verified_sync_utc': NOW.isoformat(), 'retrieval_kind': 'download'}
+        acquisition = {'last_verified_sync_utc': EXPANDED_NOW.isoformat(), 'retrieval_kind': 'download'}
         coverage = {'scopes': ['CVE'], 'complete': True, 'record_count': 0, 'schema': 'kev-1'}
-        SD.publish_snapshot(self.database, 'kev', b'{"vulnerabilities":[]}',
-                            acquisition=acquisition, coverage=coverage, now=NOW)
+        SD.publish_snapshot(self.database, 'kev', b'{"vulnerabilities":[]}', acquisition=acquisition, coverage=coverage, now=EXPANDED_NOW)
         pointer = self.database / 'feeds/kev/snapshot.json'
         original = pointer.read_bytes()
         with self.assertRaises(SD.SecurityDataError):
-            SD.publish_snapshot(self.database, 'kev', b'{"vulnerabilities":[]}', acquisition=acquisition,
-                                coverage={**coverage, 'scopes': ['x' * 70000]}, now=NOW)
+            SD.publish_snapshot(self.database, 'kev', b'{"vulnerabilities":[]}', acquisition=acquisition, coverage={**coverage, 'scopes': ['x' * 70000]}, now=EXPANDED_NOW)
         self.assertEqual(pointer.read_bytes(), original)
-        _, evidence = SD.read_snapshot(self.database, 'kev', now=NOW)
+        _, evidence = SD.read_snapshot(self.database, 'kev', now=EXPANDED_NOW)
         self.assertEqual(evidence['payload_validation'], 'source-evaluator-required')
 
+    def publish(self, payload=None, acquired=NOW, database=None):
+        payload = self.payload if payload is None else payload
+        return self.data.publish_snapshot(self.database if database is None else database, 'osv:PyPI', payload, acquisition={'last_verified_sync_utc': acquired.isoformat(), 'retrieval_kind': 'download'}, coverage=self.data.osv_coverage(payload, 'PyPI'), now=NOW)
+
+    def test_inclusive_age_and_exact_bytes(self):
+        self.publish(acquired=NOW - timedelta(seconds=259200))
+        payload, proof = self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW, required_scope={'PyPI'})
+        self.assertEqual(payload, self.payload)
+        self.assertEqual(proof['age_seconds'], 259200)
+        for current in (NOW + timedelta(seconds=1), NOW - timedelta(seconds=259201)):
+            with self.subTest(current=current), self.assertRaises(self.data.SecurityDataError):
+                self.data.read_snapshot(self.database, 'osv:PyPI', now=current)
+
+    def test_unknown_future_and_stale_time_refuse(self):
+        for value in (None, 'unknown', (NOW + timedelta(seconds=1)).isoformat(), (NOW - timedelta(seconds=259201)).isoformat()):
+            with self.subTest(value=value), self.assertRaises(self.data.SecurityDataError):
+                self.data.publish_snapshot(self.database, 'osv:PyPI', self.payload, acquisition={'last_verified_sync_utc': value, 'retrieval_kind': 'download'}, coverage=self.data.osv_coverage(self.payload, 'PyPI'), now=NOW)
+        self.assertFalse(self.database.exists())
+
+    def test_legacy_archive_cannot_qualify_by_mtime_or_copy(self):
+        folder = self.database / 'PyPI'
+        folder.mkdir(parents=True)
+        (folder / 'all.zip').write_bytes(self.payload)
+        os.utime(folder / 'all.zip', (NOW.timestamp(), NOW.timestamp()))
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+
+    def test_empty_wrong_and_corrupt_archive_refuse(self):
+        for payload in (archive([]), archive([record(ecosystem='npm')]), b'public invalid ZIP', self.payload[:-12]):
+            with self.subTest(size=len(payload)), self.assertRaises(self.data.SecurityDataError):
+                self.data.osv_coverage(payload, 'PyPI')
+
+    def test_alias_and_source_coverage_are_rederived(self):
+        malformed = record()
+        malformed['aliases'] = 'CVE-2026-0001'
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.osv_coverage(archive([malformed]), 'PyPI')
+        coverage = self.data.osv_coverage(self.payload, 'PyPI')
+        for changed in ({**coverage, 'record_count': 2}, {**coverage, 'complete': False}):
+            with self.subTest(coverage=changed), self.assertRaises(self.data.SecurityDataError):
+                self.data.publish_snapshot(self.database, 'osv:PyPI', self.payload, acquisition={'last_verified_sync_utc': NOW.isoformat(), 'retrieval_kind': 'download'}, coverage=changed, now=NOW)
+
+    def test_copy_retains_original_acquisition_clock(self):
+        acquired = NOW - timedelta(hours=1)
+        self.publish(acquired=acquired)
+        destination = self.parent / 'copy'
+        self.data.copy_snapshot(self.database, destination, 'osv:PyPI', now=NOW)
+        payload, proof = self.data.read_snapshot(destination, 'osv:PyPI', now=NOW)
+        self.assertEqual(payload, self.payload)
+        self.assertEqual(datetime.fromisoformat(proof['acquisition']['last_verified_sync_utc']), acquired)
+
+    def test_expiration_during_staging_never_switches_pointer(self):
+        self.publish()
+        pointer = self.database / 'PyPI/snapshot.json'
+        before = pointer.read_bytes()
+        original, original_clock = (SnapshotWriter.write, self.data._clock)
+        current = [NOW]
+
+        def write(store, parts, payload, **kwargs):
+            result = original(store, parts, payload, **kwargs)
+            if parts[-1] == '.publication-pending.json':
+                current[0] += timedelta(seconds=1)
+            return result
+        with patch.object(SnapshotWriter, 'write', write), patch.object(self.data, '_clock', side_effect=lambda supplied: original_clock(current[0] if supplied is None else supplied)):
+            with self.assertRaises(self.data.SecurityDataError):
+                self.data.publish_snapshot(self.database, 'osv:PyPI', archive([record('PUBLIC-2')]), acquisition={'last_verified_sync_utc': (NOW - timedelta(seconds=259200)).isoformat(), 'retrieval_kind': 'download'}, coverage=self.data.osv_coverage(self.payload, 'PyPI'))
+        self.assertEqual(pointer.read_bytes(), before)
+        self.assertEqual(self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], self.payload)
+
+    def test_final_metadata_confirmation_refuses_expiry_replacement_and_pending(self):
+        self.publish(acquired=NOW - timedelta(seconds=259200))
+        _, proof = self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+        check = getattr(self.data, 'confirm_snapshots', None)
+        self.assertTrue(callable(check), 'joint final source custody and age confirmation is missing')
+        check(self.database, [proof], now=NOW)
+        with self.assertRaises(self.data.SecurityDataError):
+            check(self.database, [proof], now=NOW + timedelta(seconds=1))
+        pointer = self.database / 'PyPI/snapshot.json'
+        raw = pointer.read_bytes()
+        pointer.unlink()
+        pointer.write_bytes(raw)
+        with self.assertRaises(self.data.SecurityDataError):
+            check(self.database, [proof], now=NOW)
+
+    def test_copy_uses_live_clock_instead_of_freezing_start_time(self):
+        self.publish(acquired=NOW - timedelta(seconds=259200))
+        original, original_clock = (self.data.read_snapshot, self.data._clock)
+        current = [NOW]
+
+        def read(*args, **kwargs):
+            result = original(*args, **kwargs)
+            current[0] += timedelta(seconds=1)
+            return result
+        destination = self.parent / 'copy-expired'
+        with patch.object(self.data, 'read_snapshot', read), patch.object(self.data, '_clock', side_effect=lambda supplied: original_clock(current[0] if supplied is None else supplied)):
+            with self.assertRaises(self.data.SecurityDataError):
+                self.data.copy_snapshot(self.database, destination, 'osv:PyPI')
+        self.assertFalse((destination / 'PyPI/snapshot.json').exists())
+
+    def test_definite_precommit_failure_keeps_old_pointer_and_bytes(self):
+        self.publish()
+        pointer = self.database / 'PyPI/snapshot.json'
+        before = pointer.read_bytes()
+        original = self.data.fsx.replace_at
+
+        def fail_pointer(source_parent, source, target_parent, target):
+            if target == 'snapshot.json':
+                raise OSError(errno.EIO, 'public precommit failure')
+            return original(source_parent, source, target_parent, target)
+        with patch.object(self.data.fsx, 'replace_at', side_effect=fail_pointer):
+            with self.assertRaises(self.data.SecurityDataError):
+                self.publish(archive([record('PUBLIC-2')]))
+        self.assertEqual(pointer.read_bytes(), before)
+        self.assertEqual(self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], self.payload)
+
+    def test_supported_publishers_serialize_without_waiting_or_switching(self):
+        self.publish()
+        pointer = self.database / 'PyPI/snapshot.json'
+        before = pointer.read_bytes()
+        self.assertTrue(callable(getattr(SnapshotWriter, 'lock_publication', None)), 'supported publishers need an owned nonblocking serialization lock')
+        with SnapshotWriter(self.database) as owner:
+            owner.lock_publication()
+            with self.assertRaises(self.data.SecurityDataError):
+                self.publish(archive([record('PUBLIC-CONTENDING')]))
+        self.assertEqual(pointer.read_bytes(), before)
+        self.publish(archive([record('PUBLIC-NEXT')]))
+
+    def test_post_pointer_failure_is_durable_unknown(self):
+        self.publish()
+        original = SnapshotWriter.write
+
+        def uncertain(store, parts, payload):
+            original(store, parts, payload)
+            if parts[-1] == 'snapshot.json':
+                raise OSError(errno.EIO, 'public postcommit failure')
+        with patch.object(SnapshotWriter, 'write', uncertain):
+            with self.assertRaisesRegex(self.data.SecurityDataError, 'commit_unknown'):
+                self.publish(archive([record('PUBLIC-2')]))
+        with self.assertRaisesRegex(self.data.SecurityDataError, 'unknown|reconcil'):
+            self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+
+    def test_post_pointer_primary_exits_survive_with_unknown_retained(self):
+
+        class PublicExit(BaseException):
+            pass
+        original = SnapshotWriter.write
+        for index, kind in enumerate((KeyboardInterrupt, SystemExit, PublicExit)):
+            database = self.parent / f'public-primary-{index}'
+
+            def interrupted(store, parts, payload):
+                original(store, parts, payload)
+                if parts[-1] == 'snapshot.json':
+                    raise kind()
+            observed = None
+            with patch.object(SnapshotWriter, 'write', interrupted):
+                try:
+                    self.publish(database=database)
+                except BaseException as error:
+                    observed = type(error)
+            self.assertIs(observed, kind, 'publication replaced the primary exit with an ordinary refresh failure')
+            with self.assertRaisesRegex(self.data.SecurityDataError, 'commit_unknown'):
+                self.data.read_snapshot(database, 'osv:PyPI', now=NOW)
+
+    def test_compatibility_export_error_does_not_relabel_commit(self):
+        original = SnapshotWriter.write
+
+        def refuse_export(store, parts, payload):
+            if parts[-1] == 'all.zip':
+                raise OSError(errno.EIO, 'public export failure')
+            return original(store, parts, payload)
+        with patch.object(SnapshotWriter, 'write', refuse_export):
+            proof = self.publish()
+        self.assertEqual(proof['publication_outcome'], 'committed')
+        self.assertIn('compatibility_export_warning', proof)
+        self.assertEqual(self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], self.payload)
+
+    def test_linked_ancestry_never_writes_outside(self):
+        outside = self.parent / 'outside'
+        outside.mkdir()
+        sentinel = outside / 'public-sentinel'
+        sentinel.write_bytes(b'public untouched')
+        self.database.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(self.data.SecurityDataError):
+            self.publish()
+        self.assertEqual(sentinel.read_bytes(), b'public untouched')
+        self.assertEqual(sorted((p.name for p in outside.iterdir())), ['public-sentinel'])
+
+    def test_replaced_pointer_or_object_refuses_without_following(self):
+        proof = self.publish()
+        object_path = self.database / '.snapshots/sha256' / proof['content_sha256']
+        original = object_path.read_bytes()
+        object_path.unlink()
+        foreign = self.parent / 'public-foreign'
+        foreign.write_bytes(original)
+        object_path.symlink_to(foreign)
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+        self.assertEqual(foreign.read_bytes(), original)
+
+    def test_hardlinked_input_is_not_owned_custody(self):
+        proof = self.publish()
+        object_path = self.database / '.snapshots/sha256' / proof['content_sha256']
+        os.link(object_path, self.parent / 'public-other-link')
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+
+    def test_archive_census_limit_precedes_zipfile_materialization(self):
+        payload = archive([record(), record('PUBLIC-2')])
+        with patch.object(self.data, 'MAX_ARCHIVE_MEMBERS', 1), patch.object(self.data.zipfile, 'ZipFile', side_effect=AssertionError('unbounded materialization')) as constructor:
+            with self.assertRaises(self.data.SecurityDataError):
+                self.data.osv_coverage(payload, 'PyPI')
+        constructor.assert_not_called()
+
+    def test_zip64_census_and_coverage_use_actual_footer_location(self):
+        # A real ZIP64 footer, with the same format as the official npm feed.
+        with patch.object(zipfile, 'ZIP_FILECOUNT_LIMIT', 1):
+            payload = archive([record(), record('PUBLIC-2')])
+        self.assertIn(zipfile.stringEndArchive64, payload)
+        self.assertEqual(self.data.osv_coverage(payload, 'PyPI')['record_count'], 2)
+        end = zipfile._EndRecData(io.BytesIO(payload))
+        directory_size = end[zipfile._ECD_SIZE]
+        with zipfile.ZipFile(io.BytesIO(payload)) as reader:
+            expanded_size = sum(member.file_size for member in reader.infolist())
+        self.data._archive_census(payload, max_directory=directory_size, max_expanded=expanded_size)
+        for bounds in ({'max_directory': directory_size - 1}, {'max_expanded': expanded_size - 1}):
+            with self.subTest(bounds=bounds), self.assertRaises(self.data.SecurityDataError):
+                self.data._archive_census(payload, **bounds)
+        # Exercise the historical helper API with the actual classic footer
+        # position. The ZIP bytes and the validating parser remain real.
+        end[zipfile._ECD_LOCATION] = payload.rfind(zipfile.stringEndArchive)
+        with patch.object(zipfile, '_EndRecData', return_value=end):
+            self.data._archive_census(payload)
+
+    def test_zip64_census_count_boundary_and_tampering(self):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as writer:
+            for index in range(65536):
+                writer.writestr(str(index), b'')
+        payload = output.getvalue()
+        self.data._archive_census(payload, max_members=65536)
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data._archive_census(payload, max_members=65535)
+        with patch.object(self.data, 'MAX_ARCHIVE_MEMBERS', 65535), patch.object(zipfile, 'ZipFile', side_effect=AssertionError('unbounded materialization')) as constructor:
+            with self.assertRaises(self.data.SecurityDataError):
+                self.data.osv_coverage(payload, 'PyPI')
+        constructor.assert_not_called()
+        footer = payload.rfind(zipfile.stringEndArchive64)
+        for offset, value in ((32, 65535), (40, self.data.MAX_CENTRAL_DIRECTORY_BYTES + 1)):
+            with self.subTest(offset=offset):
+                damaged = bytearray(payload)
+                damaged[footer + offset:footer + offset + 8] = value.to_bytes(8, 'little')
+                with self.assertRaises(self.data.SecurityDataError):
+                    self.data._archive_census(bytes(damaged))
+
+    def test_remaining_read_budget_refuses_before_first_content_read(self):
+        self.publish()
+        original_read = self.data.os.read
+        with patch.object(self.data, 'MAX_STORE_READ_BYTES', 1), patch.object(self.data.os, 'read', wraps=original_read) as reading:
+            with self.assertRaises(self.data.SecurityDataError):
+                self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+        reading.assert_not_called()
+
+    def test_real_clock_is_rechecked_after_payload_read(self):
+        self.publish(acquired=NOW - timedelta(seconds=259200))
+        original_read, original_clock = (self.data._SnapshotStore.read, self.data._clock)
+        current = [NOW]
+
+        def read(store, parts, maximum):
+            payload = original_read(store, parts, maximum)
+            if len(parts) == 3 and parts[:2] == ('.snapshots', 'sha256'):
+                current[0] += timedelta(seconds=1)
+            return payload
+        with patch.object(self.data._SnapshotStore, 'read', read), patch.object(self.data, '_clock', side_effect=lambda supplied: original_clock(current[0] if supplied is None else supplied)):
+            with self.assertRaises(self.data.SecurityDataError):
+                self.data.read_snapshot(self.database, 'osv:PyPI')
+
+    def test_pending_publication_appearing_during_read_refuses_old_proof(self):
+        self.publish()
+        original = self.data._SnapshotStore.read
+
+        def read(store, parts, maximum):
+            payload = original(store, parts, maximum)
+            if parts[:2] == ('.snapshots', 'sha256'):
+                (self.database / 'PyPI/.publication-pending.json').write_bytes(b'public pending fixture')
+            return payload
+        with patch.object(self.data._SnapshotStore, 'read', read), self.assertRaises(self.data.SecurityDataError):
+            self.data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+
+    def test_withdrawn_schema_null_fields_do_not_create_false_missing_coverage(self):
+        withdrawn = {'id': 'PUBLIC-WITHDRAWN', 'withdrawn': '2026-01-01T00:00:00Z', 'aliases': None, 'affected': None}
+        try:
+            proof = self.publish(archive([record(), withdrawn]))
+        except self.data.SecurityDataError:
+            self.fail('schema-valid withdrawn null affected/aliases were refused')
+        self.assertEqual(proof['coverage']['record_count'], 2)
+
+    def test_named_unknown_ranges_cannot_hide_behind_exact_versions(self):
+        unknown = record()
+        unknown['affected'][0]['ranges'] = [{'type': 'GIT', 'repo': 'https://example.invalid/public/repository', 'events': [{'introduced': '0'}, {'fixed': 'a' * 40}]}]
+        malformed = record()
+        malformed['affected'][0]['ranges'] = [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0', 'fixed': '2'}]}]
+        from getzilla import known_vulns
+        for item in (unknown, malformed):
+            with self.subTest(kind=item['affected'][0]['ranges'][0]['type']):
+                # Publication retains the provider's unknown version semantics;
+                # a matching consumer cannot use an exact version to erase them.
+                self.publish(archive([item]))
+                dependency = known_vulns.Dependency('PyPI', 'public-other-package', '1.0.0', 'requirements.txt')
+                with self.assertRaises(known_vulns.VulnerabilityError):
+                    known_vulns.query_offline([dependency], self.database, now=NOW)
+
+    def test_named_npm_with_separate_git_supplement_is_supported(self):
+        item = record(ecosystem='npm')
+        item['affected'].append({'ranges': [{'type': 'GIT', 'repo': 'https://example.invalid/public/repository', 'events': [{'introduced': '0'}, {'fixed': 'a' * 40}]}]})
+        proof = self.data.osv_coverage(archive([item]), 'npm')
+        self.assertEqual(proof['scopes'], ['npm'])
+        self.assertEqual(proof['record_count'], 1)
 
 class OsvCompatibilityTests(unittest.TestCase):
+
     @staticmethod
     def archive(*records):
         output = io.BytesIO()
@@ -259,7 +585,8 @@ class OsvCompatibilityTests(unittest.TestCase):
             self.fail(f'valid nullable OSV field refused: {exc}')
 
     def test_nullable_alias_helper_returns_fresh_lists_without_truthiness_coercion(self):
-        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']}):
+        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']},
+                       {'aliases': [',', ' ', '']}):
             with self.subTest(fields=fields):
                 record = dict(self.active_record(), **fields)
                 first = self.accepted(lambda: SD.osv_aliases(record))
@@ -267,16 +594,17 @@ class OsvCompatibilityTests(unittest.TestCase):
                 self.assertEqual(first, fields.get('aliases') or [])
                 self.assertIsNot(first, second)
                 self.assertIsNot(first, record.get('aliases'))
-        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1]):
             with self.subTest(malformed=value), self.assertRaises(SD.SecurityDataError):
                 SD.osv_aliases(dict(self.active_record(), aliases=value))
 
     def test_nullable_aliases_pass_strict_zip_but_malformed_aliases_refuse(self):
-        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']}):
+        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']},
+                       {'aliases': [',', ' ', '']}):
             with self.subTest(fields=fields):
                 payload = self.archive(dict(self.active_record(), **fields))
                 self.assertEqual(self.accepted(lambda: SD.osv_coverage(payload, 'PyPI'))['record_count'], 1)
-        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1]):
             with self.subTest(malformed=value), self.assertRaises(SD.SecurityDataError):
                 SD.osv_coverage(self.archive(dict(self.active_record(), aliases=value)), 'PyPI')
 
@@ -299,7 +627,11 @@ class OsvCompatibilityTests(unittest.TestCase):
                 except osv.VulnerabilityError as exc:
                     self.fail(f'valid nullable OSV aliases refused by query: {exc}')
                 self.assertEqual(answer.aliases, fields.get('aliases') or [])
-        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+        for aliases in ([','], [' '], ['']):
+            answer = query(dict(self.active_record(), aliases=aliases))
+            self.assertEqual(answer.raw_aliases, aliases)
+            self.assertEqual(answer.aliases, [])
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1]):
             with self.subTest(malformed=value), self.assertRaises(osv.VulnerabilityError):
                 query(dict(self.active_record(), aliases=value))
 
@@ -335,23 +667,17 @@ class OsvCompatibilityTests(unittest.TestCase):
 
     def test_supplementary_git_row_needs_named_coverage_in_same_record(self):
         named = {'package': {'ecosystem': 'npm', 'name': 'phoenix'}, 'versions': ['1.0.0']}
-        git = {'ranges': [{'type': 'GIT', 'repo': 'https://github.com/phoenixframework/phoenix',
-                           'events': [{'introduced': '0'}, {'fixed': 'a' * 40}]}], 'versions': ['v1.0.0']}
+        git = {'ranges': [{'type': 'GIT', 'repo': 'https://github.com/phoenixframework/phoenix', 'events': [{'introduced': '0'}, {'fixed': 'a' * 40}]}], 'versions': ['v1.0.0']}
         good = {'id': 'EEF-CVE-2026-56812', 'affected': [git, named]}
         self.assertEqual(SD.osv_coverage(self.archive(good), 'npm')['record_count'], 1)
-        for bad in ([git], [git, {'package': {'name': 'phoenix', 'ecosystem': 'Hex'}, 'versions': ['1']}],
-                    [git, {**named, 'versions': [], 'ranges': [{}]}], [named, {}], [named, {'package': None, **git}],
-                    [named, {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]}],
-                    [named, {**git, 'ranges': [{**git['ranges'][0], 'events': [{'introduced': 'bogus'}]}]}],
-                    [named, {**git, 'ranges': [{**git['ranges'][0], 'type': 'SEMVER'}]}],
-                    [named, {**git, 'ranges': [{**git['ranges'][0], 'repo': 'not a URL'}]}]):
+        for bad in ([git], [git, {'package': {'name': 'phoenix', 'ecosystem': 'Hex'}, 'versions': ['1']}], [git, {**named, 'versions': [], 'ranges': [{}]}], [named, {}], [named, {'package': None, **git}], [named, {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]}], [named, {**git, 'ranges': [{**git['ranges'][0], 'events': [{'introduced': 'bogus'}]}]}], [named, {**git, 'ranges': [{**git['ranges'][0], 'type': 'SEMVER'}]}], [named, {**git, 'ranges': [{**git['ranges'][0], 'repo': 'not a URL'}]}]):
             with self.subTest(bad=bad), self.assertRaises(SD.SecurityDataError):
                 SD.osv_coverage(self.archive(good, {'id': 'OTHER', 'affected': bad}), 'npm')
 
     def test_registry_qualified_record_does_not_prove_default_registry_coverage(self):
+
         def record(identifier, ecosystem):
-            return {'id': identifier, 'affected': [{'package': {'name': 'drupal/example', 'ecosystem': ecosystem},
-                                                     'versions': ['1.0.0']}]}
+            return {'id': identifier, 'affected': [{'package': {'name': 'drupal/example', 'ecosystem': ecosystem}, 'versions': ['1.0.0']}]}
         default = record('DEFAULT', 'Packagist')
         custom = record('DRUPAL-CONTRIB-2017-082', 'Packagist:https://packages.drupal.org/8')
         self.assertEqual(SD.osv_coverage(self.archive(default, custom), 'Packagist')['record_count'], 2)
@@ -365,7 +691,7 @@ class OsvCompatibilityTests(unittest.TestCase):
         private = 'private-example-value-' * 600
         out = io.BytesIO()
         with zipfile.ZipFile(out, 'w') as archive:
-            archive.writestr(private + '.json', json.dumps({'id': private, 'aliases': [',']}))
+            archive.writestr(private + '.json', json.dumps({'id': private, 'aliases': [None]}))
         with self.assertRaisesRegex(SD.SecurityDataError, 'aliases') as exc:
             SD.osv_coverage(out.getvalue(), 'npm')
         message = str(exc.exception)
@@ -374,16 +700,16 @@ class OsvCompatibilityTests(unittest.TestCase):
         self.assertNotIn('private-example-value', message)
         self.assertLess(len(message), 400)
 
-
 @unittest.skipUnless(SD.DESCRIPTOR_IO_AVAILABLE, 'descriptor-bound filesystem attack controls require qualified POSIX')
 class SnapshotBoundaryTests(unittest.TestCase):
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         self.database = self.root / 'database'
         self.outside = self.root / 'outside'
-        self.outside.mkdir()
+        self.outside.mkdir(mode=0o700)
         (self.outside / 'marker').write_bytes(b'outside bytes must stay unchanged')
 
     def test_source_ancestor_link_cannot_write_pointer_or_export_outside(self):
@@ -391,7 +717,7 @@ class SnapshotBoundaryTests(unittest.TestCase):
         (self.database / 'PyPI').symlink_to(self.outside, target_is_directory=True)
         with self.assertRaises(SD.SecurityDataError):
             publish(self.database)
-        self.assertEqual(sorted(path.name for path in self.outside.iterdir()), ['marker'])
+        self.assertEqual(sorted((path.name for path in self.outside.iterdir())), ['marker'])
         self.assertEqual((self.outside / 'marker').read_bytes(), b'outside bytes must stay unchanged')
 
     def test_source_ancestor_link_is_not_accepted_by_reader_or_mirror(self):
@@ -401,10 +727,10 @@ class SnapshotBoundaryTests(unittest.TestCase):
         source.rename(moved)
         source.symlink_to(moved, target_is_directory=True)
         with self.assertRaises(SD.SecurityDataError):
-            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+            SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
         destination = self.root / 'mirror'
         with self.assertRaises(SD.SecurityDataError):
-            SD.copy_snapshot(self.database, destination, 'osv:PyPI', now=NOW)
+            SD.copy_snapshot(self.database, destination, 'osv:PyPI', now=EXPANDED_NOW)
         self.assertFalse(destination.exists())
 
     def test_object_ancestor_links_are_refused_for_publish_and_read(self):
@@ -418,7 +744,7 @@ class SnapshotBoundaryTests(unittest.TestCase):
                 selected.symlink_to(moved, target_is_directory=True)
                 before = {path.relative_to(moved).as_posix(): path.read_bytes() for path in moved.rglob('*') if path.is_file()}
                 with self.assertRaises(SD.SecurityDataError):
-                    SD.read_snapshot(database, 'osv:PyPI', now=NOW)
+                    SD.read_snapshot(database, 'osv:PyPI', now=EXPANDED_NOW)
                 with self.assertRaises(SD.SecurityDataError):
                     publish(database, payload=osv_bytes(version='2.0.0'))
                 after = {path.relative_to(moved).as_posix(): path.read_bytes() for path in moved.rglob('*') if path.is_file()}
@@ -434,7 +760,7 @@ class SnapshotBoundaryTests(unittest.TestCase):
             with self.subTest(selected=selected):
                 before = (actual / 'PyPI/snapshot.json').read_bytes()
                 with self.assertRaises(SD.SecurityDataError):
-                    SD.read_snapshot(selected, 'osv:PyPI', now=NOW)
+                    SD.read_snapshot(selected, 'osv:PyPI', now=EXPANDED_NOW)
                 with self.assertRaises(SD.SecurityDataError):
                     publish(selected, payload=osv_bytes(version='2.0.0'))
                 self.assertEqual((actual / 'PyPI/snapshot.json').read_bytes(), before)
@@ -450,14 +776,13 @@ class SnapshotBoundaryTests(unittest.TestCase):
         def exchange(raw):
             nonlocal exchanged
             result = decode(raw)
-            if result.get('source_id') == 'osv:PyPI' and not exchanged:
+            if result.get('source_id') == 'osv:PyPI' and (not exchanged):
                 exchanged = True
                 self.database.rename(displaced)
                 replacement.rename(self.database)
             return result
-
         with mock.patch.object(SD, '_json', side_effect=exchange), self.assertRaises(SD.SecurityDataError):
-            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+            SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
         self.assertTrue(exchanged)
 
     def test_directory_exchange_between_lstat_and_open_is_detected(self):
@@ -471,22 +796,20 @@ class SnapshotBoundaryTests(unittest.TestCase):
 
         def exchange(parent, name, **kwargs):
             nonlocal exchanged
-            if name == 'PyPI' and not exchanged:
+            if name == 'PyPI' and (not exchanged):
                 exchanged = True
                 source.rename(self.root / 'displaced-source')
                 replacement.rename(source)
             return opening(parent, name, **kwargs)
-
         with mock.patch.object(SD.fsx, 'open_dir_at', side_effect=exchange), self.assertRaises(SD.SecurityDataError):
-            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+            SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
         self.assertTrue(exchanged)
 
     def test_reader_rejects_leaf_links_and_special_files_without_following_or_blocking(self):
         for mode in ('pointer-link', 'object-link', 'pointer-fifo'):
             database = self.root / mode
             publish(database)
-            target = database / ('PyPI/snapshot.json' if mode.startswith('pointer') else
-                                 '.snapshots/sha256/' + hashlib.sha256(osv_bytes()).hexdigest())
+            target = database / ('PyPI/snapshot.json' if mode.startswith('pointer') else '.snapshots/sha256/' + hashlib.sha256(osv_bytes()).hexdigest())
             saved = self.outside / mode
             target.rename(saved)
             if mode.endswith('fifo'):
@@ -495,24 +818,24 @@ class SnapshotBoundaryTests(unittest.TestCase):
                 target.symlink_to(saved)
             before = saved.read_bytes()
             with self.subTest(mode=mode), self.assertRaises(SD.SecurityDataError):
-                SD.read_snapshot(database, 'osv:PyPI', now=NOW)
+                SD.read_snapshot(database, 'osv:PyPI', now=EXPANDED_NOW)
             self.assertEqual(saved.read_bytes(), before)
 
     def test_group_writable_snapshot_tree_is_an_explicit_refusal(self):
         publish(self.database)
         for target in (self.database, self.database / 'PyPI', self.database / '.snapshots/sha256'):
-            original = target.stat().st_mode & 0o777
-            target.chmod(original | 0o020)
+            original = target.stat().st_mode & 511
+            target.chmod(original | 16)
             try:
                 with self.subTest(target=target), self.assertRaisesRegex(SD.SecurityDataError, 'not writable by group/others'):
-                    SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+                    SD.read_snapshot(self.database, 'osv:PyPI', now=EXPANDED_NOW)
             finally:
                 target.chmod(original)
 
     def test_nonsticky_writable_ancestor_is_refused_before_publication(self):
         unsafe = self.root / 'shared-parent'
-        unsafe.mkdir(mode=0o700)
-        unsafe.chmod(0o777)
+        unsafe.mkdir(mode=448)
+        unsafe.chmod(511)
         database = unsafe / 'database'
         with self.assertRaisesRegex(SD.SecurityDataError, 'not writable by group/others'):
             publish(database)
@@ -537,9 +860,8 @@ class SnapshotBoundaryTests(unittest.TestCase):
                     target.write_bytes(target.read_bytes())
                     os.utime(target, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1))
                 return result
-
             with self.subTest(mode=mode), mock.patch.object(SD, '_validate', side_effect=mutate), self.assertRaises(SD.SecurityDataError):
-                SD.read_snapshot(database, 'osv:PyPI', now=NOW)
+                SD.read_snapshot(database, 'osv:PyPI', now=EXPANDED_NOW)
 
     def test_commit_race_does_not_replace_an_unrelated_symlink_target(self):
         publish(self.database)
@@ -550,10 +872,8 @@ class SnapshotBoundaryTests(unittest.TestCase):
 
         def exchange(source, destination, **kwargs):
             nonlocal exchanged
-            if Path(destination).name == 'snapshot.json' and not exchanged:
+            if Path(destination).name == 'snapshot.json' and (not exchanged):
                 exchanged = True
-                # Plant an identically named source in the redirect target. A
-                # path-based rename would then overwrite the unrelated pointer.
                 if kwargs:
                     descriptor = os.open(source, os.O_RDONLY, dir_fd=kwargs['src_dir_fd'])
                     with os.fdopen(descriptor, 'rb') as stream:
@@ -564,7 +884,6 @@ class SnapshotBoundaryTests(unittest.TestCase):
                 (self.database / 'PyPI').rename(self.root / 'displaced-source')
                 (self.database / 'PyPI').symlink_to(self.outside, target_is_directory=True)
             return replace(source, destination, **kwargs)
-
         with mock.patch.object(SD.os, 'replace', side_effect=exchange), self.assertRaises(SD.SecurityDataError):
             publish(self.database, payload=osv_bytes(version='2.0.0'))
         self.assertTrue(exchanged)
@@ -572,24 +891,31 @@ class SnapshotBoundaryTests(unittest.TestCase):
         self.assertEqual((self.outside / 'all.zip').read_bytes(), b'outside export')
 
     def test_mirror_destination_link_cannot_mutate_outside(self):
-        publish(self.database, acquired=NOW - timedelta(hours=71))
+        publish(self.database, acquired=EXPANDED_NOW - timedelta(hours=71))
         destination = self.root / 'mirror'
         destination.mkdir()
         (destination / 'PyPI').symlink_to(self.outside, target_is_directory=True)
         with self.assertRaises(SD.SecurityDataError):
-            SD.copy_snapshot(self.database, destination, 'osv:PyPI', now=NOW)
-        self.assertEqual(sorted(path.name for path in self.outside.iterdir()), ['marker'])
-
+            SD.copy_snapshot(self.database, destination, 'osv:PyPI', now=EXPANDED_NOW)
+        self.assertEqual(sorted((path.name for path in self.outside.iterdir())), ['marker'])
 
 class SnapshotCapabilityTests(unittest.TestCase):
+
     def test_missing_descriptor_capability_refuses_io_without_creating_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / 'database'
-            with mock.patch.object(SD, 'DESCRIPTOR_IO_AVAILABLE', False, create=True):
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(SD, 'DESCRIPTOR_IO_AVAILABLE', False, create=True))
+                if os.name == 'nt':
+                    # Missing POSIX descriptors no longer disables a native Windows store.
+                    # Refuse the selected backend's actual missing capability instead.
+                    from getzilla import security_data_windows
+                    stack.enter_context(mock.patch.object(security_data_windows, 'Native', side_effect=
+                        SD.SecurityDataError('native Windows snapshot handles unavailable')))
                 for operation in (lambda: publish(database),
                                   lambda: SD.read_snapshot(database, 'osv:PyPI', now=NOW),
                                   lambda: SD.copy_snapshot(database, database / 'mirror', 'osv:PyPI', now=NOW)):
-                    with self.subTest(operation=operation), self.assertRaisesRegex(SD.SecurityDataError, 'descriptor|POSIX'):
+                    with self.subTest(operation=operation), self.assertRaisesRegex(SD.SecurityDataError, 'descriptor|POSIX|native Windows'):
                         operation()
             self.assertFalse(database.exists())
 
@@ -597,11 +923,104 @@ class SnapshotCapabilityTests(unittest.TestCase):
         from getzilla.security_osv_snapshot import scan
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(SD, 'DESCRIPTOR_IO_AVAILABLE', False, create=True):
             root = Path(temporary)
-            result = scan(root, environ={'GETZILLA_OSV_DB': str(root / 'absent')}, now=NOW)
+            result = scan(root, environ={'GETZILLA_OSV_DB': str(root / 'absent')}, now=EXPANDED_NOW)
             self.assertEqual(result['status'], 'skip')
             self.assertEqual(result['dependencies'], 0)
             self.assertFalse((root / 'absent').exists())
 
+def record(identifier='PUBLIC-1', ecosystem='PyPI'):
+    return {'id': identifier, 'aliases': ['CVE-2026-0001'], 'affected': [{'package': {'ecosystem': ecosystem, 'name': 'public-other-package'}, 'versions': ['1.0.0']}]}
 
-if __name__ == '__main__':
-    unittest.main()
+def archive(records):
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w') as bundle:
+        for index, item in enumerate(records):
+            bundle.writestr(f'public-{index}.json', json.dumps(item))
+    return output.getvalue()
+
+class QueryStoreTests(unittest.TestCase):
+
+    def setUp(self):
+        from getzilla import known_vulns, security_data, security_osv_query
+        from tests.test_known_vulns import _repo
+        self.data, self.query = (security_data, security_osv_query)
+        temporary, self.root = _repo({'requirements.txt': 'public-package==1.0.0\n'})
+        self.addCleanup(temporary.cleanup)
+        self.database = self.root / 'public-store'
+        inventory = known_vulns.dependency_inventory(self.root, known_vulns.load_config(self.root))[2]
+
+        def transport(method, url, body, deadline, maximum):
+            return self.query.QueryResponse(method, url, body, b'{"results":[{}]}', 200, url)
+        self.payload, self.acquisition, self.coverage = self.query.acquire_transcript(inventory, transport=transport, now=NOW)
+
+    def publish(self, **kwargs):
+        return self.data.publish_snapshot(self.database, self.query.SOURCE_ID, self.payload, acquisition=self.acquisition, coverage=self.coverage, now=NOW, **kwargs)
+
+    def test_zero_hit_query_source_publishes_reads_confirms_and_copies(self):
+        try:
+            self.publish()
+        except self.data.SecurityDataError:
+            self.fail('qualified zero-hit query source is not registered in the same guarded store')
+        payload, proof = self.data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW, required_scope={'PyPI'})
+        self.assertEqual(payload, self.payload)
+        self.assertEqual(proof['coverage']['record_count'], 0)
+        self.data.confirm_snapshots(self.database, [proof], now=NOW)
+        destination = self.root / 'public-copy'
+        self.data.copy_snapshot(self.database, destination, self.query.SOURCE_ID, now=NOW)
+        self.assertEqual(self.data.read_snapshot(destination, self.query.SOURCE_ID, now=NOW)[1]['acquisition'], self.acquisition)
+        self.assertFalse((self.database / 'queries/native/all.zip').exists())
+
+    def test_current_input_callback_runs_at_pointer_boundary_and_preserves_old(self):
+        import inspect
+        self.assertIn('before_commit', inspect.signature(self.data.publish_snapshot).parameters, 'query publication needs a current input/deadline fence at actual pointer replacement')
+        self.publish()
+        pointer = self.database / 'queries/native/snapshot.json'
+        before = pointer.read_bytes()
+        calls = []
+
+        def guard():
+            calls.append(True)
+            raise self.data.SecurityDataError('public current inventory changed')
+        with self.assertRaises(self.data.SecurityDataError):
+            self.publish(before_commit=guard)
+        self.assertEqual(calls, [True])
+        self.assertEqual(pointer.read_bytes(), before)
+        self.assertEqual(self.data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW)[0], self.payload)
+
+    def test_query_acquisition_cannot_relabel_earliest_request_time(self):
+        acquisition = {**self.acquisition, 'last_verified_sync_utc': (NOW - timedelta(seconds=1)).isoformat()}
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.publish_snapshot(self.database, self.query.SOURCE_ID, self.payload, acquisition=acquisition, coverage=self.coverage, now=NOW)
+
+    def test_query_source_keeps_exact_age_and_refuses_future_completion(self):
+        from tests.test_security_osv_query import rewrite
+        self.publish()
+        self.data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW + timedelta(seconds=259200))
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW + timedelta(seconds=259201))
+
+        def future(members):
+            metadata = json.loads(members['transcript.json'])
+            metadata['completed_at_utc'] = (NOW + timedelta(seconds=1)).isoformat()
+            members['transcript.json'] = self.query.canonical(metadata)
+        payload = rewrite(self.payload, future)
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data.publish_snapshot(self.database, self.query.SOURCE_ID, payload, acquisition=self.acquisition, coverage=self.coverage, now=NOW)
+
+    def test_pointer_parent_is_reconfirmed_after_current_input_callback(self):
+        self.publish()
+        original, targets = (self.data.fsx.replace_at, [])
+        moved = self.root / 'public-owned-moved'
+
+        def guard():
+            self.database.rename(moved)
+            self.database.mkdir(mode=448)
+            (self.database / 'public-replacement-sentinel').write_bytes(b'public unchanged')
+
+        def replace(source_parent, source, target_parent, target):
+            targets.append(target)
+            return original(source_parent, source, target_parent, target)
+        with patch.object(self.data.fsx, 'replace_at', replace), self.assertRaises(self.data.SecurityDataError):
+            self.publish(before_commit=guard)
+        self.assertNotIn('snapshot.json', targets, 'pointer switched after its held parent was replaced during input I/O')
+        self.assertEqual((self.database / 'public-replacement-sentinel').read_bytes(), b'public unchanged')

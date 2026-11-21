@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import ctypes
 import errno
 import hashlib
@@ -9,7 +8,10 @@ import json
 import os
 import re
 import stat
+import subprocess as subprocess  # compatibility module export
+import threading as threading  # compatibility module export
 import sys
+sys.dont_write_bytecode = True
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -19,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
 
 from getzilla import fsx
+from getzilla.harnesses import platform_hook_payload
 from getzilla.skill_inventory import inspect_payload as inspect_skill_payload
 from getzilla.baseline_assets import archive_entries, validate_resources, BLOB_PREFIX
 from getzilla.component_state import (
@@ -49,12 +52,19 @@ MANAGED_DIRS = (
     "factory/tests",
 )
 MANAGED_FILES = (
+    "scripts/getzilla_execution.py",
+    "docs/supervised-execution.md",
+    "scripts/getzilla_reverse.py",
+    "docs/reverse-engineering.md",
     "scripts/getzilla_search_gateway.py",
     "docs/search-gateway.md",
+    "docs/isolated-ci-acceptance.md",
+    "docs/security-license-exceptions.md",
     "scripts/getzilla_design_reference.py",
     "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),
     "scripts/getzilla_duplicates.py",
+    "docs/LANGUAGE_QUALITY_GATES.md",
     "factory/.env.example",
     "factory/.gitignore",
     "factory/actors.example.json",
@@ -78,6 +88,10 @@ MANAGED_FILES = (
     "scripts/getzilla_audit_bundle.py",
     "scripts/getzilla_compliance.py",
     "scripts/getzilla_vulns.py",
+    "scripts/getzilla_security.py",
+    "scripts/getzilla_live.py",
+    "scripts/getzilla_live_lifecycle.py",
+    "scripts/getzilla_ci_admission.py",
     "scripts/getzilla_review.py",
     "scripts/getzilla_approve.py",
     "scripts/getzilla_components.py",
@@ -86,10 +100,12 @@ MANAGED_FILES = (
     "scripts/getzilla_agent.py",
     "scripts/getzilla_deploy.py",
     "docs/deploy-preflight.md",
+    "docs/deploy-recovery.md",
     "scripts/getzilla_evidence.py",
     "scripts/getzilla_ci_evidence.py",
     "scripts/getzilla_platform_install.py",
     "scripts/getzilla_update.py",
+    "scripts/getzilla_baseline.py",
     "scripts/getzilla_git.py",
     "scripts/getzilla_entire.py",
     "session_start.py",
@@ -111,6 +127,7 @@ MANAGED_FILES = (
     "schemas/change-spec.schema.json",
     "schemas/change-spec-v1.schema.json",
     "schemas/deploy-preflight-manifest-v1.schema.json",
+    "schemas/deploy-recovery-report-v1.schema.json",
     "schemas/architecture-system.schema.json",
     "schemas/architecture-rules.schema.json",
     "schemas/governance-rule.schema.json",
@@ -125,6 +142,8 @@ MANAGED_FILES = (
     "engineering/verification-dispositions.json",
     "engineering/vendor-custody/bmad-whitespace.json",
     "engineering/vendor-custody/bmad-whitespace.md",
+    "schemas/requirement-intake-v1.schema.json",
+    "schemas/intake-readiness-v1.schema.json",
 )
 ROOT_HOOK_SHIMS = frozenset(
     {
@@ -706,10 +725,14 @@ class _SourceTree:
                     f"managed source changed during enumeration: {relative}"
                 ) from exc
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
-                if name == "__pycache__":
+                if name in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}:
                     continue
-                if relative == "factory/src/getzilla_factory.egg-info":
-                    # Editable-install metadata is generated, never managed source.
+                if name.endswith(".egg-info") and not prefix.startswith((
+                    "factory/src/",
+                    ".getzilla/config/license-exception-inputs/factory-source-delivery-v1/vendor/",
+                )):
+                    # Editable metadata is generated beside the package. Nested
+                    # package assets and retained upstream source ship verbatim.
                     continue
                 if any(f"{relative}/".startswith(skip) and f"{relative}/" != skip for skip in SKIP_PREFIXES):
                     # Runtime state (worktrees, receipts, caches) is never payload: do not walk or count it.
@@ -908,7 +931,7 @@ def with_fresh_sync_record(payload: tuple[InstallEntry, ...], selection: Payload
     entry = InstallEntry(STACK_SYNC_RECORD, FRESH_SYNC_RECORD, 0o644)
     actual = (*payload, entry)
     manifest = InstallEntry(COMPONENT_MANIFEST, encode_manifest(fresh_manifest(selection.agents, actual)), 0o644)
-    return tuple(sorted((*actual, manifest), key=lambda item: item.path))
+    return _ownership_payload(tuple(sorted((*actual, manifest), key=lambda item: item.path)))
 
 
 def build_payload(
@@ -970,7 +993,7 @@ def _build_full_payload(
             installed_components.update(manifest['components'])
         entries = []
         for relative, expected_identity in inventory:
-            if relative in ROOT_HOOK_SHIMS:
+            if relative in ROOT_HOOK_SHIMS or relative == OWNERSHIP_PATH:
                 continue
             if (installed is not None and expected_identity is None and relative not in installed
                     and component_of(relative) not in installed_components):
@@ -1039,7 +1062,8 @@ def _build_full_payload(
             if PurePosixPath(*parts[:length]).as_posix() in seen:
                 raise UnsafeInstallTarget(f"managed file/directory collision: {path}")
     inspect_skill_payload((entry.path, entry.content) for entry in entries)
-    return tuple(entries)
+    return tuple(InstallEntry(entry.path, platform_hook_payload(entry.path, entry.content), entry.mode)
+                 for entry in entries)
 
 
 def _dependency_advice(
@@ -1178,6 +1202,134 @@ def _is_link_path(path: Path) -> bool:
         return False
 
 
+OWNERSHIP_PATH = ".getzilla/install-ownership.json"
+
+
+def _ownership_payload(payload: tuple[InstallEntry, ...]) -> tuple[InstallEntry, ...]:
+    files = [{"path": entry.path, "sha256": entry.sha256, "mode": entry.mode}
+             for entry in payload if entry.path != OWNERSHIP_PATH]
+    identity = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    content = json.dumps({"schema_version": 1, "source_payload_sha256": identity,
+                          "files": files}, sort_keys=True, indent=2).encode() + b"\n"
+    return tuple(sorted([entry for entry in payload if entry.path != OWNERSHIP_PATH] + [
+        InstallEntry(OWNERSHIP_PATH, content, 0o644)], key=lambda entry: entry.path.encode("utf-8")))
+
+
+def _consumer_git_status(target: Path) -> dict[str, object]:
+    """Consumer configuration and attributes cannot authorize plan-time code execution."""
+    return {"state": "unknown", "reason": "not-run-for-untrusted-config", "records": []}
+
+
+def _consumer_inventory(target: Path) -> dict[str, object]:
+    """Read bounded descriptor-relative observations; the manifest grants no mutation."""
+    owned: dict[str, dict[str, object]] = {}
+    uncertainty: list[str] = []
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                raise ValueError('duplicate ownership key')
+            value[key] = item
+        return value
+    try:
+        raw = _read_target_relative(target, OWNERSHIP_PATH, limit=MAX_SOURCE_FILE_BYTES)
+        if raw is not None:
+            record = json.loads(raw, object_pairs_hook=pairs)
+            files = record['files']
+            if (set(record) != {'schema_version', 'source_payload_sha256', 'files'}
+                    or type(record['schema_version']) is not int or record['schema_version'] != 1
+                    or not isinstance(files, list) or len(files) > MAX_MANAGED_SOURCE_ENTRIES
+                    or hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest() != record['source_payload_sha256']):
+                raise ValueError('invalid ownership manifest')
+            for row in files:
+                if not isinstance(row, dict) or set(row) != {'path', 'sha256', 'mode'}:
+                    raise ValueError('invalid ownership row')
+                name = row['path']
+                _path_parts(name)
+                if (name == OWNERSHIP_PATH or name in owned or type(row['sha256']) is not str
+                        or not re.fullmatch(r'[0-9a-f]{64}', row['sha256'])
+                        or type(row['mode']) is not int or not 0 <= row['mode'] <= 0o777):
+                    raise ValueError('invalid ownership row')
+                owned[name] = row
+    except (UnsafeInstallTarget, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        owned = {}
+        uncertainty.append('invalid-or-unsafe-ownership-manifest')
+    entries: list[dict[str, object]] = []
+    directories_seen = 0
+    entries_seen = 0
+    binding = None
+    def walk(descriptor, prefix='', depth=0):
+        nonlocal directories_seen, entries_seen
+        directories_seen += 1
+        if directories_seen > MAX_LEGACY_REPORT_ENTRIES or depth > MAX_MANAGED_SOURCE_DEPTH:
+            uncertainty.append('directory-limit')
+            return
+        names = sorted(fsx.listdir(descriptor))
+        entries_seen += len(names)
+        if entries_seen > MAX_MANAGED_SOURCE_ENTRIES:
+            uncertainty.append('inventory-limit')
+            return
+        for name in names:
+            if not prefix and name == '.git':
+                continue
+            relative = prefix + name
+            if len(entries) >= MAX_LEGACY_REPORT_ENTRIES:
+                uncertainty.append('inventory-limit')
+                return
+            metadata = fsx.lstat_at(descriptor, name)
+            if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
+                child, identity = _open_child_directory(descriptor, name, _identity(metadata))
+                try:
+                    walk(child, relative + '/', depth + 1)
+                    if _identity(fsx.lstat_at(descriptor, name)) != identity:
+                        raise UnsafeInstallTarget('consumer directory changed')
+                finally:
+                    fsx.close_dir(child)
+                continue
+            category = 'unknown'
+            parts = PurePosixPath(relative).parts
+            if fsx.is_link(metadata) or not stat.S_ISREG(metadata.st_mode):
+                uncertainty.append('unsafe-or-special-path')
+            elif any(part in {'evidence', 'test-evidence', 'scratch', 'runtime'} for part in parts):
+                category = 'evidence'
+            elif relative in {'client-consent.factory.json', '_bmad-output/client-consent.factory.json'} or any(part.startswith('requirements') for part in parts):
+                category = 'requirements'
+            elif any(part.endswith('.egg-info') or part in {'__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'} for part in parts):
+                category = 'generated-metadata'
+            elif relative in owned:
+                row = owned[relative]
+                content = _read_target_relative(target, relative, limit=MAX_SOURCE_FILE_BYTES)
+                after = fsx.lstat_at(descriptor, name)
+                unchanged = (content is not None and hashlib.sha256(content).hexdigest() == row['sha256']
+                    and _mode_matches(metadata.st_mode, row['mode']) and _file_identity(metadata) == _file_identity(after))
+                category = 'owned-unchanged' if unchanged else 'user-change'
+                if _file_identity(metadata) != _file_identity(after):
+                    uncertainty.append('unreadable-or-changing-path')
+            elif relative == 'AGENTS.md' or relative.startswith(('.github/', '.qwen/')):
+                category = 'user-change'
+            report = {'path': relative, 'classification': category, 'action': 'preserve'}
+            if category == 'owned-unchanged':
+                report.update(sha256=owned[relative]['sha256'], mode=owned[relative]['mode'])
+            entries.append(report)
+    try:
+        binding = _open_directory_binding(target)
+        walk(binding.descriptor)
+        _check_directory_binding(binding)
+    except (OSError, UnsafeInstallTarget):
+        uncertainty.append('unreadable-or-changing-path')
+    finally:
+        if binding is not None:
+            binding.close()
+    if uncertainty:
+        # Partial observations cannot establish a quarantine candidate.
+        for row in entries:
+            if row['classification'] == 'owned-unchanged':
+                row['classification'] = 'unknown'
+                row.pop('sha256', None)
+                row.pop('mode', None)
+    return {'entries': entries, 'complete': not uncertainty, 'uncertainty': sorted(set(uncertainty))}
+
+
 MAX_UNTRACKED_REPORT_ENTRIES = 2000
 _UNTRACKED_CLASSES = (
     ("generated-metadata", re.compile(r"(?:^|/)(?:[^/]+\.egg-info|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)(?:/|$)")),
@@ -1188,35 +1340,12 @@ _UNTRACKED_CLASSES = (
 
 
 def _existing_untracked(target: Path, owned: frozenset[str]) -> tuple[list[dict[str, str]], bool]:
-    """Untracked, non-ignored paths already in a git target, classified; the planner never removes any (#75).
+    """Compatibility listing; consumer Git tracking is deliberately not observed.
 
-    Requirements and evidence are never "unfinished work": every path is reported with
-    action PRESERVE, and a path the payload would also write is reported as a conflict.
+    Filesystem inventory supplies preservation and conflict information independently.
+    An empty listing cannot establish that the consumer has no untracked files.
     """
-    absolute = Path(os.path.abspath(target))
-    if not (absolute / ".git").exists():
-        return [], False
-    try:
-        proc = subprocess.run(  # nosec B603 B607 - fixed git argv, no shell
-            ["git", "-C", str(absolute), "ls-files", "--others", "--exclude-standard", "-z"],
-            capture_output=True, timeout=60, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return [], False
-    if proc.returncode != 0:
-        return [], False
-    paths = sorted(item for item in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if item)
-    report: list[dict[str, str]] = []
-    for relative in paths[:MAX_UNTRACKED_REPORT_ENTRIES]:
-        kind = next((name for name, pattern in _UNTRACKED_CLASSES if pattern.search(relative)), None) or (
-            "legacy-installation" if relative.startswith(tuple(item + "/" for item in LEGACY_MANAGED_DIRS)) else "user-change")
-        if relative in owned:
-            report.append({"action": "CONFLICT", "path": relative, "class": kind,
-                           "reason": "untracked target file at a path the installation would write"})
-        else:
-            report.append({"action": "PRESERVE", "path": relative, "class": kind,
-                           "reason": "not owned by the installation"})
-    return report, len(paths) > MAX_UNTRACKED_REPORT_ENTRIES
+    return [], False
 
 
 def _legacy_migration(target: Path) -> list[dict[str, str]]:
@@ -1245,8 +1374,8 @@ def _legacy_migration(target: Path) -> list[dict[str, str]]:
             if LEGACY_SCRIPT_PATTERN.fullmatch(name) and not _is_link_path(scripts / name):
                 found.append(f"scripts/{name}")
     return [
-        {"action": "RETIRE", "path": path, "replacement": legacy_to_current_path(path),
-         "reason": "pre-Getzilla stack path; remove after the plan is applied"}
+        {"action": "PRESERVE", "path": path, "replacement": legacy_to_current_path(path),
+         "reason": "legacy candidate; ownership unproved; retain until an exact recoverable migration is approved"}
         for path in found
     ]
 
@@ -1327,11 +1456,32 @@ def _make_plan(
     untracked, untracked_truncated = (
         _existing_untracked(target, frozenset(entry.path for entry in deliverable)) if state == "directory" else ([], False)
     )
+    reports = [entry.manifest() for entry in deliverable]
+    inventory = (_consumer_inventory(target) if state == 'directory'
+                 else {'entries': [], 'complete': state == 'absent', 'uncertainty': [] if state == 'absent' else ['unsafe-target']})
+    inventory_by_path = {row['path']: row for row in inventory['entries']}
+    for report in reports:
+        if report['path'] in inventory_by_path:
+            report['action'] = 'preserve-conflict'
+    legacy = _legacy_migration(target) if state == 'directory' else []
+    quarantine_candidates = []
+    for row in legacy:
+        observed = inventory_by_path.get(row['path'], {})
+        row['classification'] = observed.get('classification', 'unknown')
+        if observed.get('classification') == 'owned-unchanged' and inventory['complete']:
+            quarantine_candidates.append({'path': row['path'], 'sha256': observed['sha256'], 'mode': observed['mode'],
+                'destination': '.getzilla/migration-quarantine/' + observed['sha256'] + '/' + row['path']})
     return {
         "version": 1,
+        "consumer_inventory": inventory,
+        "consumer_git_status": _consumer_git_status(target) if state == "directory" else {"state": "absent", "records": []},
+        "quarantine_plan": {"action": "plan-only", "approval_required": True,
+                            "entries": quarantine_candidates,
+                            "restore": "Verify manifest hashes and modes; restore only to absent original paths; never overwrite conflicts.",
+                            "execution": "No quarantine executor exists. Obtain exact path approval and a recoverable manifest before any move."},
         "target_state": state,
         "kept": keep_reports,
-        "entries": [entry.manifest() for entry in deliverable],
+        "entries": reports,
         "selection": (selection or PayloadSelection.full_layout()).to_dict(),
         "components": footprint(full_payload, selection),
         "engine": _engine_report(selected_payload),
@@ -1340,8 +1490,9 @@ def _make_plan(
             {"component": "baseline:workflow", "installed_by": "scripts/getzilla_baseline.py apply"},
         ],
         "on_demand": "components left out are added when needed: getzilla components add agent:<name>|factory",
-        "legacy_migration": _legacy_migration(target) if state == "directory" else [],
+        "legacy_migration": legacy,
         "existing_untracked": untracked,
+        "existing_untracked_status": {"state": "unknown", "reason": "not-run-for-untrusted-config"},
         "existing_untracked_truncated": untracked_truncated,
         "dependency_advice": _dependency_advice(
             source,
@@ -1796,8 +1947,12 @@ def _materialize_new(
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
-    payload = (with_fresh_sync_record(build_payload(source, selection=selection), selection)
-               if prepared_payload is None else prepared_payload)
+    if prepared_payload is None:
+        selected = build_payload(source, selection=selection)
+        payload = _ownership_payload(with_fresh_sync_record(selected, selection))
+    else:
+        # Historical restoration supplies the entire digest-verified release inventory.
+        payload = prepared_payload
     plan = _make_plan(
         source,
         target,

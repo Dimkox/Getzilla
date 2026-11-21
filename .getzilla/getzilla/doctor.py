@@ -7,10 +7,11 @@ from pathlib import Path
 
 from .architecture import architecture_inputs_present, preflight_architecture
 from .manifest import verify_manifest
+from .language_quality.core import run_registry
 from .repo import detect_repo
 from .router import build_route
 from .toolchain import check_toolchain
-from .util import load_json
+from .util import load_json, git_head, tree_fingerprint
 
 
 @dataclass
@@ -49,8 +50,30 @@ def _engine_archive_item(archive: Path) -> DoctorItem:
     return DoctorItem('warn', 'engine-archive', 'legacy current-Python bytecode header-only check; importability unverified')
 
 
+def execution_control_status(root: Path) -> dict[str, object]:
+    """File inventory is not a host attestation. Ignore local loaded markers."""
+    installed = all((root / rel).is_file() for rel in (
+        '.getzilla/hooks/pre_tool_use.py', '.getzilla/hooks/_lib.py',
+        '.getzilla/getzilla/policy.py', '.getzilla/config/policy.json',
+        '.getzilla/getzilla/execution_admission.py',
+    ))
+    try:
+        head = git_head(root)
+        identity = {'git_head': head, 'tree_fingerprint': tree_fingerprint(root) if head else None}
+    except (OSError, RuntimeError, ValueError):
+        identity = {'git_head': None, 'tree_fingerprint': None}
+    return {'installed': installed, 'loaded': 'not-observed', 'host_verified': 'not-observed',
+            'bounded_tests': 'not-observed', 'full_gate': 'not-observed', 'delivery': 'not-observed',
+            'source_identity': identity}
+
+
 def run_doctor(root: Path) -> list[DoctorItem]:
     items: list[DoctorItem] = []
+    control = execution_control_status(root)
+    items.append(DoctorItem('info', 'native-enforcement',
+        f"installed={str(control['installed']).lower()}; loaded=not-observed; host_verified=not-observed; "
+        "bounded_tests=not-observed; full_gate=not-observed; delivery=not-observed. "
+        "Verify actual allowed and denied native events, including each inner tool, on the authorized host."))
 
     required = [
         'AGENTS.md', '.getzilla/config/hooks.json',
@@ -160,4 +183,9 @@ def run_doctor(root: Path) -> list[DoctorItem]:
 
     for tool in check_toolchain(root):
         items.append(DoctorItem(tool.status, f'tool:{tool.id}', tool.message))
+    for result in run_registry(root, None, preflight=True):
+        # Doctor reports readiness only; no config code, SDK or container runs here.
+        items.append(DoctorItem('fail' if result['tool_id'] == 'policy' else 'info',
+                                f"lqg:{result['tool_id']}:{result['package']}",
+                                result['execution_status'] + ': ' + result['summary']))
     return items

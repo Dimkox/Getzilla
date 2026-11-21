@@ -5,11 +5,21 @@ import ast
 import hashlib
 import json
 import re
+import subprocess
 import time
 from pathlib import Path, PurePosixPath
 
-from .util import run
+from .util import run, _observed_run
 from .verification_failure_excerpt import valid_policy_diagnostic
+from . import verification_failure_excerpt as _failure_excerpt
+
+
+def _valid_failure_diagnostic(value):
+    if valid_policy_diagnostic(value):
+        return True
+    return any(callable(validate) and validate(value) is True for validate in
+               (getattr(_failure_excerpt, 'valid_factory_diagnostic', None),
+                getattr(_failure_excerpt, 'valid_update_diagnostic', None)))
 
 
 def _pytest_source_metadata(source: str) -> tuple[int, set[str]]:
@@ -57,46 +67,80 @@ def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, se
     return result
 
 
-def _trusted_progress_metadata(root: Path, paths: list[str], *, deadline: float | None = None) -> dict[str, tuple[int, set[str]]]:
+def _trusted_progress_metadata(root: Path, paths: list[str], *, deadline: float | None = None,
+                               observation: dict | None = None) -> dict[str, tuple[int, set[str]]]:
     """Progress-only limits; leave terminal-output validation's contract intact."""
     if deadline is None:
         deadline = time.monotonic() + 2.0
 
-    def bounded_git(arguments):
+    observed = observation if observation is not None else {}
+    observed.update(status='unavailable', reason='source-unavailable', head=None, currentness='unknown')
+
+    def bounded_git(arguments, *, data=None, binary=False):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError
-        result = run(['git', *arguments], cwd=root, timeout=remaining)
+        options = {} if data is None else {'input': data.encode('utf-8')}
+        result = _observed_run(['git', *arguments], cwd=root, timeout=remaining,
+                               capture_output=True, check=False, **options)
         if result.returncode or time.monotonic() >= deadline:
             raise TimeoutError
-        return result.stdout
+        return result.stdout if binary else result.stdout.decode('utf-8')
 
     result: dict[str, tuple[int, set[str]]] = {}
     try:
         head = bounded_git(['rev-parse', 'HEAD']).strip()
         if not re.fullmatch('[0-9a-f]{40,64}', head):
             return {}
+        observed['head'] = head
         names = set(bounded_git(['ls-files', '-z', '--', *paths[:50]]).split('\0'))
+        selected = [path for path in paths[:50] if path in names]
+        specs = ''.join(head + ':' + path + '\n' for path in selected)
+        sizes = bounded_git(['cat-file', '--batch-check'], data=specs).splitlines() if selected else []
+        if len(sizes) != len(selected):
+            return {}
+        bounded = []
         total = 0
-        for path in paths[:50]:
-            if path not in names:
+        for path, row in zip(selected, sizes):
+            fields = row.split()
+            if (len(fields) != 3 or not re.fullmatch('[0-9a-f]{40,64}', fields[0])
+                    or fields[1] != 'blob' or not fields[2].isdecimal()):
                 continue
-            size = bounded_git(['cat-file', '-s', head + ':' + path]).strip()
-            if not size.isdecimal() or int(size) > 1_000_000:
+            size = int(fields[2])
+            if size > 1_000_000:
                 continue
-            total += int(size)
+            total += size
             if total > 8 * 1024 * 1024:
                 break
-            source = bounded_git(['show', head + ':' + path])
-            if len(source.encode('utf-8')) > 1_000_000:
-                continue
+            bounded.append((path, fields[0], size))
+        # Query only pre-sized immutable objects; aggregate bytes never exceed
+        # the existing8MiB ceiling. Five Git calls replace up to102 calls.
+        specs = ''.join(blob + '\n' for _, blob, _ in bounded)
+        raw = bounded_git(['cat-file', '--batch'], data=specs, binary=True) if bounded else b''
+        offset = 0
+        for path, blob, size in bounded:
+            end = raw.find(b'\n', offset)
+            if end < 0 or raw[offset:end] != f'{blob} blob {size}'.encode('ascii'):
+                return {}
+            offset = end + 1
+            source = raw[offset:offset + size].decode('utf-8')
+            offset += size
+            if raw[offset:offset + 1] != b'\n':
+                return {}
+            offset += 1
             try:
                 result[path] = _pytest_source_metadata(source)
             except (SyntaxError, ValueError, RecursionError):
                 continue
-        if bounded_git(['rev-parse', 'HEAD']).strip() != head:
+        if offset != len(raw):
             return {}
-    except (OSError, TimeoutError, UnicodeError, ValueError):
+        if bounded_git(['rev-parse', 'HEAD']).strip() != head:
+            observed['reason'] = 'source-changed'
+            return {}
+        observed.update(status='observed' if len(result) == len(paths) else 'partial',
+                        reason='complete' if len(result) == len(paths) else 'source-unavailable', currentness='verified')
+    except (OSError, TimeoutError, subprocess.TimeoutExpired, UnicodeError, ValueError):
+        observed['reason'] = 'deadline' if time.monotonic() >= deadline else 'source-unavailable'
         return {}  # Deadline/currentness uncertainty cannot identify a source.
     return result
 
@@ -125,7 +169,8 @@ def _progress_failure_rows(progress, workers):
         previous, valid = 0, True
         for event in row['events']:
             if (type(event) is not dict or set(event) not in ({'ordinal', 'phase', 'path', 'key'},
-                                                {'ordinal', 'phase', 'path', 'key', 'diagnostic'})
+                                                {'ordinal', 'phase', 'path', 'key', 'diagnostic'},
+                                                {'ordinal', 'phase', 'path', 'key', 'diagnostic_omitted'})
                     or type(event['ordinal']) is not int or not previous < event['ordinal'] <= row['sequence']
                     or event['phase'] not in ('setup', 'call', 'teardown')
                     or type(event['path']) is not str or len(event['path']) > 256
@@ -134,7 +179,10 @@ def _progress_failure_rows(progress, workers):
                     or type(event['key']) is not str or not re.fullmatch('[0-9a-f]{64}', event['key'])):
                 valid = False
                 break
-            if 'diagnostic' in event and not valid_policy_diagnostic(event['diagnostic']):
+            if 'diagnostic' in event and not _valid_failure_diagnostic(event['diagnostic']):
+                valid = False
+                break
+            if 'diagnostic_omitted' in event and event['diagnostic_omitted'] is not True:
                 valid = False
                 break
             previous = event['ordinal']
@@ -143,12 +191,17 @@ def _progress_failure_rows(progress, workers):
     return sorted(rows, key=lambda row: row['worker'])
 
 
-def _failure_progress_details(rows, identities, workers):
+def _failure_progress_details(rows, identities, workers, *, trusted_paths=()):
     output = {'version': 1, 'observation': 'FAILED_REPORTS_BEFORE_STOP', 'prefix_only': True,
               'status': 'unavailable', 'overflow': None, 'dropped': None, 'partial_tail': None,
-              'render_truncated': False, 'events': []}
+              'render_truncated': False, 'omitted_events': 0, 'events': []}
     if not rows:
         return output
+    diagnostic_omissions = any(event.get('diagnostic_omitted') is True
+                              or 'diagnostic' in event and (event['path'], event['key']) not in identities
+                              for row in rows for event in row['events'])
+    if diagnostic_omissions:
+        output['diagnostics_omitted'] = True
     known = len(rows) == workers
     proven = {name: any(row[name] for row in rows) for name in ('overflow', 'dropped', 'partial_tail')}
     # Positive facts survive uncertainty; absence is not yet a negative proof.
@@ -161,22 +214,29 @@ def _failure_progress_details(rows, identities, workers):
             unknown |= identity is None
             candidate = {'worker': row['worker'], 'ordinal': event['ordinal'],
                          'phase': event['phase'], 'identity': identity}
+            if identity is None and event['path'] in trusted_paths:
+                candidate['source'] = {'path': event['path'], 'key': event['key']}
             if identity is not None and 'diagnostic' in event:
                 candidate['diagnostic'] = dict(event['diagnostic'])
+            if (event.get('diagnostic_omitted') is True
+                    or identity is None and 'diagnostic' in event):
+                candidate['diagnostic_omitted'] = True
             proposed = {**output, 'events': output['events'] + [candidate]}
             # Reserve the longest final flag spelling without publishing a
             # provisional FALSE. Finalizing certainty must not exceed the cap.
-            budgeted = {**proposed, **{name: True if value else False for name, value in proven.items()}}
+            budgeted = {**proposed, 'omitted_events': 256,
+                        **{name: True if value else False for name, value in proven.items()}}
             if len(json.dumps(budgeted).encode('utf-8')) > 8192:
                 output['render_truncated'] = True
                 break
             output['events'].append(candidate)
         if output['render_truncated']:
             break
-    uncertain = not known or unknown or output['render_truncated'] or any(proven.values())
+    uncertain = not known or unknown or output['render_truncated'] or any(proven.values()) or diagnostic_omissions
     for name, value in proven.items():
         output[name] = True if value else None if uncertain else False
     output['status'] = 'partial' if uncertain else 'observed'
+    output['omitted_events'] = sum(len(row['events']) for row in rows) - len(output['events'])
     return output
 
 
@@ -223,7 +283,9 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
             paths.append(path)
         slots.append((worker, state, path, key))
     deadline = time.monotonic() + 2.0
-    trusted = _trusted_progress_metadata(root, paths, deadline=deadline) if paths else {}
+    source_lookup = {'status': 'unavailable', 'reason': 'no-source', 'head': None, 'currentness': 'unknown'}
+    trusted = _trusted_progress_metadata(root, paths, deadline=deadline, observation=source_lookup) if paths else {}
+    output['source_lookup'] = source_lookup
     requested = {(path, key) for _, _, path, key in slots if path is not None}
     requested.update((event['path'], event['key']) for row in failures for event in row['events'])
     identities = {}
@@ -243,13 +305,16 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
             break
     if expired:
         identities = {}
-    output['failure_events'] = _failure_progress_details(failures, identities, workers)
+        source_lookup.update(status='unavailable', reason='node-deadline', currentness='unknown')
+    output['failure_events'] = _failure_progress_details(failures, identities, workers, trusted_paths=trusted)
     rendered = []
     unknown = False
     for worker, state, path, key in sorted(slots):
         identity = identities.get((path, key))
         unknown |= identity is None
         candidate = {'worker': worker, 'state': state, 'identity': identity}
+        if identity is None and path in trusted:
+            candidate['source'] = {'path': path, 'key': key}
         if len(json.dumps({**output, 'slots': rendered + [candidate]}).encode('utf-8')) > 16000:
             break
         rendered.append(candidate)

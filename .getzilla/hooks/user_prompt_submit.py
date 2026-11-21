@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import os
 import sys
+sys.dont_write_bytecode = True
 
 try:
-    from _lib import emit, is_child_payload, prompt_text, read_payload, root_from, run_hook, session_id
+    from _lib import emit, harness, is_child_payload, prompt_text, read_payload, root_context, root_from, run_hook, session_id
     from getzilla.router import is_system_notice, route_context
     from getzilla.continuity import submit, unavailable_authority_notice
     from getzilla.state import get_active_route, discovered_route
@@ -51,12 +52,26 @@ def main() -> None:
         hints = _named_paths(root, prompt)
         if len((context + hints).encode('utf-8')) <= 16384:
             context += hints
-    emit({
-        'hookSpecificOutput': {
-            'hookEventName': 'UserPromptSubmit',
-            'additionalContext': context,
-        }
-    })
+    def emit_context(text):
+        emit({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': text}})
+    try:
+        from getzilla.retrieval.lifecycle import enabled, append_note
+        context_enabled = enabled(root)
+    except (ImportError, ValueError, OSError):
+        context_enabled = False
+    if not is_child_payload(payload) and not is_system_notice(prompt) and context_enabled:
+        try:
+            from getzilla.retrieval.native_local import deliver_hook_context
+            deliver_hook_context(root_context(payload, {}, 'Read'), harness(), prompt, context)
+            return
+        except (ImportError, ValueError, OSError) as error:
+            # An uncertain concrete emission cannot be retried through fallback.
+            if getattr(error, 'code', None) == 'native_access_outcome_unknown':
+                sys.stderr.write('Code context emission outcome unknown; no retry.\n')
+                return
+            context = append_note(context, 'Code context: unavailable for this source/sink or budget. '
+                                  'Use authorized ordinary search/reads; preserve the full stored handoff.')
+    emit_context(context)
 
 
 if __name__ == '__main__':

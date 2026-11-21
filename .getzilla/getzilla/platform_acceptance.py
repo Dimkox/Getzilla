@@ -169,6 +169,8 @@ def run_cell(source: Path, workspace: Path, *, cell_id: str, expected_head: str)
     def installer(script_source, home, project, ref, *, create):
         settings = {**environment, 'GETZILLA_HOME': str(home), 'GETZILLA_REPO': mirror.as_uri(),
                     'GETZILLA_REF': ref}
+        if script_source == source and os.environ.get('GETZILLA_GITHUB_METADATA_TOKEN'):
+            settings['GETZILLA_GITHUB_METADATA_TOKEN'] = os.environ['GETZILLA_GITHUB_METADATA_TOKEN']
         settings['GETZILLA_NEW_PROJECT' if create else 'GETZILLA_PROJECT'] = str(project)
         argv = (['pwsh', '-NoProfile', '-NonInteractive', '-File', script_source/'scripts/install.ps1']
                 if system == 'windows' else ['bash', script_source/'scripts/install.sh'])

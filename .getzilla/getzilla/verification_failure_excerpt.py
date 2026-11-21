@@ -1,10 +1,15 @@
 """Pure bounded pytest failure excerpts."""
 from __future__ import annotations
 
+import hashlib
+from importlib.machinery import ModuleSpec
 import json
+import os
 import re
+import sys
+from types import CellType, FunctionType, MemberDescriptorType, ModuleType
 
-from .process_limits import OUTPUT_LIMIT
+from .verification_actions import OUTPUT_LIMIT
 
 
 def policy_diagnostic(allowed, reason):
@@ -42,6 +47,243 @@ def policy_exception_diagnostic(error):
         r'GETZILLA_POLICY_DIAGNOSTIC decision=(allow|deny|unavailable) '
         r'reason=(budget|grant|secret|root|degraded|other)', error.args[0])
     return dict(zip(('decision', 'reason'), match.groups())) if match else None
+
+
+_UPDATE_REASONS = {'target-index-mode', 'target-index-identity', 'target-root', 'dirty-target',
+                   'missing-manifest', 'generated-policy', 'reconciliation', 'ownership',
+                   'checkout', 'source-payload', 'git-command', 'branch-conflict',
+                   'ignored-target', 'legacy-dependency', 'concurrency', 'other', 'unknown'}
+_UPDATE_PHASES = {'preflight', 'plan', 'git', 'publish', 'checkout', 'unknown'}
+
+
+def valid_update_diagnostic(value):
+    return (type(value) is dict and set(value) == {'kind', 'version', 'reason', 'phase', 'via'}
+            and type(value['kind']) is str and value['kind'] == 'update'
+            and type(value['version']) is int and value['version'] == 1
+            and type(value['reason']) is str and value['reason'] in _UPDATE_REASONS
+            and type(value['phase']) is str and value['phase'] in _UPDATE_PHASES
+            and type(value['via']) is str and value['via'] in {'direct', 'cause', 'context'})
+
+
+def _owned_update_type():
+    # No imports, source reads or sidecar lookups in a failure callback. A fake
+    # same-name class/module is not an owned exception producer.
+    module = sys.modules.get('getzilla.adapter_removal')
+    if type(module) is not ModuleType:
+        return None
+    namespace = vars(module)
+    spec = namespace.get('__spec__')
+    origin = namespace.get('__file__')
+    expected = os.path.join(os.path.dirname(__file__), 'adapter_removal.py')
+    if (type(origin) is not str or os.path.normcase(os.path.normpath(origin)) != os.path.normcase(os.path.normpath(expected))
+            or type(spec) is not ModuleSpec or type(spec.origin) is not str or type(spec.name) is not str
+            or spec.origin != origin or spec.name != 'getzilla.adapter_removal'
+            or namespace.get('__package__') != 'getzilla'):
+        return None
+    kind = namespace.get('UpdateError')
+    if (type(kind) is not type or kind.__bases__ != (RuntimeError,)
+            or kind.__module__ != 'getzilla.adapter_removal' or kind.__name__ != 'UpdateError'):
+        return None
+    initialize = vars(kind).get('__init__')
+    slot = vars(kind).get('_update_diagnostic')
+    if (type(initialize) is not FunctionType or initialize.__globals__ is not namespace
+            or initialize.__code__.co_filename != origin
+            or initialize.__module__ != 'getzilla.adapter_removal' or initialize.__qualname__ != 'UpdateError.__init__'
+            or initialize.__code__.co_freevars != ('__class__',)
+            or type(initialize.__closure__) is not tuple or len(initialize.__closure__) != 1
+            or type(initialize.__closure__[0]) is not CellType or initialize.__closure__[0].cell_contents is not kind
+            or type(slot) is not MemberDescriptorType or slot.__objclass__ is not kind):
+        return None
+    return kind, slot
+
+
+def update_exception_diagnostic(error):
+    """Observe closed native exception data, never messages or captured output.
+
+    This is a reason reported by an owned exception producer, not evidence of
+    execution/approval/PASS. At most four real exception objects are examined.
+    """
+    owned = _owned_update_type()
+    if owned is None:
+        return None
+    kind, slot = owned
+    seen, via = set(), 'direct'
+    for _ in range(4):
+        if id(error) in seen or type(error) not in (kind, AssertionError):
+            return None
+        seen.add(id(error))
+        # unittest.assertRaisesRegex clears its real caught exception's traceback
+        # before raising a builtin AssertionError on a mismatching regex. Require
+        # the live top-level assertion path, then inspect its native chain only.
+        if (via == 'direct' or type(error) is AssertionError) and BaseException.__traceback__.__get__(error) is None:
+            return None
+        if type(error) is kind:
+            value = slot.__get__(error, kind)
+            if type(value) is not tuple or len(value) != 2:
+                return None
+            result = {'kind': 'update', 'version': 1, 'reason': value[0], 'phase': value[1], 'via': via}
+            return result if valid_update_diagnostic(result) else None
+        cause = BaseException.__cause__.__get__(error)
+        context = BaseException.__context__.__get__(error)
+        error, via = (cause, 'cause') if cause is not None else (context, 'context')
+    return None
+
+
+MAX_FACTORY_DIAGNOSTIC_BYTES = 768
+_FACTORY_MARKER = 'GETZILLA_FACTORY_DIAGNOSTIC '
+_FACTORY_COUNTS = ('collected', 'executed', 'skipped', 'required', 'failures',
+                   'errors', 'loader_errors', 'unqualified_skips', 'missing_required')
+_FACTORY_REASONS = {'none', 'report-unavailable', 'source-unstable', 'required-missing',
+                    'unqualified-skip', 'loader-error', 'test-problems', 'tests-failed', 'unit-failed'}
+_FACTORY_PHASES = {'case', 'setUpClass', 'tearDownClass', 'setUpModule', 'tearDownModule',
+                   'unqualified_fixture', 'other'}
+_FACTORY_KINDS = {'failure', 'error', 'expected_failure', 'unexpected_success', 'other'}
+_FACTORY_ERRORS = {'AssertionError', 'RuntimeError', 'OSError', 'ValueError', 'TypeError',
+                   'KeyError', 'ImportError', 'AttributeError', 'PermissionError',
+                   'FileNotFoundError', 'TimeoutError', 'NotADirectoryError', 'IsADirectoryError', 'other'}
+
+
+def _factory_count(value):
+    if type(value) is list:
+        value = len(value)
+    return value if type(value) is int and 0 <= value <= 10000 else None
+
+
+def _factory_digest(value):
+    return value if type(value) is str and re.fullmatch('[0-9a-f]{64}', value) else None
+
+
+def _factory_json(value):
+    return json.dumps(value, separators=(',', ':'), sort_keys=True, ensure_ascii=True)
+
+
+def _factory_keys(value, names):
+    return (type(value) is dict and len(value) == len(names)
+            and all(type(key) is str for key in value) and set(value) == set(names))
+
+
+def factory_diagnostic(evidence, *, outcome=None, digests=None):
+    """Pure observation: no source reads, private values, identity or PASS authority.
+
+    Factory schema3 and the existing compact installed-child summary use the
+    same closed projection. Arbitrary problem IDs are SHA256 only; the already
+    retained declared/collected inventory can correlate them independently.
+    """
+    source = (evidence if type(evidence) is dict and len(evidence) <= 64
+              and all(type(key) is str for key in evidence) else {})
+    status = outcome if type(outcome) is str and outcome in {'pass', 'fail', 'skip'} else source.get('status')
+    status = status if type(status) is str and status in {'pass', 'fail', 'skip'} else 'unavailable'
+    counts = {key: _factory_count(source.get(key)) for key in _FACTORY_COUNTS}
+    counts['skipped'] = _factory_count(source.get('skipped', source.get('qualified_skips')))
+    counts['required'] = _factory_count(source.get('required', source.get('required_ids')))
+    supplied = (digests if type(digests) is dict and len(digests) <= 2
+                and all(type(key) is str for key in digests) else {})
+    hashes = {key: _factory_digest(supplied.get(key, source.get(key + '_digest')))
+              for key in ('collected_ids', 'source_inventory')}
+    raw = source.get('problems')
+    total = len(raw) if type(raw) is list and len(raw) <= 10000 else None
+    problems = []
+    omitted_fields = max(0, len(source) - sum(key in source for key in (
+        *_FACTORY_COUNTS, 'qualified_skips', 'required_ids', 'status', 'problems',
+        'source_stable', 'collected_ids_digest', 'source_inventory_digest')))
+    if (total and type(raw[0]) is dict and len(raw[0]) <= 16
+            and all(type(key) is str for key in raw[0])):
+        first = raw[0]
+        identifier = first.get('id')
+        try:
+            identity_hash = (hashlib.sha256(identifier.encode('utf-8')).hexdigest()
+                             if type(identifier) is str and len(identifier) <= 2048 else None)
+        except UnicodeError:
+            identity_hash = None
+        def code(name, allowed):
+            value = first.get(name)
+            return value if type(value) is str and value in allowed else 'other'
+        problems.append({'id_sha256': identity_hash, 'phase': code('phase', _FACTORY_PHASES),
+                         'kind': code('kind', _FACTORY_KINDS), 'exception': code('exception', _FACTORY_ERRORS),
+                         'frames_omitted': (_factory_count(first.get('frames'))
+                                            if type(first.get('frames')) is list and len(first['frames']) <= 32 else None)})
+        omitted_fields += max(0, len(first) - sum(key in first for key in ('id', 'phase', 'kind', 'exception', 'frames')))
+    if not source or total is None:
+        reason = 'report-unavailable'
+    elif source.get('source_stable') is False:
+        reason = 'source-unstable'
+    elif counts['missing_required']:
+        reason = 'required-missing'
+    elif counts['unqualified_skips']:
+        reason = 'unqualified-skip'
+    elif counts['loader_errors']:
+        reason = 'loader-error'
+    elif total:
+        reason = 'test-problems'
+    elif counts['failures'] or counts['errors']:
+        reason = 'tests-failed'
+    else:
+        reason = 'none' if status == 'pass' else 'unit-failed'
+    value = {'kind': 'factory', 'version': 1, 'status': status, 'reason': reason,
+             'counts': counts, 'digests': hashes, 'problems': problems,
+             'omitted': {'problems': total - len(problems) if total is not None else None,
+                         'fields': omitted_fields}}
+    if len(_factory_json(value).encode()) > MAX_FACTORY_DIAGNOSTIC_BYTES:
+        value['problems'] = []
+        value['omitted']['problems'] = total
+    return value
+
+
+def valid_factory_diagnostic(value):
+    """Closed validation at both private progress readers; never qualify evidence."""
+    if (not _factory_keys(value, {'kind', 'version', 'status', 'reason', 'counts', 'digests', 'problems', 'omitted'})
+            or type(value['kind']) is not str or value['kind'] != 'factory'
+            or type(value['version']) is not int or value['version'] != 1
+            or type(value['status']) is not str or value['status'] not in {'pass', 'fail', 'skip', 'unavailable'}
+            or type(value['reason']) is not str or value['reason'] not in _FACTORY_REASONS
+            or not _factory_keys(value['counts'], _FACTORY_COUNTS)
+            or not _factory_keys(value['digests'], {'collected_ids', 'source_inventory'})
+            or not _factory_keys(value['omitted'], {'problems', 'fields'})
+            or type(value['problems']) is not list or len(value['problems']) > 1):
+        return False
+    if any(item is not None and (type(item) is not int or not 0 <= item <= 10000)
+           for item in (*value['counts'].values(), *value['omitted'].values())):
+        return False
+    if any(item is not None and _factory_digest(item) is None for item in value['digests'].values()):
+        return False
+    for problem in value['problems']:
+        if (not _factory_keys(problem, {'id_sha256', 'phase', 'kind', 'exception', 'frames_omitted'})
+                or problem['id_sha256'] is not None and _factory_digest(problem['id_sha256']) is None
+                or type(problem['phase']) is not str or problem['phase'] not in _FACTORY_PHASES
+                or type(problem['kind']) is not str or problem['kind'] not in _FACTORY_KINDS
+                or type(problem['exception']) is not str or problem['exception'] not in _FACTORY_ERRORS
+                or problem['frames_omitted'] is not None and (type(problem['frames_omitted']) is not int
+                                                            or not 0 <= problem['frames_omitted'] <= 32)):
+            return False
+    return len(_factory_json(value).encode()) <= MAX_FACTORY_DIAGNOSTIC_BYTES
+
+
+def factory_assertion_message(evidence):
+    """Safe msg for a scoped unittest longMessage=False status assertion."""
+    value = evidence.get('factory_diagnostic') if type(evidence) is dict else None
+    if not valid_factory_diagnostic(value):
+        value = factory_diagnostic(evidence)
+    return _FACTORY_MARKER + _factory_json(value)
+
+
+def factory_exception_diagnostic(error):
+    """Accept only one real builtin assertion value, never captured output."""
+    if (type(error) is not AssertionError or len(error.args) != 1 or type(error.args[0]) is not str
+            or len(error.args[0]) > 4096 or not error.args[0].startswith(_FACTORY_MARKER)):
+        return None
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                raise ValueError('duplicate diagnostic field')
+            value[key] = item
+        return value
+    try:
+        raw = error.args[0][len(_FACTORY_MARKER):]
+        value = json.loads(raw, object_pairs_hook=pairs)
+        return value if valid_factory_diagnostic(value) and _factory_json(value) == raw else None
+    except (ValueError, TypeError, RecursionError):
+        return None
 
 
 def _pytest_summary_identity(line: str, trusted: dict[str, tuple[int, set[str]]]) -> tuple[str, str, str] | None:

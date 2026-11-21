@@ -1,0 +1,72 @@
+[
+  {
+    "path": "src/itsdangerous/__init__.py",
+    "lines": 38,
+    "sha256": "e122bbe6c09edbdc5b460404d5942d3079ca52e65801fddb4a964eadf7f52006"
+  },
+  {
+    "path": "src/itsdangerous/_json.py",
+    "lines": 18,
+    "sha256": "c0f4069a07b6c99f77dbc107285ea069d19ec866022502b1b54fa22ca13a5270"
+  },
+  {
+    "path": "src/itsdangerous/encoding.py",
+    "lines": 54,
+    "sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453"
+  },
+  {
+    "path": "src/itsdangerous/exc.py",
+    "lines": 106,
+    "sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e"
+  },
+  {
+    "path": "src/itsdangerous/serializer.py",
+    "lines": 406,
+    "sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2"
+  },
+  {
+    "path": "src/itsdangerous/signer.py",
+    "lines": 266,
+    "sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584"
+  },
+  {
+    "path": "src/itsdangerous/timed.py",
+    "lines": 228,
+    "sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b"
+  },
+  {
+    "path": "src/itsdangerous/url_safe.py",
+    "lines": 83,
+    "sha256": "6b3e1ee5f5e2fefb3e61b5a3f186709f8c2254a7de0fef8610a453e547aee0fe"
+  },
+  {
+    "path": "tests/test_itsdangerous/__init__.py",
+    "lines": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "tests/test_itsdangerous/test_encoding.py",
+    "lines": 37,
+    "sha256": "af71dbee0825fc8ae947b6c789b05f2331afe60efae2aee5145727446385c3f0"
+  },
+  {
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "lines": 197,
+    "sha256": "e9620d6a6999a77773e3a5733ca71cb81375dafd06ad0f3a5b2bea9404e66c26"
+  },
+  {
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "lines": 109,
+    "sha256": "219c2a399adc874f14534d1311e950c1e29b2c7d05d037770701b2af258b97a2"
+  },
+  {
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "lines": 115,
+    "sha256": "b75531b8901d48a6d7a5c4bbbb2342f02f6ef022185840121f7705c1e907979a"
+  },
+  {
+    "path": "tests/test_itsdangerous/test_url_safe.py",
+    "lines": 24,
+    "sha256": "64d2afc9ab467f209549841f0d87125243d646e011c725818eda8e75ad4d830d"
+  }
+]

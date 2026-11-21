@@ -21,6 +21,35 @@ _PHASES = ('configured', 'collection_finished', 'first_test_start')
 _FIELDS = {'version', 'nonce', 'worker', 'sequence', 'state', 'path', 'key'}
 
 
+def _failure_diagnostic_valid(value):
+    # Keep older minimal SDK imports and the existing closed policy shape.
+    if (type(value) is dict and set(value) == {'decision', 'reason'}
+            and type(value['decision']) is str and value['decision'] in {'allow', 'deny', 'unavailable'}
+            and type(value['reason']) is str
+            and value['reason'] in {'budget', 'grant', 'secret', 'root', 'degraded', 'other'}):
+        return True
+    try:
+        from . import verification_failure_excerpt as helper
+    except ImportError:
+        return False
+    return any(callable(validator) and validator(value) is True for validator in
+               (getattr(helper, 'valid_factory_diagnostic', None), getattr(helper, 'valid_update_diagnostic', None)))
+
+
+def _exception_diagnostic(error):
+    try:
+        from . import verification_failure_excerpt as helper
+    except ImportError:
+        return None
+    for name in ('policy_exception_diagnostic', 'factory_exception_diagnostic', 'update_exception_diagnostic'):
+        reader = getattr(helper, name, None)
+        if callable(reader):
+            value = reader(error)
+            if value is not None and _failure_diagnostic_valid(value):
+                return value
+    return None
+
+
 def _node_identity(nodeid: str) -> tuple[str | None, str | None]:
     # Parameters are arbitrary values. Strip them before validation or hashing.
     canonical = nodeid.partition('[')[0].replace('\\', '/')
@@ -193,6 +222,17 @@ class _WorkerProgress:
                                  'worker': self.worker}, 128)
         reserve = (64 if not self.failure_dropped else 0) + 64 if record['kind'] == 'failure' else (
             64 if record['kind'] == 'dropped' else 0)
+        if 'diagnostic' in record:
+            length = len(json.dumps(record, separators=(',', ':'), ensure_ascii=True).encode('ascii')) + 1
+            # Optional detail must not spend the space for later bounded failure
+            # identities. Reserve their largest closed shape, including omission.
+            future = {'kind': 'failure', 'ordinal': 2**63 - 1, 'phase': 'teardown',
+                      'path': 'x' * 256, 'key': 'f' * 64, 'diagnostic_omitted': True}
+            identity_bytes = len(json.dumps(future, separators=(',', ':')).encode('ascii')) + 1
+            identity_reserve = max(0, MAX_FAILURE_EVENTS - self.failure_rows - 1) * identity_bytes
+            if self.failure_written + length + reserve + identity_reserve > MAX_FAILURE_BYTES:
+                record = {key: value for key, value in record.items() if key != 'diagnostic'}
+                record['diagnostic_omitted'] = True
         self._failure_write(record, reserve)
 
     def pytest_runtest_makereport(self, item, call):
@@ -201,8 +241,7 @@ class _WorkerProgress:
         try:
             if call.excinfo is None:
                 return
-            from .verification_failure_excerpt import policy_exception_diagnostic
-            value = policy_exception_diagnostic(call.excinfo.value)
+            value = _exception_diagnostic(call.excinfo.value)
             if value is not None:
                 self._pending_diagnostic = (item.nodeid, call.when, value)
         except Exception:
@@ -272,6 +311,70 @@ class _WorkerProgress:
             self.handle = None
 
 
+class _TerminalProgress:
+    """At most1024 bytes per actor in existing captured/rotated Core output.
+
+    Start/end observations identify hook boundaries, never their internal cause
+    or execution success. Missing/truncated events remain unknown/partial.
+    """
+    def __init__(self, nonce, worker):
+        if (type(nonce) is not str or re.fullmatch('[0-9a-f]{32}',nonce) is None
+                or worker is not None and (type(worker) is not int or not 0<=worker<MAX_WORKERS)):
+            raise ValueError('invalid terminal observation identity')
+        self.nonce,self.worker=nonce,worker
+        self.written=0
+        self.seen=set()
+        self.omitted=False
+
+    def _mark(self, phase, state):
+        if self.omitted or (phase,state) in self.seen:
+            return
+        if phase not in {'session-finish','terminal-summary','unconfigure'} or state not in {'start','end','error'}:
+            return
+        self.seen.add((phase,state))
+        try:
+            current=time.monotonic_ns()
+            if type(current) is not int or not 0<=current<=2**63-1:
+                return
+            row={'kind':'core-terminal','nonce':self.nonce,'worker':self.worker,
+                 'phase':phase,'state':state,'monotonic_ns':current}
+            raw=(json.dumps(row,sort_keys=True,separators=(',',':'))+'\n').encode('ascii')
+            if self.written+len(raw)>MAX_PHASE_BYTES-128:
+                raw=(json.dumps({'kind':'core-terminal','worker':self.worker,'omitted':True},separators=(',',':'))+'\n').encode('ascii')
+                self.omitted=True
+            if self.written+len(raw)<=MAX_PHASE_BYTES:
+                sent=os.write(2,raw)
+                self.written+=sent
+                if sent!=len(raw):
+                    self.omitted=True
+        except (OSError,ValueError):
+            self.omitted=True
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        self._mark('session-finish','start')
+        try:
+            outcome = yield
+        except BaseException:
+            self._mark('session-finish','error')
+            raise
+        else:
+            # Old-style hookwrapper receives a Pluggy Result, including errors.
+            self._mark('session-finish','error' if outcome.excinfo is not None else 'end')
+
+    def pytest_terminal_summary(self, terminalreporter, exitstatus, config):
+        self._mark('terminal-summary','start')
+        try:
+            outcome = yield
+        except BaseException:
+            self._mark('terminal-summary','error')
+            raise
+        else:
+            self._mark('terminal-summary','error' if outcome.excinfo is not None else 'end')
+
+    def pytest_unconfigure(self, config):
+        self._mark('unconfigure','end')
+
+
 def pytest_addoption(parser):
     group = parser.getgroup('getzilla-core-progress')
     for name in ('dir', 'nonce', 'workers'):
@@ -299,6 +402,19 @@ def pytest_configure(config):
             or not isinstance(workers, str) or not re.fullmatch('[1-9][0-9]?', workers)
             or not 1 <= int(workers) <= MAX_WORKERS):
         raise ValueError('invalid closed Core progress options')
+    if phases:
+        from pytest import hookimpl
+        actor = None
+        if hasattr(config, 'workerinput'):
+            identity = getattr(config, 'workerinput', {}).get('workerid')
+            if isinstance(identity, str) and re.fullmatch(r'gw(?:0|[1-9][0-9]?)', identity):
+                actor = int(identity[2:])
+            else:
+                actor = MAX_WORKERS
+        if actor is None or actor < int(workers):
+            for hook in ('pytest_sessionfinish', 'pytest_terminal_summary'):
+                hookimpl(hookwrapper=True, tryfirst=True)(getattr(_TerminalProgress, hook))
+            config.pluginmanager.register(_TerminalProgress(nonce, actor), 'getzilla-core-terminal-phases')
     if not hasattr(config, 'workerinput'):
         if not phases:
             return
@@ -532,7 +648,8 @@ def _read_failure_prefix(handle, ordinal, nonce):
         serial = number
         if kind == 'failure':
             if (set(row) not in ({'kind', 'ordinal', 'phase', 'path', 'key'},
-                                     {'kind', 'ordinal', 'phase', 'path', 'key', 'diagnostic'}) or len(events) >= MAX_FAILURE_EVENTS
+                                     {'kind', 'ordinal', 'phase', 'path', 'key', 'diagnostic'},
+                                     {'kind', 'ordinal', 'phase', 'path', 'key', 'diagnostic_omitted'}) or len(events) >= MAX_FAILURE_EVENTS
                     or row['phase'] not in ('setup', 'call', 'teardown')
                     or type(row['path']) is not str or len(row['path']) > 256
                     or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', row['path'])
@@ -541,13 +658,15 @@ def _read_failure_prefix(handle, ordinal, nonce):
                 raise ValueError('invalid failure source')
             if 'diagnostic' in row:
                 value = row['diagnostic']
-                if (type(value) is not dict or set(value) != {'decision', 'reason'}
-                        or type(value['decision']) is not str or value['decision'] not in {'allow', 'deny', 'unavailable'}
-                        or type(value['reason']) is not str or value['reason'] not in {'budget', 'grant', 'secret', 'root', 'degraded', 'other'}):
+                if not _failure_diagnostic_valid(value):
                     raise ValueError('invalid failure diagnostic')
+            if 'diagnostic_omitted' in row and row['diagnostic_omitted'] is not True:
+                raise ValueError('invalid diagnostic omission')
             event = {key: row[key] for key in ('ordinal', 'phase', 'path', 'key')}
             if 'diagnostic' in row:
                 event['diagnostic'] = row['diagnostic']
+            if 'diagnostic_omitted' in row:
+                event['diagnostic_omitted'] = True
             events.append(event)
         elif kind == 'dropped' and set(row) == {'kind', 'ordinal'} and not dropped:
             dropped = True

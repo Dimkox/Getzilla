@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-11-20 — Keep larger queue analysis budgets source-bound to Getzilla
+
+The owner approved 600,000 aggregate AST nodes and import depth 16 for the Getzilla self profile so it can analyze the reviewed source graph; its existing 128-module and 4 MiB limits remain. Consumer defaults stay at 400,000 aggregate AST nodes, import depth 8, 64 modules and 2 MiB, and helper-return recursion stays at 8. Bind every resource field to the canonical source profile, keep cache footprints profile-specific, and report the selected limits in refusal diagnostics so copied declarations and arbitrary caller values cannot grant more capacity.
+
+## 2026-11-19 — Exercise native decoding in hook observer tests
+
+Feed UTF-8 JSON stdin through the actual hook decoder when injecting advisory observer failures. Keep mandatory policy evaluation and permission output real, and retain sensitive-tool denial, public-read, fixed-warning and broken-diagnostic-sink assertions.
+
+## 2026-11-19 — Capture retrieval facts in the existing observation path
+
+Publish native retrieval facts through the canonical route publication, delivery proof and journal, with actual read attempts and no paid claim. Bind disclosure of source metadata to the proved current local policy input set, including selected module and continuation bytes. Keep exact-byte restoration semantics explicit; enterprise revocation remains owned by the existing Factory authority and service epoch.
+
 ## 2026-10-23 — Bind return demand to scopes and imported members
 
 Bind queue return demand to its lexical scope and imported member, rather than the whole verifier module. Remove scalar-helper pruning because static syntax does not prove runtime receiver or import binding. Calibrate the finite module limit to 48 for the measured 35-module closure, with tighter per-importer limits of 2 MiB source, 400,000 AST nodes and 4,096 shared work units; cache reuse must preserve every charge.

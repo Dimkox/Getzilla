@@ -207,12 +207,13 @@ class GitBindingGuardOperationsTests(_GuardFixture):
                              (hashlib.sha256(b"original content\n").hexdigest(), False))
 
     def test_transient_absent_commondir_never_admits_foreign_head(self) -> None:
-        root, admin, _, _ = self.repository()
+        root, admin, _, head = self.repository()
         foreign, _, _, _ = self.repository(name="foreign")
         (foreign / "value.txt").write_bytes(b"foreign content\n")
         self.git(foreign, "add", ".")
         self.git(foreign, "commit", "-qm", "foreign fixture")
         foreign_head = self.git(foreign, "rev-parse", "HEAD")
+        self.assertNotEqual(foreign_head, (head + "\n").encode())
         real_run = diff._run_capped
         observed = []
 
@@ -230,7 +231,7 @@ class GitBindingGuardOperationsTests(_GuardFixture):
 
         with mock.patch.object(diff, "_run_capped", side_effect=transient):
             self.refused(lambda: diff.run_git_bounded(root, ["rev-parse", "HEAD"]))
-        self.assertEqual(observed, [foreign_head])
+        self.assertEqual(observed, [(head + "\n").encode()])
         self.assertFalse((admin / "commondir").exists())
 
     def test_ancestor_swap_and_restore_never_admits_a_result(self) -> None:
@@ -454,13 +455,15 @@ class GitBindingGuardAcquisitionTests(_GuardFixture):
         with mock.patch.object(native.LinuxGitGuard, "_watch", failed_watch):
             self.refused(lambda: diff.run_git_bounded(root, ["rev-parse", "HEAD"]))
 
-    def test_pure_binding_tolerates_dir_churn_but_refuses_replacement(self) -> None:
+    def test_active_binding_keeps_directory_metadata_strict_without_observer(self) -> None:
         root, _, _, _ = self.repository()
         binding = diff._git_binding(root)
         self.churn(root)
-        binding.verify()
+        binding.verify()  # A standalone observation does not authorize a Git read.
+        self.refused(lambda: binding.verify(strict_directories=True), "worktree root")
+        binding = diff._git_binding(root)
         self.replace_directory(root / ".git")
-        self.refused(binding.verify, "directory")
+        self.refused(binding.verify)
         with diff._GitOperation(root) as scope:
             self.assertEqual(scope.mode, "linux-inotify-overlayfs-v1")
         self.refused(lambda: diff._git_object_id_length(root, _scope=scope), "operation")
@@ -732,16 +735,13 @@ class GitBindingGuardFallbackTests(_GuardFixture):
         before = len(os.listdir("/proc/self/fd"))
         for index, unavailable in enumerate(variants):
             with self.subTest(capability=index), unavailable:
-                with diff._GitOperation(root) as scope:
-                    self.assertEqual(scope.mode, "strict")
-                    self.assertIsNone(scope.guard)
-                    self.assertEqual(diff.run_git_bounded(root, ["rev-parse", "HEAD"], _scope=scope),
-                                     (head + "\n").encode())
-                binding = diff._git_binding(root)
-                self.churn(admin)
-                binding.verify()
+                self.refused(lambda: diff._git_binding(root))
+            binding = diff._git_binding(root)
+            self.churn(admin)
+            self.refused(lambda: binding.verify(strict_directories=True), "directory")
+            binding = diff._git_binding(root)
             self.replace_directory(admin)
-            self.refused(binding.verify, "directory")
+            self.refused(binding.verify)
             self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     @unittest.skipUnless(os.name == "posix", "POSIX directory aliases")
@@ -758,10 +758,7 @@ class GitBindingGuardFallbackTests(_GuardFixture):
     def test_unhandled_symbolic_reference_target_keeps_strict_binding(self) -> None:
         root, _, common, head = self.repository()
         (common / "refs/heads/other").write_bytes(b"ref: outside-covered-refs\n")
-        with diff._GitOperation(root) as scope:
-            self.assertEqual(scope.mode, "strict")
-            self.assertEqual(diff.run_git_bounded(root, ["rev-parse", "HEAD"], _scope=scope),
-                             (head + "\n").encode())
+        self.refused(lambda: diff._git_binding(root))
 
     def test_unqualified_backend_reacquires_strict_and_allows_loose_objects(self) -> None:
         root, admin, common, head = self.repository()
@@ -782,9 +779,54 @@ class GitBindingGuardFallbackTests(_GuardFixture):
                 self.assertEqual(diff.run_git_bounded(root, ["rev-parse", "HEAD"]), (head + "\n").encode())
             binding = diff._git_binding(root)
             self.churn(admin)
-            binding.verify()
+            self.refused(lambda: binding.verify(strict_directories=True), "directory")
+            binding = diff._git_binding(root)
             self.replace_directory(admin)
-            self.refused(binding.verify, "directory")
+            self.refused(binding.verify)
+
+    @unittest.skipIf(os.name == "nt", "POSIX ctime detects a restored directory name")
+    def test_unavailable_guard_refuses_restored_root_and_pending_cache_admission(self) -> None:
+        root, _, _, head = self.repository()
+        foreign, _, _, _ = self.repository(name="foreign")
+        (foreign / "value.txt").write_bytes(b"foreign content\n")
+        self.git(foreign, "add", ".")
+        self.git(foreign, "commit", "-qm", "foreign change")
+        foreign_head = self.git(foreign, "rev-parse", "HEAD")
+        self.assertNotEqual(foreign_head, (head + "\n").encode())
+        saved = self.parent / "saved-root"
+        before = root.stat()
+        real_run = diff._run_capped
+        observed = []
+
+        def substitute(command, **kwargs):
+            if command[-2:] != ["rev-parse", "HEAD"]:
+                return real_run(command, **kwargs)
+            root.rename(saved)
+            foreign.rename(root)
+            try:
+                result = real_run(command, **kwargs)
+                observed.append(result[1])
+                return result
+            finally:
+                root.rename(foreign)
+                saved.rename(root)
+                os.utime(root, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+        def operation():
+            with diff._GitOperation(root) as scope:
+                self.assertEqual(scope.mode, "strict")
+                self.assertIsNone(scope.guard)
+                scope.stage("format", ("restored-root-marker",), 40)
+                diff.run_git_bounded(root, ["rev-parse", "HEAD"], _scope=scope)
+
+        with mock.patch.object(native, "_native_api", side_effect=native.GuardUnavailable("platform")):
+            with mock.patch.object(diff, "_run_capped", side_effect=substitute):
+                self.refused(operation, "worktree root")
+        self.assertEqual(observed, [(head + "\n").encode()])
+        self.assertTrue(all(not cache for cache in (
+            diff._GIT_FORMAT_CACHE, diff._GIT_COMMIT_CACHE,
+            diff._GIT_BLOB_CACHE, diff._MATERIALIZED_STATE_CACHE,
+        )))
 
     def test_unhandled_configuration_uses_git_parsing_and_strict_fallback(self) -> None:
         variants = (
@@ -799,6 +841,9 @@ class GitBindingGuardFallbackTests(_GuardFixture):
                 root, admin, _, head = self.repository(name=str(index))
                 with (admin / "config").open("a") as stream:
                     stream.write(extra)
+                if index < 2:
+                    self.refused(lambda: diff._git_binding(root))
+                    continue
                 with diff._GitOperation(root) as scope:
                     self.assertEqual(scope.mode, "strict")
                     self.assertIsNone(scope.guard)
@@ -809,10 +854,7 @@ class GitBindingGuardFallbackTests(_GuardFixture):
         root, _, common, head = self.repository()
         _foreign, _, foreign_common, _ = self.repository(name="foreign")
         (common / "objects/info/alternates").write_text(str(foreign_common / "objects") + "\n")
-        with diff._GitOperation(root) as scope:
-            self.assertEqual(scope.mode, "strict")
-            self.assertEqual(diff.run_git_bounded(root, ["rev-parse", "HEAD"], _scope=scope),
-                             (head + "\n").encode())
+        self.refused(lambda: diff._git_binding(root))
 
     def test_unknown_filesystem_keeps_strict_binding(self) -> None:
         root, _, _, head = self.repository()

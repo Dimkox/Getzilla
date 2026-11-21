@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+sys.dont_write_bytecode = True
 import time
 from pathlib import Path
 
@@ -30,9 +31,31 @@ def main(argv: list[str] | None = None) -> int:
                         help='run the command once per matching path; {} is replaced by the quoted path')
     parser.add_argument('--timeout', type=float, help='seconds per command')
     parser.add_argument('--show-all', action='store_true', help='also print the output of passing commands')
+    parser.add_argument('--managed-tool', action='append', default=[], help='source-pinned local tool ID; opt-in namespace execution')
+    parser.add_argument('--intent', help='stable intent prefix for managed tools')
+    parser.add_argument('--wait-seconds', type=float, default=1, help='bounded managed observation, at most30seconds')
     parser.add_argument('commands', nargs='*', help='shell commands (or, with --each, one command template)')
     args = parser.parse_args(argv)
     root = find_root()
+    if args.managed_tool:
+        import json
+        from getzilla import execution, execution_store, supervised_execution
+        if (args.commands or args.each or not args.intent or len(args.managed_tool) > 2
+                or args.timeout is None or not args.timeout.is_integer()
+                or not 0 < args.wait_seconds <= 30):
+            print(json.dumps({'error': 'invalid_managed_batch'}))
+            return 2
+        try:
+            attempts = [supervised_execution.start(root, tool_id=tool,
+                intent_key=f'{args.intent}.{index}', hard_timeout_seconds=int(args.timeout))
+                for index, tool in enumerate(args.managed_tool)]
+            results = [supervised_execution.observe(root, item['execution_id'], wait_seconds=args.wait_seconds)
+                       for item in attempts]
+        except (execution.ExecutionError, execution_store.RegistryError) as error:
+            print(json.dumps({'error': error.code}))
+            return 2
+        print(json.dumps({'profile': supervised_execution.PROFILE, 'attempts': results}))
+        return 0
     cwd = Path.cwd()
     commands = expand_each(args.each, ' '.join(args.commands), cwd) if args.each else list(args.commands)
     if not commands:

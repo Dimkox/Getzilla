@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .architecture import ArchitectureError
-from .architecture_diff import _git_command, _git_environment, _run_capped
+from .architecture_diff import _git_environment, run_git_read
 from .component_state import path_parts
 
 MAX_FILE_BYTES = 2097152
@@ -41,9 +41,8 @@ def read_pinned_tree(root: Path, commit: str, *, prefixes=('skills/', 'LICENSE')
         if remaining <= 0:
             raise ValueError('PINNED_READ_DEADLINE')
         try:
-            code, out, _error = _run_capped(
-                _git_command(['-c', 'protocol.allow=never', *arguments], safe_directory=root),
-                cwd=root, env=env, stdout_limit=limit, stderr_limit=1024,
+            code, out, _error = run_git_read(
+                root, arguments, stdout_limit=limit, stderr_limit=1024,
                 timeout=min(10, remaining), stdin_data=stdin)
         except (ArchitectureError, OSError) as exc:
             raise ValueError('PINNED_SOURCE_UNAVAILABLE') from exc

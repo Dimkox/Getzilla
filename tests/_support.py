@@ -200,7 +200,8 @@ def public_source_copy(source: Path | None = None) -> Iterator[Path]:
 
 
 @contextlib.contextmanager
-def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
+def project_copy(*, git: bool = False, minimal_runtime: bool = False,
+                 verification_fixture: bool = False, source_only_runtime: bool = False) -> Iterator[Path]:
     """Copy a full or minimal synthetic project with isolated scanner inputs."""
     with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
         # Tests can explicitly substitute a Gitless synthetic PROJECT. Keep its
@@ -219,15 +220,34 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                 continue
             def ignore(directory: str, names: list[str]) -> set[str]:
                 omitted = set(shutil.ignore_patterns('__pycache__', '*.pyc')(directory, names))
+                if verification_fixture and Path(directory) == PROJECT / '.getzilla':
+                    # This opted-in project declares metadata contracts, not optional
+                    # payload/template dependencies. Filter before its initial commit.
+                    omitted.update({'vendor', 'optional-modules', 'tools'})
+                if verification_fixture and Path(directory) == PROJECT / '.getzilla/templates':
+                    omitted.update(name for name in names if name != 'change')
+                if verification_fixture and Path(directory) == PROJECT / '.getzilla/config':
+                    # The named closed providers below replace these fixture-only
+                    # host tool installations. Default project copies retain both.
+                    # This opted-in metadata fixture owns an empty security world;
+                    # quality tools and optional CI images stay outside its first commit.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json',
+                                    'license-exception-inputs'})
                 if Path(directory) == PROJECT / '.getzilla/runtime':
                     # Runtime can contain the fixture destination or a changing review snapshot.
                     # Exclude it before descending; deleting copied state afterward is too late.
                     omitted.update(name for name in names if name not in {'.gitkeep', '.gitignore'})
-                if minimal_runtime and Path(directory) == PROJECT / '.getzilla/getzilla':
+                if (minimal_runtime and not verification_fixture and not source_only_runtime
+                        and Path(directory) == PROJECT / '.getzilla/getzilla'):
                     omitted.update(name for name in names if name != '__init__.py')
-                if minimal_runtime and Path(directory) == PROJECT / '.getzilla/sast':
+                if (minimal_runtime or verification_fixture or source_only_runtime) and Path(directory) == PROJECT / '.getzilla/sast':
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
+                if source_only_runtime and Path(directory) == PROJECT / '.getzilla/config':
+                    # This owned app excludes framework tools and the optional
+                    # Factory corresponding-source payload before its first commit.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json',
+                                    'license-exception-inputs'})
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore, copy_function=copy_file)
         runtime = root / '.getzilla/runtime'
@@ -245,6 +265,23 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                 copy_file(src, root / rel)
         for rel in ('engineering/changes', 'engineering/adr', 'engineering/runbooks', 'engineering/reviews'):
             (root / rel).mkdir(parents=True, exist_ok=True)
+        if verification_fixture:
+            (root / '.getzilla/owned-verification-fixture.json').write_text(json.dumps({
+                'schema_version': 1, 'kind': 'owned-verification-fixture',
+                'providers': ['ruff', 'bandit'],
+            }) + '\n')
+            shutil.copytree(PROJECT / 'schemas', root / 'schemas', copy_function=copy_file)
+            (root / 'owned_fixture.py').write_text('def value():\n    return "owned"\n')
+            tests = root / 'tests'
+            tests.mkdir()
+            (tests / '__init__.py').write_text('')
+            (tests / 'test_owned_fixture.py').write_text(
+                'import unittest\nfrom owned_fixture import value\n'
+                'class OwnedFixtureTests(unittest.TestCase):\n'
+                '    def test_value(self):\n        self.assertEqual(value(), "owned")\n')
+            (root / '.coveragerc').write_text(
+                '[run]\nbranch = True\nsource = owned_fixture\n'
+                '[report]\nfail_under = 100\nshow_missing = True\n')
         if git:
             subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
             subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=root, check=True)
@@ -255,17 +292,82 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
             subprocess.run(['git', 'config', 'gc.auto', '0'], cwd=root, check=True)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', 'commit', '-qm', 'initial'], cwd=root, check=True)
-        yield root
+        with owned_verification_providers(root) if verification_fixture else contextlib.nullcontext():
+            yield root
 
 
-def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
+def _owned_verification_marker(root: Path) -> None:
+    root = Path(root).resolve()
+    if root == PROJECT.resolve():
+        raise ValueError('the real project cannot be an owned verification fixture')
+    marker = root / '.getzilla/owned-verification-fixture.json'
+    expected = {'schema_version': 1, 'kind': 'owned-verification-fixture', 'providers': ['ruff', 'bandit']}
+    if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 4096:
+        raise ValueError('owned fixture marker is unavailable')
+    if json.loads(marker.read_text()) != expected:
+        raise ValueError('owned fixture declaration differs')
+
+
+@contextlib.contextmanager
+def owned_verification_providers(root: Path, *, captured: str = '') -> Iterator[None]:
+    """Own only unrelated linter callbacks; native plans, dispatch and validators run.
+
+    These syntax providers qualify their closed fixture assertions. They make no
+    Ruff/Bandit vendor, real-project, dependency-feed or independent-authority claim.
+    """
+    import ast
+    from unittest.mock import patch
+    from getzilla import verification
+    _owned_verification_marker(root)
+    if type(captured) is not str or len(captured) > 12000:
+        raise ValueError('owned fixture capture exceeds the existing bound')
+
+    def check(selected: Path, name: str):
+        _owned_verification_marker(selected)
+        paths = sorted(selected.glob('*.py'))
+        if len(paths) > 64:
+            raise ValueError('owned syntax source count exceeds its fixture bound')
+        for path in paths:
+            if path.is_symlink() or path.stat().st_size > 65536:
+                raise ValueError('owned syntax source is not bounded')
+            try:
+                ast.parse(path.read_text(encoding='utf-8'), filename=path.name)
+            except SyntaxError:
+                return verification.CheckResult(name, 'fail', 'owned syntax provider refused source')
+        return verification.CheckResult(name, 'pass', 'owned syntax provider; no external linter qualification',
+            stdout=captured, details=[{'kind': 'owned-fixture-provider', 'source_count': len(paths)}])
+
+    owned = root / '.getzilla/runtime'
+    selectors = {'GETZILLA_SECURITY_DB': str(owned / 'owned-security-data'),
+                 'GETZILLA_OSV_DB': str(owned / 'owned-security-data'), 'GETZILLA_OSV_ONLINE': '0',
+                 'GETZILLA_SECURITY_TOOLS': str(owned / 'owned-security-tools'),
+                 'GETZILLA_SECURITY_ARTIFACTS': str(owned / 'owned-security-artifacts'),
+                 'GETZILLA_TEST_WORKERS': '1'}
+    with patch.dict(os.environ, selectors), \
+         patch.object(verification, '_ruff', side_effect=lambda selected: check(selected, 'ruff')), \
+         patch.object(verification, '_bandit', side_effect=lambda selected: check(selected, 'bandit')):
+        yield
+
+
+def owned_verification_report(root: Path, *, mode: str = 'pr', captured: str = '', **options) -> dict:
+    """Execute the actual verifier over the explicitly declared owned project."""
+    from getzilla.verification import verify
+    _owned_verification_marker(root)
+    with owned_verification_providers(root, captured=captured):
+        return verify(root, mode=mode, record=False, **options)
+
+
+def run_hook(root: Path, name: str, payload: dict, *, harness: str | None = None) -> tuple[int, dict, str]:
     script = root / '.getzilla/hooks' / name
     # Use the fixture even when the parent runner exposes the intact source package.
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join((str(root), str(root / '.getzilla')))
     # Bytes in both directions, as agents exchange them: UTF-8 JSON, never the console code page.
+    command = [sys.executable, str(script)]
+    if harness is not None:
+        command.extend(['--harness', harness])
     proc = subprocess.run(
-        [sys.executable, str(script)],
+        command,
         cwd=root,
         env=env,
         input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
@@ -278,6 +380,7 @@ def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
     except json.JSONDecodeError:
         data = {}
     return proc.returncode, data, proc.stderr.decode('utf-8', errors='replace')
+
 
 
 def synchronize_fixture_scope(root: Path) -> None:
@@ -371,13 +474,28 @@ def offline_mirror(base: Path) -> Path:
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
     from getzilla import baseline, updater
+    from getzilla.security_data import osv_coverage, publish_snapshot
+    from datetime import datetime, timezone
 
     mirror = base / 'update-mirror'
+    archives = {}
     for ecosystem in updater.OSV_ECOSYSTEMS:
         archive = mirror / 'osv' / ecosystem / 'all.zip'
         archive.parent.mkdir(parents=True)
         with zipfile.ZipFile(archive, 'w') as bundle:
-            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': []}))
+            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': [{
+                'package': {'ecosystem': ecosystem, 'name': 'example/owned' if ecosystem in {'Go', 'Packagist'} else 'owned-fixture'},
+                'versions': ['1.0.0'],
+            }]}))
+        archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip'] = archive.read_bytes()
+    current = datetime.now(timezone.utc)
+    for ecosystem in updater.OSV_ECOSYSTEMS:
+        payload = archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip']
+        publish_snapshot(mirror / 'osv', f'osv:{ecosystem}', payload,
+                         acquisition={'last_verified_sync_utc': current.isoformat(),
+                                      'retrieval_kind': 'download',
+                                      'producer': 'synthetic-public-offline-mirror'},
+                         coverage=osv_coverage(payload, ecosystem), now=current)
     opengrep = {}
     for asset, _ in updater.OPENGREP_ASSETS.values():
         data = f'#!/bin/sh\necho "opengrep {updater.OPENGREP_VERSION} fixture ({asset})"\n'.encode()
@@ -406,3 +524,25 @@ def offline_mirror(base: Path) -> Path:
     manifest = {'opengrep': opengrep, 'baseline': {component_id: commit for component_id in components}}
     (mirror / updater.MIRROR_MANIFEST).write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     return mirror
+
+
+def write_current_verification(root: Path) -> dict:
+    """Record real current native verification for positive receipt/Stop fixtures.
+
+    Review receipts remain an explicit test seam; this helper never substitutes assertions
+    for executed checks or manufactures database evidence.
+    """
+    from getzilla.security_inventory import collect_inventory
+    from getzilla.verification import verify
+    from getzilla.verification_plan import report_gaps
+    inventory = collect_inventory(root)
+    if not inventory['complete'] or any(inventory[key] for key in ('dependencies', 'images', 'tools')):
+        raise AssertionError('current-verification fixture must have a complete source-only inventory')
+    report = verify(root, mode='pr', record=True)
+    if report['status'] != 'pass':
+        failed = [item for item in report['checks'] if item['status'] == 'fail']
+        raise AssertionError(report.get('required_plan_error') or failed)
+    gaps = report_gaps(root, report)
+    if gaps:
+        raise AssertionError(gaps)
+    return report

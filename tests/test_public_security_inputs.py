@@ -101,6 +101,38 @@ def release_fixture(directory):
     return inventory, record, bundle
 
 
+class NewOciPreparationConsumerTests(unittest.TestCase):
+    def test_explicit_numeric_envelope_preserves_profile_caps_and_exact_binding(self):
+        from getzilla import security_cli
+        from tests.test_security_oci_layout import owned_binding, owned_image, owned_network
+        from getzilla.security_data import SecurityDataError
+        binding = owned_binding()
+        _, reference = owned_image()
+        inventory = {'complete': True, 'gaps': [], 'digest': binding['inventory_sha256'],
+                     'dependencies': [], 'tools': [], 'images': [{'reference': reference, 'platform': 'linux/amd64'}]}
+        roots = {'database': '/new-owned/data', 'artifacts': '/new-owned/artifacts', 'tools': '/new-owned/tools'}
+        args = (binding['source'], inventory, roots, binding['run'], binding['policy_sha256'])
+        old = security_cli.input_profile(*args, now=NOW)
+        selected = security_cli.input_profile(*args, now=NOW, network_selection=owned_network())
+        self.assertEqual(old['image_profile'], selected['image_profile'])
+        self.assertEqual(selected['image_network_selection'], owned_network())
+        self.assertNotEqual(old['profile_sha256'], selected['profile_sha256'])
+        self.assertEqual(security_cli.validate_input_profile(selected, *args, now=NOW), selected)
+        changed = json.loads(json.dumps(selected))
+        changed['image_network_selection']['registry-1.docker.io'] = ['1.1.1.1']
+        with self.assertRaises(SecurityDataError):
+            security_cli.validate_input_profile(changed, *args, now=NOW)
+
+    def test_retained_layout_projection_never_claims_scan_or_qualification(self):
+        from getzilla import security_cli
+        selected = {'kind': 'oci-image-acquisition', 'status': 'pass', 'qualification': 'UNVERIFIED',
+                    'manifest_sha256': 'a' * 64, 'records': [{'subject': {'reference': 'owned'}}]}
+        result = security_cli.preparation_result({'observed_counts': {}}, {}, {}, [], [selected], {'status': 'skip'})
+        self.assertEqual(result.get('retained_image_layouts'), [selected])
+        self.assertEqual(result['qualification'], 'UNVERIFIED')
+        self.assertEqual(result['scan_outcomes'], [])
+
+
 class PublicReleaseLicenseTests(unittest.TestCase):
     def test_exact_source_pinned_release_archive_retains_component_licenses(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -371,11 +403,88 @@ class PublicInputProfileTests(unittest.TestCase):
 
 class UnactivatedWorkflowBoundaryTests(unittest.TestCase):
     def test_earlier_capability_keeps_accepted_required_ci_unactivated(self):
-        expected = {'.github/workflows/getzilla.yml': '937b307d67893bffda87189d6c38cc5a340e569bc30d2e2c0bf0e2d5aa5280f7', '.getzilla/templates/ci/github-actions-verify.yml': '4ef210a1d4e819d4a4d410e090b6fd96833f271c1b73ddfcd886124c459e8d37', 'tests/test_ci_gate.py': '83bcacb36968be3a242aca5bb54f0cbc4338ce0d708389f7001d2ad196dd2788'}
-        self.assertNotIn("\n  security-expanded:", (ROOT / ".github/workflows/getzilla.yml").read_text())
-        for relative, digest in expected.items():
-            with self.subTest(path=relative):
-                self.assertEqual(sha((ROOT / relative).read_bytes()), digest)
+        import os
+        import yaml
+        from tests.test_393_review_boundaries import guarded
+
+        def owned(function, root):
+            with guarded(root):
+                return function()
+
+        workflow = yaml.safe_load((ROOT / ".github/workflows/getzilla.yml").read_text())
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        steps = workflow["jobs"]["security-expanded"]["steps"]
+        selected = next(row for row in steps if row.get("id") == "checker_ref")
+        self.assertEqual(
+            selected["env"],
+            {
+                "OPERATOR_CHECKER": "${{ vars.GETZILLA_SECURITY_CHECKER_SHA }}",
+                "BASE_CHECKER": "${{ github.event.pull_request.base.sha || github.event.before }}",
+            },
+        )
+        checkout = next(row for row in steps if row.get("with", {}).get("path") == "trusted-checker")
+        self.assertEqual(checkout["with"]["ref"], "${{ steps.checker_ref.outputs.sha }}")
+        self.assertIs(checkout["with"]["persist-credentials"], False)
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+        code = compile(selected["run"], "owned-checker-selection", "exec")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for override, base in (("", "a" * 40), ("b" * 40, "a" * 40)):
+                output = root / "selected"
+                if output.exists():
+                    output.unlink()
+                with patch.dict(
+                    os.environ,
+                    {
+                        "OPERATOR_CHECKER": override,
+                        "BASE_CHECKER": base,
+                        "GITHUB_SHA": "c" * 40,
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                    clear=True,
+                ):
+                    owned(lambda: exec(code, {"__name__": "owned_selection"}), root)
+                self.assertIn("sha=" + (override or base) + "\n", output.read_text())
+                self.assertNotIn("sha=" + "c" * 40, output.read_text())
+            for base in ("", "0" * 40, "not-an-exact-sha"):
+                output = root / "refused"
+                with patch.dict(
+                    os.environ,
+                    {
+                        "OPERATOR_CHECKER": "",
+                        "BASE_CHECKER": base,
+                        "GITHUB_SHA": "c" * 40,
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                    clear=True,
+                ):
+                    with self.assertRaises(SystemExit):
+                        owned(lambda: exec(code, {"__name__": "owned_selection"}), root)
+                self.assertFalse(output.exists())
+
+    def test_original_unactivated_capability_bytes_are_historical_not_current_defaults(self):
+        import subprocess
+        from tests._support import missing_history
+
+        expected = {
+            ".github/workflows/getzilla.yml": (
+                "f643fe1a13103d29f34a42a7fc6343389a628c4c",
+                "ab97a59a7cf20e704e8398123428fc63deab0d96864f2ac52c6ee9c3030a140f",
+            ),
+            "tests/test_ci_gate.py": (
+                "b0906fadf83643b3fa621e4c1cf05742d6e6bd60",
+                "fc231f2ccf886e7f4cac7b85eb3b132221cd13db90ae7b5e791c2fa3e6ceb792",
+            ),
+        }
+        for path, (anchor, digest) in expected.items():
+            result = subprocess.run(["git", "show", anchor + ":" + path], cwd=ROOT, capture_output=True, timeout=5)
+            if result.returncode:
+                missing_history("original unactivated capability " + anchor)
+            self.assertEqual(sha(result.stdout), digest)
+        self.assertEqual(
+            sha((ROOT / ".getzilla/templates/ci/github-actions-verify.yml").read_bytes()),
+            "4ef210a1d4e819d4a4d410e090b6fd96833f271c1b73ddfcd886124c459e8d37",
+        )
 
 
 class BoundedPreparationDispatchTests(unittest.TestCase):

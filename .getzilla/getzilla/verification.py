@@ -25,9 +25,10 @@ import signal
 import sys
 import tempfile
 import time as time
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from .agent_evals import required_suites
@@ -37,18 +38,25 @@ from .architecture import (
     preflight_architecture, validate_repository_drift,
 )
 from .architecture_diagrams import artifact_digests, compare_generated, render_diagrams
-from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
-from .architecture_fitness import diff_architecture, evaluate_fitness
+from .architecture_diff import _git, _git_blob, git_binding_scope, select_architecture_comparison_base
+from .git_ranges import (  # noqa: F401  compatibility exports retain exact shared type identity
+    FOCUSED_STATIC_SEO_LANDING_MODE, GitRangeBase, GitRangeSelection, _RANGE_MODES,
+    _existing_ref_candidates, _git_range_selection, _resolve_commit, _select_local_pr_target,
+)
+from .architecture_fitness import evaluate_fitness
+from .architecture_diff import diff_architecture
 from .quality_gates import evaluate_quality_gate, required_check_refused
+from .expanded_security import known_vulnerability_check, run_checks as expanded_security_checks
+from .language_quality.core import run_registry as run_language_quality, project_checks as language_quality_checks
 from .receipts import (
     active_architecture_binding,
     active_governance_binding,
     validate_evidence,
     write_receipt,
 )
-from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
+from .spec import (_parse_canonical_json, canonical_spec_digest,
+                   criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec)
 from .package_status import read_package_file
-from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
 from . import stack_runners  # noqa: F401  registers the Rust, .NET and PowerShell runners
 from .stack_toolchains import Blocker, Toolchain, ensure_toolchain, resolve_version
 from .stacks import load_registry, stack_checks
@@ -61,8 +69,8 @@ from .python_test_runner import (
 from .util import (
     find_tool,
     tool_search_path,
-    changed_file_statuses,
-    changed_files,
+    changed_file_statuses,  # noqa: F401 compatibility
+    changed_files,  # noqa: F401 compatibility
     command_exists,
     git_head,
     now_utc,
@@ -81,6 +89,32 @@ from .verification_scope import (
     select_docs_state_scope,
 )
 from .verification_tools import planned_checks as planned_tool_checks
+from .verification_scope import (  # noqa: F401 compatibility exports for shared selectors
+    NODE_LOCKFILES,
+    QUALITY_PY_PATHS,
+    _CHANGE_PACKAGE_PREFIX,
+    _FOCUSED_LANDING_TEST_NAME,
+    _SAFE_FOCUSED_FILE_STATUSES,
+    _SEMGREP_CONFIGS,
+    _STATIC_LANDING_PREFIX,
+    _TRIVY_FILES,
+    _changed_file_inventory,
+    _docs_state_status_inventory,
+    _existing_quality_paths,
+    _focused_file_status_findings,
+    _focused_test_landing_key,
+    _is_focused_landing_test,
+    _is_valid_inventory_path,
+    _normalize_landing_key,
+    _safe_inventory_value,
+    _semgrep_config,
+    _trivy_config_present,
+    composer_check_selection,
+    node_check_selection,
+    node_lockfile,
+    python_check_selection,
+    select_static_seo_landing_scope,
+)
 
 
 @dataclass
@@ -120,6 +154,7 @@ class _RunState:
     context: dict[str, Any] | None = None
     context_route_id: str | None = None
     context_error: str | None = None
+    required_plan: dict | None = None
 
 
 @diagnostics.observed('task-context-check')
@@ -153,14 +188,15 @@ def _task_context_check(root: Path, state: _RunState) -> CheckResult:
 class _CheckDispatch:
     """Retain completed results and disclose remaining scheduled work after refusal."""
 
-    def __init__(self, results, mode, scope=None, *, keep_going=False, blocked_by=None):
+    def __init__(self, results, mode, scope=None, *, keep_going=False, blocked_by=None, required_plan=None):
         self.results, self.mode, self.scope = results, mode, scope
         self.fail_fast = mode in {'pr', 'release'} and not keep_going
         self.blocked_by = blocked_by
+        self.required_plan = required_plan
 
     def add(self, check):
         self.results.append(check)
-        if self.fail_fast and self.blocked_by is None and required_check_refused(check, mode=self.mode, docs_scope=self.scope):
+        if self.fail_fast and self.blocked_by is None and required_check_refused(check, mode=self.mode, docs_scope=self.scope, required_plan=self.required_plan):
             self.blocked_by = check.name
         return check
 
@@ -227,32 +263,9 @@ def _record_verification_receipt(root: Path, report: dict[str, object], fingerpr
                 report['checks'].append(CheckResult('receipt-cleanup', 'fail', _failure_message(cleanup)).to_dict())
 
 
-@dataclass(frozen=True)
-class GitRangeBase:
-    kind: str
-    source: str
-    target_sha: str
-    comparison_base_sha: str
-
-
-@dataclass
-class GitRangeSelection:
-    bases: list[GitRangeBase] = field(default_factory=list)
-    findings: list[dict[str, str]] = field(default_factory=list)
-
-
-FOCUSED_STATIC_SEO_LANDING_MODE = 'focused-static-seo-landing'
-_RANGE_MODES = {'pr', 'release', FOCUSED_STATIC_SEO_LANDING_MODE}
-_STATIC_LANDING_PREFIX = 'side-projects/seo-landings/'
-_FOCUSED_LANDING_TEST_NAME = re.compile(
-    r'^test_(?P<landing>[A-Za-z0-9][A-Za-z0-9_-]*?)_seo_landing(?:_[A-Za-z0-9_-]+)?\.py$'
-)
 # New packages live in the ignored runtime namespace; tracked legacy packages stay valid.
-_CHANGE_PACKAGE_PREFIX = re.compile(
-    r'^(?:engineering|\.getzilla/runtime)/changes/[A-Za-z0-9][A-Za-z0-9._-]*$'
-)
-_SAFE_FOCUSED_FILE_STATUSES = {'A', 'M', '??'}
 _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS = 900
+_LIVE_FACTORY_OUTER_TIMEOUT_SECONDS = 1800
 
 
 def _canonical_digest(value: object) -> str:
@@ -284,19 +297,23 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
 
 
 @diagnostics.observed('architecture-check')
+@git_binding_scope()
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,
+    *,
+    _trusted_ranges: GitRangeSelection | None = None,
 ) -> tuple[CheckResult, dict[str, object]]:
     try:
-        binding = active_architecture_binding(root, route or {})
+        binding = (active_architecture_binding(root, route or {}) if _trusted_ranges is None else
+                   active_architecture_binding(root, route or {}, _trusted_ranges=_trusted_ranges))
         if binding is None:
             return (
                 CheckResult("architecture", "skip", "architecture is not configured"),
                 {"configured": False, "status": "not_configured"},
             )
         snapshot = load_architecture(root)
-        base_selection = select_architecture_comparison_base(root, route)
+        base_selection = select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges)
         base = base_selection.comparison_base_sha
         if (
             binding["architecture_base_sha"] != base
@@ -326,6 +343,8 @@ def _architecture_check(
         diagram_status = "fail" if mismatches else "pass"
         failed = fitness.status != "pass" or bool(drift) or bool(mismatches)
         core: dict[str, object] = {
+            **({'architecture_comparison_witness': binding['architecture_comparison_witness']}
+               if 'architecture_comparison_witness' in binding else {}),
             "architecture_contract_version": 1,
             "adoption_digest": binding["architecture_adoption_digest"],
             "architecture_digest": binding["architecture_digest"],
@@ -337,6 +356,7 @@ def _architecture_check(
                 "architecture_bootstrap_baseline"
             ],
             "architecture_route_base_sha": binding["architecture_route_base_sha"],
+            "architecture_range_mode": binding["architecture_range_mode"],
             "baseline_introduced": diff.baseline_introduced,
             "base_adoption_state": diff.base_adoption_state,
             "head_adoption_state": diff.head_adoption_state,
@@ -415,22 +435,29 @@ def _governance_check(
     root: Path,
     route: dict[str, object] | None,
     architecture: dict[str, object],
+    *,
+    _trusted_ranges: GitRangeSelection | None = None,
 ) -> tuple[CheckResult, dict[str, object]]:
     try:
         checked_architecture: dict[str, object] | None = None
         if architecture.get("status") == "pass" and architecture.get("configured") is True:
             checked_architecture = {
-                field: architecture[field]
+                field: architecture.get(field)
                 for field in (
                     "architecture_digest",
                     "architecture_base_sha",
                     "architecture_head_commit",
+                    "architecture_route_base_sha",
+                    "architecture_base_kind",
+                    "architecture_comparison_witness",
+                    "architecture_range_mode",
                 )
             }
         binding = active_governance_binding(
             root,
             route or {},
             checked_architecture,
+            **({'_trusted_ranges': _trusted_ranges} if _trusted_ranges is not None else {}),
         )
         if binding is None:
             return (
@@ -566,7 +593,8 @@ def _workflow_artifacts_check(
         ), {"configured": True, "status": "fail", "error": str(exc)}
 
 
-def _command_check(root: Path, name: str, command: list[str], timeout: int = 300, *, env: dict[str, str] | None = None) -> CheckResult:
+def _command_check(root: Path, name: str, command: list[str], timeout: int = 300, *, env: dict[str, str] | None = None,
+                   termination_grace: float | None = None) -> CheckResult:
     environment = os.environ.copy()
     environment.update(env or {})
     if 'PATH' not in (env or {}):
@@ -574,7 +602,8 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         environment['PATH'] = tool_search_path(environment.get('PATH', ''))
     try:
         # The report keeps the command as written; only the launch resolves it (Windows .cmd shims).
-        proc = execute(resolve_command(command, environment['PATH']), root, environment, timeout=timeout)
+        options = {'termination_grace': termination_grace} if termination_grace is not None else {}
+        proc = execute(resolve_command(command, environment['PATH']), root, environment, timeout=timeout, **options)
     except RunCancelled as exc:
         proc = exc.result
         exc.checks = [CheckResult(
@@ -595,557 +624,6 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
 
 
 _EXACT_SHA = re.compile(r'^[0-9a-fA-F]{40}$')
-
-
-def _resolve_commit(root: Path, ref: str) -> str | None:
-    proc = run(
-        ['git', 'rev-parse', '--verify', '--quiet', '--end-of-options', f'{ref}^{{commit}}'],
-        cwd=root,
-        timeout=30,
-    )
-    resolved = proc.stdout.strip()
-    if proc.returncode != 0 or not _EXACT_SHA.fullmatch(resolved):
-        return None
-    return resolved.lower()
-
-
-def _existing_ref_candidates(root: Path, refs: list[str]) -> list[tuple[str, str]]:
-    candidates: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for ref in refs:
-        resolved = _resolve_commit(root, ref)
-        if resolved is None or (ref, resolved) in seen:
-            continue
-        seen.add((ref, resolved))
-        candidates.append((ref, resolved))
-    return candidates
-
-
-def _select_local_pr_target(root: Path) -> tuple[str, str] | dict[str, str] | None:
-    symbolic = run(
-        ['git', 'symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'],
-        cwd=root,
-        timeout=30,
-    )
-    if symbolic.returncode == 0 and symbolic.stdout.strip():
-        source = symbolic.stdout.strip()
-        if not source.startswith('refs/remotes/origin/'):
-            return {
-                'severity': 'error',
-                'code': 'pr-base-untrusted-symbolic-target',
-                'path': 'refs/remotes/origin/HEAD',
-                'message': f'origin/HEAD points outside refs/remotes/origin: {source}',
-            }
-        resolved = _resolve_commit(root, source)
-        if resolved is None:
-            return {
-                'severity': 'error',
-                'code': 'pr-base-unresolvable',
-                'path': source,
-                'message': 'configured origin/HEAD does not resolve to a local commit',
-            }
-        return source, resolved
-
-    configured = run(
-        ['git', 'config', '--get', 'init.defaultBranch'],
-        cwd=root,
-        timeout=30,
-    )
-    configured_name = configured.stdout.strip() if configured.returncode == 0 else ''
-    if configured_name:
-        valid_name = run(
-            ['git', 'check-ref-format', '--branch', configured_name],
-            cwd=root,
-            timeout=30,
-        )
-        if valid_name.returncode != 0:
-            return {
-                'severity': 'error',
-                'code': 'pr-base-invalid-default-branch',
-                'path': 'git-config:init.defaultBranch',
-                'message': 'configured default branch is not a valid Git branch name',
-            }
-
-    # Remote-tracking refs come first: init.defaultBranch names new repositories (Git for Windows
-    # sets master system wide), so a local branch of that name must not outrank origin/main.
-    for configured_ref, refs in (
-        (f'refs/remotes/origin/{configured_name}', ['refs/remotes/origin/main', 'refs/remotes/origin/master']),
-        (f'refs/heads/{configured_name}', ['refs/heads/main', 'refs/heads/master']),
-    ):
-        if configured_name:
-            configured_candidates = _existing_ref_candidates(root, [configured_ref])
-            if configured_candidates:
-                return configured_candidates[0]
-        candidates = _existing_ref_candidates(root, refs)
-        distinct = {resolved for _, resolved in candidates}
-        if len(distinct) > 1:
-            rendered = ', '.join(f'{ref}={sha}' for ref, sha in candidates)
-            return {
-                'severity': 'error',
-                'code': 'pr-base-ambiguous',
-                'path': 'git-refs',
-                'message': f'multiple local PR target candidates disagree: {rendered}',
-            }
-        if candidates:
-            return candidates[0]
-    return None
-
-
-def _git_range_selection(
-    root: Path,
-    route: dict[str, object] | None,
-    mode: str,
-) -> GitRangeSelection:
-    selection = GitRangeSelection()
-    if mode not in _RANGE_MODES or not command_exists('git'):
-        return selection
-
-    if route:
-        raw_route_base = route.get('base_commit')
-        if not isinstance(raw_route_base, str) or not _EXACT_SHA.fullmatch(raw_route_base):
-            selection.findings.append({
-                'severity': 'error',
-                'code': 'route-base-malformed',
-                'path': '.getzilla/runtime/active-route.json',
-                'message': 'PR verification requires route.base_commit as an exact 40-hex SHA',
-            })
-        else:
-            route_base = _resolve_commit(root, raw_route_base)
-            if route_base is None:
-                selection.findings.append({
-                    'severity': 'error',
-                    'code': 'route-base-unresolvable',
-                    'path': '.getzilla/runtime/active-route.json',
-                    'message': f'route base is not a locally available commit: {raw_route_base}',
-                })
-            else:
-                ancestor = run(
-                    ['git', 'merge-base', '--is-ancestor', route_base, 'HEAD'],
-                    cwd=root,
-                    timeout=30,
-                )
-                if ancestor.returncode != 0:
-                    selection.findings.append({
-                        'severity': 'error',
-                        'code': 'route-base-non-ancestor',
-                        'path': '.getzilla/runtime/active-route.json',
-                        'message': f'route base is not an ancestor of HEAD: {route_base}',
-                    })
-                else:
-                    selection.bases.append(GitRangeBase(
-                        kind='route',
-                        source='route.base_commit',
-                        target_sha=route_base,
-                        comparison_base_sha=route_base,
-                    ))
-
-    pr_target = _select_local_pr_target(root)
-    if isinstance(pr_target, dict):
-        selection.findings.append(pr_target)
-    elif pr_target is not None:
-        source, target_sha = pr_target
-        merge_base = run(
-            ['git', 'merge-base', '--all', target_sha, 'HEAD'],
-            cwd=root,
-            timeout=30,
-        )
-        raw_bases = [line.strip() for line in merge_base.stdout.splitlines() if line.strip()]
-        bases = sorted({line.lower() for line in raw_bases})
-        if (
-            merge_base.returncode != 0
-            or len(bases) != 1
-            or any(not _EXACT_SHA.fullmatch(line) for line in raw_bases)
-        ):
-            selection.findings.append({
-                'severity': 'error',
-                'code': 'pr-base-no-merge-base',
-                'path': source,
-                'message': f'local PR target has no unique merge base with HEAD: {target_sha}',
-            })
-        else:
-            selection.bases.append(GitRangeBase(
-                kind='pr-target',
-                source=source,
-                target_sha=target_sha,
-                comparison_base_sha=bases[0],
-            ))
-    elif route and route.get('delivery_expected') is True:
-        selection.findings.append({
-            'severity': 'error',
-            'code': 'pr-base-unavailable',
-            'path': 'git-refs',
-            'message': 'delivery verification requires a locally resolvable PR target',
-        })
-    return selection
-
-
-def _changed_file_inventory(
-    root: Path,
-    route: dict[str, object] | None,
-    mode: str,
-    selection: GitRangeSelection,
-) -> tuple[list[str], dict[str, object]]:
-    if mode not in _RANGE_MODES:
-        route_base = route.get('base_commit') if route else None
-        files = changed_files(root, route_base if isinstance(route_base, str) else None)
-        return files, {
-            'mode': 'route-base',
-            'bases': ([{
-                'kind': 'route',
-                'source': 'route.base_commit',
-                'base': route_base,
-                'target': route_base,
-                'count': len(files),
-            }] if isinstance(route_base, str) else []),
-            'worktree_count': len(changed_files(root)),
-            'union_count': len(files),
-        }
-
-    if mode == FOCUSED_STATIC_SEO_LANDING_MODE:
-        worktree_files = set(changed_files(root))
-        union = set(worktree_files)
-        status_records = changed_file_statuses(root)
-        status_inventory_trusted = status_records is not None
-        status_findings: list[dict[str, str]] = []
-        if status_records is None:
-            status_findings.append({
-                'severity': 'error',
-                'code': 'file-status-inventory-unavailable',
-                'path': 'git',
-                'message': 'focused verification could not obtain a status-preserving Git inventory',
-            })
-            status_records = []
-        for item in status_records:
-            for key in ('path', 'original_path'):
-                path = item.get(key)
-                if isinstance(path, str):
-                    union.add(path)
-
-        bases: list[dict[str, object]] = []
-        for selected in selection.bases:
-            files = set(changed_files(root, selected.comparison_base_sha))
-            union.update(files)
-            ranged_statuses = changed_file_statuses(
-                root,
-                selected.comparison_base_sha,
-                include_worktree=False,
-                include_untracked=False,
-            )
-            if ranged_statuses is None:
-                status_inventory_trusted = False
-                status_findings.append({
-                    'severity': 'error',
-                    'code': 'file-status-inventory-unavailable',
-                    'path': selected.source,
-                    'message': 'focused verification could not obtain status for the selected Git range',
-                })
-            else:
-                for item in ranged_statuses:
-                    item['source'] = f'range:{selected.comparison_base_sha}'
-                    status_records.append(item)
-                    for key in ('path', 'original_path'):
-                        path = item.get(key)
-                        if isinstance(path, str):
-                            union.add(path)
-            bases.append({
-                'kind': selected.kind,
-                'source': selected.source,
-                'base': selected.comparison_base_sha,
-                'target': selected.target_sha,
-                'count': len(files),
-            })
-        return sorted(union), {
-            'mode': 'range-union',
-            'bases': bases,
-            'worktree_count': len(worktree_files),
-            'union_count': len(union),
-            'selection_findings': list(selection.findings),
-            'status_records': status_records,
-            'status_inventory_trusted': status_inventory_trusted,
-            'status_findings': status_findings,
-        }
-
-    worktree_files = set(changed_files(root))
-    union = set(worktree_files)
-    bases: list[dict[str, object]] = []
-    for selected in selection.bases:
-        files = set(changed_files(root, selected.comparison_base_sha))
-        union.update(files)
-        bases.append({
-            'kind': selected.kind,
-            'source': selected.source,
-            'base': selected.comparison_base_sha,
-            'target': selected.target_sha,
-            'count': len(files),
-        })
-    return sorted(union), {
-        'mode': 'range-union',
-        'bases': bases,
-        'worktree_count': len(worktree_files),
-        'union_count': len(union),
-        'selection_findings': list(selection.findings),
-    }
-
-
-def _is_valid_inventory_path(value: object) -> bool:
-    return is_valid_inventory_path(value)
-
-
-def _is_focused_landing_test(path: str, change_package: str | None) -> bool:
-    basename = PurePosixPath(path).name
-    if _FOCUSED_LANDING_TEST_NAME.fullmatch(basename) is None:
-        return False
-    if path.startswith('tests/'):
-        return True
-    return (
-        change_package is not None
-        and path.startswith(f'{change_package}/evidence/')
-        and path.startswith('engineering/changes/')
-    )
-
-
-def _normalize_landing_key(value: str) -> str:
-    return re.sub(r'[-_]+', '_', value).strip('_').lower()
-
-
-def _focused_test_landing_key(path: str) -> str | None:
-    match = _FOCUSED_LANDING_TEST_NAME.fullmatch(PurePosixPath(path).name)
-    if match is None:
-        return None
-    return _normalize_landing_key(match.group('landing'))
-
-
-def _safe_inventory_value(value: object) -> str:
-    try:
-        rendered = repr(value)
-    except Exception:
-        rendered = f'<unrepresentable {type(value).__name__}>'
-    if not isinstance(rendered, str):
-        rendered = f'<unrepresentable {type(value).__name__}>'
-    rendered = ''.join(
-        character if ord(character) >= 32 else f'\\x{ord(character):02x}'
-        for character in rendered
-    )
-    return rendered[:512]
-
-
-def _focused_file_status_findings(
-    file_statuses: object,
-    status_inventory_trusted: bool | None,
-) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
-    """Validate the status side-channel used only by focused classification."""
-    invalid: list[dict[str, str]] = []
-    unsafe: list[dict[str, str]] = []
-    if status_inventory_trusted is False:
-        return invalid, unsafe, [{
-            'severity': 'error',
-            'code': 'file-status-inventory-unavailable',
-            'path': 'git',
-            'message': 'focused verification requires a trusted status-preserving Git inventory',
-        }]
-    if not isinstance(file_statuses, list):
-        invalid.append({
-            'severity': 'error',
-            'code': 'file-status-ambiguous',
-            'path': 'git',
-            'message': 'status-preserving Git inventory is not a list of records',
-        })
-        return invalid, unsafe, []
-
-    for raw in file_statuses:
-        if not isinstance(raw, dict):
-            invalid.append({
-                'severity': 'error',
-                'code': 'file-status-ambiguous',
-                'path': _safe_inventory_value(raw),
-                'message': 'Git status record is not an object',
-            })
-            continue
-        status = raw.get('status')
-        path = raw.get('path')
-        original_path = raw.get('original_path')
-        if (
-            not isinstance(status, str)
-            or not status
-            or not isinstance(path, str)
-            or not _is_valid_inventory_path(path)
-            or (
-                original_path is not None
-                and (
-                    not isinstance(original_path, str)
-                    or not _is_valid_inventory_path(original_path)
-                )
-            )
-        ):
-            invalid.append({
-                'severity': 'error',
-                'code': 'file-status-ambiguous',
-                'path': _safe_inventory_value(path),
-                'message': 'Git status record has a missing or malformed path/status',
-            })
-            continue
-        if status in _SAFE_FOCUSED_FILE_STATUSES and original_path is not None:
-            invalid.append({
-                'severity': 'error',
-                'code': 'file-status-ambiguous',
-                'path': path,
-                'message': 'a safe Git status record unexpectedly has an original path',
-            })
-            continue
-        if status not in _SAFE_FOCUSED_FILE_STATUSES:
-            finding = {
-                'severity': 'error',
-                'code': 'unsafe-file-status',
-                'status': status,
-                'path': path,
-                'message': 'focused verification rejects deleted, renamed, copied, or ambiguous Git statuses',
-            }
-            if isinstance(original_path, str):
-                finding['original_path'] = original_path
-            source = raw.get('source')
-            if isinstance(source, str):
-                finding['source'] = source
-            unsafe.append(finding)
-    return invalid, unsafe, []
-
-
-def select_static_seo_landing_scope(
-    files: list[object],
-    *,
-    change_package: str | None = None,
-    range_findings: list[dict[str, str]] | None = None,
-    range_base_count: int | None = None,
-    file_statuses: object = None,
-    status_inventory_trusted: bool | None = None,
-) -> dict[str, object]:
-    """Classify an inventory for the explicit static-landing verifier.
-
-    This is intentionally a closed selector.  A focused run is eligible only when
-    it has landing-source paths, exactly one explicitly named landing contract, and
-    no unrecognized product path or unresolved comparison inventory.  The caller
-    must use the existing PR verifier for every ``full-pr`` result.
-    """
-    scope: dict[str, object] = {
-        'eligible': False,
-        'profile': 'full-pr',
-        'reason': '',
-        'landing_files': [],
-        'landing_directories': [],
-        'selected_landing_directory': None,
-        'focused_tests': [],
-        'focused_test_landing': None,
-        'ignored_files': [],
-        'rejected_files': [],
-        'reason_code': 'inventory-unclassified',
-        'rejection': None,
-        'status_inventory_trusted': status_inventory_trusted,
-        'status_findings': [],
-        'unsafe_file_statuses': [],
-    }
-    if not isinstance(files, list) or not files:
-        scope['reason'] = 'changed-file inventory is missing or empty'
-        return scope
-
-    if change_package is not None and (
-        not isinstance(change_package, str)
-        or not _CHANGE_PACKAGE_PREFIX.fullmatch(change_package)
-    ):
-        scope['reason'] = 'active change-package path is invalid'
-        return scope
-
-    landing_files: list[str] = []
-    focused_tests: list[str] = []
-    ignored_files: list[str] = []
-    rejected_files: list[str] = []
-    normalized_files: list[str] = []
-    for raw in files:
-        if not isinstance(raw, str):
-            rejected_files.append(_safe_inventory_value(raw))
-            continue
-        rel = str.__str__(raw)
-        if not _is_valid_inventory_path(rel):
-            rejected_files.append(_safe_inventory_value(raw))
-            continue
-        normalized_files.append(rel)
-
-    for rel in sorted(set(normalized_files)):
-        if rel.startswith(_STATIC_LANDING_PREFIX):
-            landing_files.append(rel)
-        elif _is_focused_landing_test(rel, change_package):
-            focused_tests.append(rel)
-        elif change_package and rel.startswith(f'{change_package}/'):
-            # The active change package is workflow evidence, not product scope.
-            ignored_files.append(rel)
-        else:
-            rejected_files.append(rel)
-
-    scope['landing_files'] = landing_files
-    scope['landing_directories'] = sorted({
-        rel[len(_STATIC_LANDING_PREFIX):].split('/', 1)[0]
-        for rel in landing_files
-    })
-    if len(scope['landing_directories']) == 1:
-        scope['selected_landing_directory'] = scope['landing_directories'][0]
-    scope['focused_tests'] = focused_tests
-    if len(focused_tests) == 1:
-        scope['focused_test_landing'] = _focused_test_landing_key(focused_tests[0])
-    scope['ignored_files'] = ignored_files
-    scope['rejected_files'] = rejected_files
-
-    status_metadata_supplied = file_statuses is not None or status_inventory_trusted is not None
-    if status_metadata_supplied:
-        invalid_statuses, unsafe_statuses, status_findings = _focused_file_status_findings(
-            file_statuses,
-            status_inventory_trusted,
-        )
-        scope['status_findings'] = invalid_statuses + status_findings
-        scope['unsafe_file_statuses'] = unsafe_statuses
-
-    if scope['status_findings']:
-        first = scope['status_findings'][0]
-        scope['reason_code'] = str(first['code'])
-        scope['reason'] = str(first['message'])
-    elif scope['unsafe_file_statuses']:
-        scope['reason_code'] = 'unsafe-file-status'
-        scope['reason'] = 'deleted, renamed, copied, or ambiguous Git file status is present'
-    elif range_findings:
-        scope['reason_code'] = 'comparison-inventory-incomplete'
-        scope['reason'] = 'comparison inventory is incomplete or ambiguous'
-    elif range_base_count is not None and range_base_count < 1:
-        scope['reason_code'] = 'comparison-inventory-untrusted'
-        scope['reason'] = 'comparison inventory has no trusted base'
-    elif rejected_files:
-        scope['reason_code'] = 'out-of-scope-or-invalid-paths'
-        scope['reason'] = 'out-of-scope or invalid changed paths are present'
-    elif not landing_files:
-        scope['reason_code'] = 'landing-source-missing'
-        scope['reason'] = 'no static SEO landing source changed'
-    elif len(scope['landing_directories']) != 1:
-        scope['reason_code'] = 'landing-directory-ambiguous'
-        scope['reason'] = 'multiple static SEO landing directories are ambiguous'
-    elif not focused_tests:
-        scope['reason_code'] = 'focused-test-missing'
-        scope['reason'] = 'focused test is missing'
-    elif len(focused_tests) != 1:
-        scope['reason_code'] = 'focused-test-ambiguous'
-        scope['reason'] = 'focused landing test path is ambiguous'
-    elif scope['focused_test_landing'] != _normalize_landing_key(str(scope['selected_landing_directory'])):
-        scope['reason_code'] = 'focused-test-landing-mismatch'
-        scope['reason'] = 'focused test does not match the selected landing directory'
-        scope['rejection'] = {
-            'code': 'focused-test-landing-mismatch',
-            'message': scope['reason'],
-            'landing_directory': scope['selected_landing_directory'],
-            'focused_test': focused_tests[0],
-            'focused_test_landing': scope['focused_test_landing'],
-        }
-    else:
-        scope['eligible'] = True
-        scope['profile'] = 'static-seo-landing'
-        scope['reason_code'] = 'eligible'
-        scope['reason'] = 'landing-only inventory with one focused contract'
-    scope['checked_files'] = sorted(landing_files + focused_tests)
-    return scope
 
 
 def _focused_scope_check(scope: dict[str, object]) -> CheckResult:
@@ -1270,7 +748,11 @@ def _unittest_contract_failure(path: Path) -> str | None:
     return 'contract must define a unittest.TestCase subclass with a test_ method'
 
 
-def _focused_landing_contract(root: Path, scope: dict[str, object]) -> CheckResult:
+def _focused_landing_contract(root: Path, scope: dict[str, object], *, required_plan=None) -> CheckResult:
+    if required_plan is not None:
+        refs = sorted({ref for row in required_plan['obligations'] if row['check_id'] == 'static-seo-landing-contract'
+                       for ref in row['expected_tests']})
+        scope = dict(scope, **({'required_test_refs': refs} if refs else {}))
     focused_tests = scope.get('focused_tests')
     if not isinstance(focused_tests, list) or len(focused_tests) != 1:
         return CheckResult(
@@ -1316,17 +798,13 @@ def _focused_landing_contract(root: Path, scope: dict[str, object]) -> CheckResu
                 'message': contract_failure,
             }],
         )
-    command = [
-        sys.executable,
-        '-m',
-        'unittest',
-        'discover',
-        '-s',
-        path.parent.relative_to(root).as_posix(),
-        '-p',
-        path.name,
-    ]
-    result = _command_check(root, 'static-seo-landing-contract', command, 300)
+    from .criterion_tests import run_required_tests
+    refs = scope.get('required_test_refs') or [relative]
+    if not isinstance(refs, list) or any(not isinstance(ref, str) or ref.split('::', 1)[0] != relative for ref in refs):
+        return CheckResult('static-seo-landing-contract', 'fail', 'required test references exceed the selected landing contract')
+    observed = run_required_tests(root, refs, timeout=300)
+    observed['name'] = 'static-seo-landing-contract'
+    result = CheckResult(**observed)
     result.summary = f'{result.summary}; test={relative}'
     return result
 
@@ -1438,41 +916,11 @@ def _git_diff_check(
 
 @diagnostics.observed('secret-scan')
 def _secret_scan(root: Path, files: list[str]) -> CheckResult:
-    findings: list[dict[str, object]] = []
-    try:
-        policy = reviewed_dispositions.Dispositions(root)
-    except (reviewed_dispositions.DispositionError, OSError):
-        policy = None
-        findings.append(reviewed_dispositions.invalid_finding())
-    for rel in files:
-        path = root / rel
-        if not path.is_file() or path.stat().st_size > 2_000_000:
-            continue
-        text = read_text_limited(path)
-        with path.open('rb') as stream:
-            raw = stream.read(reviewed_dispositions.MAX_FILE_BYTES + 1)
-        file_hash = hashlib.sha256(raw).hexdigest()
-        for label, pattern in reviewed_dispositions.SECRET_PATTERNS.items():
-            for match in pattern.finditer(text):
-                line, column = reviewed_dispositions.location(text, match.start())
-                finding = {'severity': 'error', 'effective_severity': 'error', 'observation': True,
-                           'code': label, 'path': rel, 'line': line, 'column': column,
-                           'file_sha256': file_hash, 'message': 'Potential committed secret.'}
-                if policy:
-                    entry = policy.secret(rel, file_hash, text, match) if label == 'generic-secret' else None
-                    policy.apply(finding, entry)
-                findings.append(finding)
-    if policy:
-        try:
-            policy.assert_current()
-        except (reviewed_dispositions.DispositionError, OSError):
-            findings.append(reviewed_dispositions.invalid_finding())
-    disposition_summary = reviewed_dispositions.summary(policy, findings)
-    findings.append(disposition_summary)
-    return CheckResult('secret-scan', 'fail' if disposition_summary['unresolved'] else 'pass',
-                       f'{disposition_summary["observed"]} potential secrets; '
-                       f'{disposition_summary["disposed"]} disposed; {disposition_summary["unresolved"]} unresolved',
-                       details=findings)
+    from .security_tools import native_secret_observations
+
+    observed = native_secret_observations(root, files)
+    return CheckResult('secret-scan', 'pass' if observed['outcome'] == 'pass' else 'fail',
+                       observed['summary'], details=observed['details'])
 
 
 @diagnostics.observed('php-lint')
@@ -1702,16 +1150,27 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
             findings.append({'severity': 'error', 'code': 'change-spec-invalid', 'path': rel, 'message': error})
         records.append(record)
     metadata: dict[str, object] = {'exempt': exempt, 'specs': records, 'historical_migrations': migrations}
+    if route and (route.get('context') or {}).get('version') == 2:
+        try:
+            from .intake_publication import require_intake_ready
+            metadata['intake'] = require_intake_ready(root,route,operation_class='verification-backstop')
+        except Exception:
+            findings.append({'severity':'error','code':'intake-not-ready','path':active_rel or '',
+                             'message':'Current native intake does not admit implementation.'})
+            metadata['intake'] = {'status':'unavailable'}
+    else:
+        metadata['intake'] = {'status':'not_run','reason':'semantic_intake_undeclared'}
     if active_rel:
         metadata['active_path'] = active_rel
     return CheckResult('change-spec', 'fail' if findings else ('skip' if exempt and not selected else 'pass'), f'{len(records)} specs checked; exempt={exempt}', details=findings), metadata
 
 
 @diagnostics.observed('composer')
-def _composer(root: Path, mode: str = 'fast', *, keep_going=False, blocked_by=None) -> list[CheckResult]:
+def _composer(root: Path, mode: str = 'fast', *, keep_going=False, blocked_by=None, required_plan=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
-        return _composer_checks(root, results, _CheckDispatch(results, mode, keep_going=keep_going, blocked_by=blocked_by))
+        return _composer_checks(root, results, _CheckDispatch(results, mode, keep_going=keep_going,
+                                 blocked_by=blocked_by, required_plan=required_plan))
 
 
 def _composer_checks(root: Path, results: list[CheckResult], dispatch: _CheckDispatch) -> list[CheckResult]:
@@ -1721,53 +1180,9 @@ def _composer_checks(root: Path, results: list[CheckResult], dispatch: _CheckDis
         dispatch.run('composer-validate', lambda: _command_check(root, 'composer-validate', ['composer', 'validate', '--no-check-publish'], 120))
     else:
         dispatch.run('composer-validate', lambda: CheckResult('composer-validate', 'skip', 'composer not available'))
-    for name, path, args in [
-        ('phpunit', 'vendor/bin/phpunit', ['vendor/bin/phpunit']),
-        ('phpstan', 'vendor/bin/phpstan', ['vendor/bin/phpstan', 'analyse', '--no-progress']),
-        ('phpcs', 'vendor/bin/phpcs', ['vendor/bin/phpcs']),
-        ('deptrac', 'vendor/bin/deptrac', ['vendor/bin/deptrac', 'analyse']),
-    ]:
-        if (root / path).is_file():
-            dispatch.run(name, lambda: _command_check(root, name, args, 600))
+    for name, args in composer_check_selection(root):
+        dispatch.run(name, lambda: _command_check(root, name, args, 600))
     return results
-
-
-QUALITY_PY_PATHS = (
-    '.getzilla/getzilla',
-    '.getzilla/integrations',
-    'scripts',
-    'tests',
-    '.getzilla/hooks',
-    'user_prompt_submit.py',
-    'pre_tool_use.py',
-    'post_tool_use.py',
-    'pre_compact.py',
-    'session_start.py',
-    'session_end.py',
-    'stop_gate.py',
-    'subagent_start.py',
-    'subagent_stop.py',
-    'factory/src/getzilla_factory',
-)
-
-_SEMGREP_CONFIGS = ('semgrep.yaml', '.semgrep.yml', '.semgrep.yaml')
-_TRIVY_FILES = ('Dockerfile', 'dockerfile', 'Containerfile')
-
-
-def _existing_quality_paths(root: Path) -> list[str]:
-    """Getzilla's own Python paths plus every top-level tree that holds the project's tracked Python."""
-    paths = [rel for rel in QUALITY_PY_PATHS if (root / rel).exists()]
-    proc = run(['git', 'ls-files', '-z', '--', '*.py'], cwd=root, timeout=60)
-    if proc.returncode == 0:
-        for rel in proc.stdout.split('\0'):
-            # Dot directories hold generated hook mirrors and tool state, not product code.
-            # A name that starts with '-' would read as an option of ruff or bandit.
-            if not rel or rel.startswith(('.', '-')) or not (root / rel).is_file():
-                continue
-            top = rel.split('/', 1)[0]
-            if top not in paths:
-                paths.append(top)
-    return [rel for rel in paths if not any(rel.startswith(other + '/') for other in paths)]
 
 
 @diagnostics.observed('ruff')
@@ -1826,24 +1241,6 @@ def _semgrep(root: Path) -> CheckResult | None:
     return _command_check(root, 'semgrep', ['semgrep', 'scan', '--error', '--config', config], 600)
 
 
-def _semgrep_config(root: Path) -> str | None:
-    config: str | None = None
-    for name in _SEMGREP_CONFIGS:
-        if (root / name).is_file():
-            config = name
-            break
-    if config is None:
-        semgrep_dir = root / '.semgrep'
-        if semgrep_dir.is_dir():
-            try:
-                next(semgrep_dir.iterdir())
-            except StopIteration:
-                pass
-            else:
-                config = '.semgrep'
-    return config
-
-
 def _trivy_config(root: Path) -> CheckResult | None:
     if not _trivy_config_present(root):
         return None
@@ -1854,17 +1251,19 @@ def _trivy_config(root: Path) -> CheckResult | None:
 
 @diagnostics.observed('known-vulnerabilities')
 def _known_vulnerabilities(root: Path) -> CheckResult:
-    try:
-        report = scan_known_vulnerabilities(root)
-    except VulnerabilityError as exc:
-        return CheckResult('known-vulnerabilities', 'fail', str(exc))
-    details = [_vulnerability_detail(item) for item in report['findings'][:200]]
-    return CheckResult('known-vulnerabilities', report['status'], report['summary'], details=details)
+    result = known_vulnerability_check(root)
+    # The full structured evidence is authoritative. Only its text projection
+    # is bounded for display; no finding, exception or source proof is dropped.
+    findings = result['details'][0]['findings']
+    result['details'].extend(_vulnerability_detail(item) for item in findings[:200])
+    return CheckResult(**result)
 
 
 def _vulnerability_detail(item: dict[str, object]) -> dict[str, str]:
     """Flatten one finding and add the ``path``/``message`` keys the text report prints."""
-    detail = {key: ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
+    from .security_data import osv_alias_text
+    detail = {key: osv_alias_text(value) if key == 'raw_aliases' and isinstance(value, list)
+              else ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
     advisory = detail.get('id', '')
     if detail.get('aliases'):
         advisory = f"{advisory} ({detail['aliases']})"
@@ -1884,21 +1283,27 @@ OPENGREP_EXCLUDES = ('.getzilla/sast', 'tests', '**/fixtures/**', 'node_modules'
 
 def _unpinned_opengrep(executable: Path) -> str | None:
     """Why ``executable`` must not run: PATH is not trusted, only the pinned release digest is (#39)."""
-    from .updater import OPENGREP_ASSETS, OPENGREP_VERSION, _platform_key, _sha256_file
+    import zipfile
+    from .release_transport import OPENGREP_ASSETS, OPENGREP_VERSION, _platform_key, _sha256_file, _release_fetch
 
     pinned = OPENGREP_ASSETS.get(_platform_key())
-    if pinned is None:
-        return f'no pinned OpenGrep v{OPENGREP_VERSION} digest for {_platform_key()}; {executable} not run'
     actual = _sha256_file(executable)
-    if actual != pinned[1]:
-        return (f'{executable} sha256 {actual} does not match pinned OpenGrep v{OPENGREP_VERSION} {pinned[1]}; '
-                'not run (reinstall with `python3 scripts/getzilla_update.py --only opengrep`)')
+    if pinned is not None and actual == pinned[1]:
+        return None  # Retain the immutable reviewed CI release's original #39 proof.
+    from . import opengrep_releases
+    try:
+        opengrep_releases.verify_active(executable, fetch=_release_fetch, key=_platform_key())
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return (f'{executable} sha256 {actual} is not the reviewed OpenGrep v{OPENGREP_VERSION}; '
+                f'fresh upstream integrity verification refused: {exc}; not run')
     return None
 
 
 @diagnostics.observed('opengrep')
 def _opengrep(root: Path) -> CheckResult:
-    """Taint analysis with Getzilla's own OpenGrep rules (run where OpenGrep is installed, e.g. Trust CI)."""
+    """Require source/rule coverage and compatible parsing before a clean result."""
+    from .security_opengrep import scan_source
+
     rules = root / OPENGREP_RULES
     if not rules.is_dir():
         return CheckResult('opengrep', 'skip', 'no OpenGrep rules installed')
@@ -1908,71 +1313,43 @@ def _opengrep(root: Path) -> CheckResult:
     refusal = _unpinned_opengrep(Path(executable))
     if refusal:
         return CheckResult('opengrep', 'fail', refusal)
-    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet', '--strict',
-               '--disable-version-check', '--timeout', '30']
-    for pattern in OPENGREP_EXCLUDES:
-        command.extend(('--exclude', pattern))
-    command.append('.')
-    result = run(command, cwd=root, timeout=900, encoding='utf-8', errors='replace')
-    try:
-        report = json.loads(result.stdout or '{}')
-    except ValueError:
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode} without a JSON report',
-                           command=command, stderr=result.stderr[-4000:])
-    if result.returncode not in {0, 1}:
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode}', command=command,
-                           stderr=result.stderr[-4000:])
-    if not isinstance(report, dict):
-        return CheckResult('opengrep', 'fail', 'opengrep returned a malformed report object', command=command)
-    findings = report.get('results')
-    errors = report.get('errors')
-    if not isinstance(findings, list) or not isinstance(errors, list):
-        return CheckResult('opengrep', 'fail', 'opengrep returned incomplete result/error collections', command=command)
-    # Warning-level partial parsing and unknown diagnostics cannot prove a clean scan.
-    if errors:
-        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} incomplete analysis diagnostics',
-                           command=command)
-    if any(not isinstance(item, dict) or not isinstance(item.get('start', {}), dict)
-           or not isinstance(item.get('extra', {}), dict) for item in findings):
-        return CheckResult('opengrep', 'fail', 'opengrep returned malformed finding records', command=command)
-    details = [
-        {
-            'rule': str(item.get('check_id', '')),
-            'path': str(item.get('path', '')),
-            'line': str((item.get('start') or {}).get('line', '')),
-            'severity': str((item.get('extra') or {}).get('severity', '')),
-            'message': str((item.get('extra') or {}).get('message', ''))[:300],
-        }
-        for item in findings[:200]
-    ]
-    if findings:
-        return CheckResult('opengrep', 'fail', f'{len(findings)} taint findings from Getzilla OpenGrep rules',
-                           command=command, details=details)
-    return CheckResult('opengrep', 'pass', 'no taint findings from Getzilla OpenGrep rules', command=command)
-
-
-def _trivy_config_present(root: Path) -> bool:
-    return any((root / name).is_file() for name in _TRIVY_FILES) or bool(
-        list(root.glob('docker-compose*.yml')) or list(root.glob('docker-compose*.yaml'))
-    )
+    observed = scan_source(root, rules_root=rules, executable=Path(executable), profile='native')
+    command = observed.get('command')
+    if observed['outcome'] == 'finding':
+        return CheckResult('opengrep', 'fail',
+                           f"{observed['finding_count']} taint findings from Getzilla OpenGrep rules",
+                           command=command, details=observed['findings'])
+    if observed['outcome'] in {'pass', 'not_applicable'}:
+        return CheckResult('opengrep', 'pass', observed['summary'], command=command)
+    return CheckResult('opengrep', 'fail', observed['summary'], command=command)
 
 
 @diagnostics.observed('node')
-def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None) -> list[CheckResult]:
+def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None, required_plan=None,
+          requested_profiles=('frontend',)) -> list[CheckResult]:
+    from .verification_plan import node_checks_required
+    if not node_checks_required(root, requested_profiles):
+        return []
     results: list[CheckResult] = []
     with _retain_checks(results):
-        return _node_checks(root, mode, results, _CheckDispatch(results, mode, keep_going=keep_going, blocked_by=blocked_by))
+        return _node_checks(root, mode, results, _CheckDispatch(results, mode, keep_going=keep_going,
+                             blocked_by=blocked_by, required_plan=required_plan))
 
 
 def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _CheckDispatch) -> list[CheckResult]:
     package = root / 'package.json'
     if not package.is_file():
+        if dispatch.required_plan is not None:
+            dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'selected Node workspace or explicit frontend profile has no root package.json'))
+            return results
         return []
     try:
-        scripts = json.loads(package.read_text(encoding='utf-8')).get('scripts', {})
-    except (json.JSONDecodeError, OSError, AttributeError):
+        scripts, manager, lockfile, _names = node_check_selection(root, mode)
+    except (ValueError, OSError, AttributeError):
         dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'invalid package.json'))
         return results
+    if dispatch.required_plan is not None:
+        dispatch.run('package-json', lambda: CheckResult('package-json', 'pass', 'closed package scripts selected'))
     env = None
     if not command_exists('npm'):
         # No Node on this machine: deliver the pinned toolchain instead of skipping (stacks.json).
@@ -1982,8 +1359,9 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
                                                              details=[toolchain.detail('package.json')]))
             return results
         env = toolchain.process_env()
+    if dispatch.required_plan is not None:
+        dispatch.run('node-tooling', lambda: CheckResult('node-tooling', 'pass', 'existing selected Node tooling is available'))
     node_env = {'env': env} if env else {}
-    manager, lockfile = node_lockfile(root)
     if mode in {'pr', 'release'}:
         if lockfile is None:
             dispatch.run('node-lockfile', lambda: CheckResult('node-lockfile', 'fail', 'NODE_LOCK_MISSING', details=[{
@@ -1991,6 +1369,8 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
                 'message': 'no package-lock.json, pnpm-lock.yaml or yarn.lock: dependencies are not reproducible',
             }]))
         else:
+            if dispatch.required_plan is not None:
+                dispatch.run('node-lockfile', lambda: CheckResult('node-lockfile', 'pass', 'source lock selected'))
             install = _node_install_command(root, manager, lockfile)
             dispatch.run(f'{manager}-install', lambda: _command_check(root, f'{manager}-install', install, 1800, **node_env))
     names = ['lint', 'typecheck', 'test', 'prettier', 'format']
@@ -2014,18 +1394,6 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
                 'message': 'tsconfig.json is present and no typecheck script exists, but typescript is not installed',
             }]))
     return results
-
-
-NODE_LOCKFILES = (('package-lock.json', 'npm'), ('npm-shrinkwrap.json', 'npm'), ('pnpm-lock.yaml', 'pnpm'),
-                  ('yarn.lock', 'yarn'))
-
-
-def node_lockfile(root: Path) -> tuple[str, str | None]:
-    """The package manager the lockfile implies, and the lockfile (None: not reproducible)."""
-    for name, manager in NODE_LOCKFILES:
-        if (root / name).is_file():
-            return manager, name
-    return 'npm', None
 
 
 def _node_manager_command(manager: str) -> list[str]:
@@ -2110,6 +1478,7 @@ def _focused_python(
     replaced_runner: str = 'python-unittest',
     *,
     dispatch: _CheckDispatch | None = None,
+    mode: str = 'fast',
 ) -> list[CheckResult]:
     """Run the admitted lockstep modules instead of full discovery or coverage measurement.
 
@@ -2149,15 +1518,17 @@ def _focused_python(
         'skip',
         'focused documentation/state profile changes no factory runtime path',
     ))
+    _dispatch_additional_live(root, mode, dispatch)
     return results
 
 
 @diagnostics.observed('python')
 def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = None, *,
-            keep_going: bool = False, blocked_by: str | None = None) -> list[CheckResult]:
+            keep_going: bool = False, blocked_by: str | None = None, required_plan=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     try:
-        return _python_checks(root, mode, scope, results, keep_going=keep_going, blocked_by=blocked_by)
+        return _python_checks(root, mode, scope, results, keep_going=keep_going, blocked_by=blocked_by,
+                              **({'required_plan': required_plan} if required_plan is not None else {}))
     except RunCancelled as exc:
         exc.checks = [*results, *exc.checks]
         completed = getattr(exc, 'core_run', None)
@@ -2193,8 +1564,9 @@ def _dispatch_factory_unit(root: Path, dispatch: _CheckDispatch) -> None:
 
 
 def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, results: list[CheckResult], *,
-                   keep_going: bool = False, blocked_by: str | None = None) -> list[CheckResult]:
-    dispatch = _CheckDispatch(results, mode, scope, keep_going=keep_going, blocked_by=blocked_by)
+                   keep_going: bool = False, blocked_by: str | None = None, required_plan=None) -> list[CheckResult]:
+    dispatch = _CheckDispatch(results, mode, scope, keep_going=keep_going, blocked_by=blocked_by,
+                              required_plan=required_plan)
     dispatch.run('ruff', lambda: _ruff(root))
     dispatch.run('bandit', lambda: _bandit(root))
     focused = bool(scope and scope.get('eligible') is True)
@@ -2206,9 +1578,7 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
                 [sys.executable, '-m', 'unittest', 'discover', '-s', 'pilot/tests', '-t', '.', '-v'],
                 300,
             ))
-    has_project = any((root / item).exists() for item in ('pyproject.toml', 'requirements.txt', 'setup.py'))
-    tests_dir = root / 'tests'
-    uses_pytest_runner = has_project and command_exists('pytest') and tests_dir.is_dir()
+    uses_pytest_runner, has_unittest_files = python_check_selection(root)
     if focused:
         # Named here rather than assumed: the focused profile replaces whichever full-discovery
         # runner this tree would have used, and the skip it reports must say so.
@@ -2218,13 +1588,17 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
             scope or {},
             'pytest' if uses_pytest_runner else 'python-unittest',
             dispatch=dispatch,
+            mode=mode,
         )
-    has_unittest_files = tests_dir.is_dir() and any(tests_dir.glob('test*.py'))
     names = ['pytest' if uses_pytest_runner else 'python-unittest']
     if mode in {'pr', 'release'}:
         names.append('coverage')
     if uses_pytest_runner or has_unittest_files:
-        dispatch.batch(names, lambda: _core_python_checks(root, mode, uses_pytest_runner, keep_going=keep_going))
+        dispatch.batch(names, lambda: _core_python_checks(root, mode, uses_pytest_runner, keep_going=keep_going,
+                       **({'required_plan': required_plan} if required_plan is not None else {})))
+    elif required_plan is not None:
+        for name in names:
+            dispatch.run(name, lambda: CheckResult(name, 'skip', 'no native Python discovery inputs'))
     factory_exit = root / 'factory/tests/run_disposable_exit.py'
     installed = (root / '.getzilla' / 'AGBP_SYNC.json').is_file()
     if installed and mode in {'pr', 'release'} and factory_exit.is_file():
@@ -2232,44 +1606,27 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
         # is Getzilla's own infrastructure test. Record the skip instead of leaving it out silently.
         dispatch.run('factory-postgres-exit', lambda: CheckResult('factory-postgres-exit', 'skip', CONSUMER_INFRA_SKIP))
     _dispatch_factory_unit(root, dispatch)
-    if uses_pytest_runner:
-        return results
     if not installed and mode in {'pr', 'release'} and factory_exit.is_file():
         dispatch.run('factory-postgres-exit', lambda: (
             CheckResult('factory-postgres-exit', 'skip', 'repository-sandbox has no nested-container/database capability')
             if os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox' else
-            _command_check(root, 'factory-postgres-exit', [sys.executable, str(factory_exit.relative_to(root))],
-                           _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS)
+            (_live_cell(root, 'factory', 1500)[0] if (root / 'scripts/getzilla_live.py').is_file() else
+             _command_check(root, 'factory-postgres-exit', [sys.executable, str(factory_exit.relative_to(root))],
+                            _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS))
         ))
+    _dispatch_additional_live(root, mode, dispatch)
     return results
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _core_python_checks(root: Path, mode: str, uses_pytest_runner: bool, *, keep_going: bool) -> list[CheckResult]:
+def _core_python_checks(root: Path, mode: str, uses_pytest_runner: bool, *, keep_going: bool, required_plan=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
-        return _core_python_run(root, mode, uses_pytest_runner, results, keep_going=keep_going)
+        return _core_python_run(root, mode, uses_pytest_runner, results, keep_going=keep_going,
+                                **({'required_plan': required_plan} if required_plan is not None else {}))
 
 
-def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: list[CheckResult], *, keep_going: bool) -> list[CheckResult]:
-    dispatch = _CheckDispatch(results, mode, keep_going=keep_going)
+def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: list[CheckResult], *, keep_going: bool, required_plan=None) -> list[CheckResult]:
+    dispatch = _CheckDispatch(results, mode, keep_going=keep_going, required_plan=required_plan)
     if uses_pytest_runner:
         dispatch.run('pytest', lambda: _command_check(root, 'pytest', ['pytest', '-q'], 900))
         if mode in {'pr', 'release'}:
@@ -2435,6 +1792,7 @@ def _verify_focused_static_seo_landing(
     *,
     record: bool,
     state: _RunState | None = None,
+    requested_profiles=None,
 ) -> dict[str, object]:
     active_change = get_active_change(root) or {}
     change_package = active_change.get('path')
@@ -2457,6 +1815,8 @@ def _verify_focused_static_seo_landing(
         ),
     )
     scope['mode'] = FOCUSED_STATIC_SEO_LANDING_MODE
+    state = state or _RunState({})
+    required_plan = _capture_required_plan(root, FOCUSED_STATIC_SEO_LANDING_MODE, requested_profiles, state, scope)
     results: list[CheckResult] = state.results if state else []
     if state:
         state.report['verification_scope'] = scope
@@ -2464,7 +1824,20 @@ def _verify_focused_static_seo_landing(
     results.append(_git_diff_check(root, FOCUSED_STATIC_SEO_LANDING_MODE, git_ranges))
     results.append(_focused_scope_check(scope))
     if scope.get('eligible') is True:
-        results.append(_focused_landing_contract(root, scope))
+        results.append(_focused_landing_contract(root, scope, required_plan=required_plan))
+
+    if required_plan is not None:
+        dispatch = _CheckDispatch(results, FOCUSED_STATIC_SEO_LANDING_MODE, required_plan=required_plan,
+                                 blocked_by=None if scope.get('eligible') is True else 'scope-selection')
+        for name, callback in [('secret-scan', lambda: _secret_scan(root, files)),
+                               ('known-vulnerabilities', lambda: _known_vulnerabilities(root)),
+                               ('opengrep', lambda: _opengrep(root)), ('bandit', lambda: _bandit(root))]:
+            dispatch.run(name, callback)
+        if _semgrep_config(root) is not None:
+            dispatch.run('semgrep', lambda: _semgrep(root))
+        if _trivy_config_present(root):
+            dispatch.run('trivy-config', lambda: _trivy_config(root))
+        _dispatch_required_obligations(root, state, dispatch)
 
     final_fingerprint = tree_fingerprint(root)
     source_stable = final_fingerprint == checked_fingerprint
@@ -2478,6 +1851,12 @@ def _verify_focused_static_seo_landing(
     )
     if state:
         results.append(_task_context_check(root, state))
+    if required_plan is not None:
+        from .verification_plan import bind_result
+        for item in results:
+            bind_result(required_plan, item)
+    gate = _required_quality_gate(root, FOCUSED_STATIC_SEO_LANDING_MODE, requested_profiles, results, required_plan, scope)
+    results.append(CheckResult('quality-gate', gate.status, gate.summary, details=gate.details))
     failures = [result for result in results if result.status == 'fail']
     not_run = {
         'status': 'not_run',
@@ -2512,54 +1891,6 @@ def _verify_focused_static_seo_landing(
         _record_verification_receipt(root, report, final_fingerprint, interrupt_check=cancellation.check,
                                      expected_context=state.context if state else None)
     return report
-
-
-def _docs_state_status_inventory(
-    root: Path,
-    selection: GitRangeSelection,
-) -> tuple[list[dict[str, object]], bool]:
-    """Collect status records for the documentation/state decision only.
-
-    This read deliberately disables rename and copy detection, while the landing selector's
-    shared helper keeps them on. Git scores a freshly scaffolded change package as a copy of
-    an older one (`C085` plus an `original_path`), so with copy detection every pull request
-    that carries its own evidence would be pushed to the full suite and the focused profile
-    would never fire at all. Under `--no-renames` a scaffolded package is what it actually
-    is — additions — while any *removed* path still reports `D`, which is the one shape that
-    could hide a source file behind a documentation name.
-
-    The records come from the shared name-status helper in `util`, called with rename/copy
-    detection off and with the same untracked collection the changed-file inventory performs,
-    so this veto channel spans exactly the path domain it guards instead of a subset of it.
-    The PR/release changed-file inventory itself stays byte-unchanged: this side channel
-    feeds a scope decision and must not widen what the full suite already inspects.
-    """
-    records: list[dict[str, object]] = []
-    trusted = True
-
-    def merge(part: list[dict[str, str]] | None, source: str | None) -> None:
-        nonlocal trusted
-        if part is None:
-            trusted = False
-            return
-        for item in part:
-            if source is not None:
-                item['source'] = source
-            records.append(item)
-
-    merge(changed_file_statuses(root, rename_detection=False), None)
-    for selected in selection.bases:
-        merge(
-            changed_file_statuses(
-                root,
-                selected.comparison_base_sha,
-                include_worktree=False,
-                include_untracked=False,
-                rename_detection=False,
-            ),
-            f'range:{selected.comparison_base_sha}',
-        )
-    return records, trusted
 
 
 def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> dict[str, object]:
@@ -2708,7 +2039,7 @@ def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[s
     """Pinned Superpowers, BMAD and Spec Kit must be installed for this user and connected to this project."""
     import os
     from .baseline import detect_agent, inspect
-    from .updater import home_dir
+    from .release_transport import home_dir
     if os.environ.get('CI') == 'true' or os.environ.get('GITHUB_ACTIONS') == 'true':
         return CheckResult('workflow-baseline', 'skip', CI_BASELINE_SKIP), {'status': 'not_run', 'reason': 'ci'}
     if not (root / '.getzilla' / 'AGBP_SYNC.json').is_file():
@@ -2722,7 +2053,7 @@ def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[s
     metadata = {'status': 'complete' if status.complete else 'incomplete', 'agent': agent, **status.to_dict()}
     workflow_missing = [item for item in status.missing if not item.startswith('SECURITY_BASELINE_MISSING')]
     if not workflow_missing:
-        return CheckResult('workflow-baseline', 'pass', f'pinned Superpowers, BMAD and Spec Kit connected for {agent}'), metadata
+        return CheckResult('workflow-baseline', 'pass', f'bound Superpowers, BMAD and Spec Kit connected for {agent}; freshness={status.details.get("freshness", "not_checked")}'), metadata
     message = (', '.join(workflow_missing) + '. Install: scripts/getzilla_update.py --only baseline; connect: '
                f'scripts/getzilla_baseline.py apply --project . --agent {agent}')
     if mode in {'pr', 'release'}:
@@ -2736,6 +2067,7 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
     report = {
         'schema_version': 1, 'created_at': now_utc(), 'mode': mode,
         'profiles': profiles or ['base'], 'route_id': None, 'tree_fingerprint': None,
+        'requested_profiles': None if profiles is None else list(profiles),
         'changed_files': [], 'changed_file_inventory': {}, 'checks': [],
         'spec': {}, 'architecture': {}, 'governance': {}, 'workflow_artifacts': {},
         'status': 'fail', 'terminal_state': 'interrupted', 'evidence_status': 'not_recorded',
@@ -2745,7 +2077,7 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
         try:
             result = _verification_run(root, mode, profiles, record, state, cancellation, keep_going=keep_going)
             if record:
-                from .route_metrics import record_verify
+                from .metrics_journal import record_verify
                 record_verify(root, result)
             return result
         except (RunCancelled, KeyboardInterrupt, SystemExit) as exc:
@@ -2777,6 +2109,46 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
                 report['evidence_status'] = 'failed' if state.receipt_eligible else 'not_recorded'
                 report['checks'].append(CheckResult('cancellation-finalization', 'fail', _failure_message(cleanup)).to_dict())
             raise VerificationCancelled(number, report) from None
+
+
+def _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope=None):
+    """Failed admission cannot supply fresh bindings; other paths still rederive them."""
+    from .verification_plan import current_required_plan
+    from .expanded_security import validate_data_source
+    hard_failure = any(isinstance(item, CheckResult) and item.status in {'fail', 'cancelled'} for item in results)
+    current = None
+    if not hard_failure:
+        try:
+            observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+            if observed == required_plan:
+                current = observed['binding']
+        except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+            pass
+    decision = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
+        required_plan=required_plan, current_binding=current, now_utc=datetime.now(timezone.utc),
+        data_source_validator=lambda source, *, now: validate_data_source(source, root=root, now=now))
+    if hard_failure:
+        decision.details.append({'severity': 'info', 'code': 'required-plan-revalidation-unexecuted',
+            'path': 'required_plan', 'message': 'Final plan revalidation not executed after a prior failed or cancelled check; current binding unavailable.'})
+    return decision
+
+
+def _capture_required_plan(root, mode, profiles, state, docs_scope=None):
+    from .verification_plan import current_required_plan
+    try:
+        plan = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        state.receipt_eligible = False
+        state.results.append(CheckResult('required-plan', 'fail', 'current required plan cannot be established'))
+        return None
+    state.required_plan = plan
+    state.report['required_plan'] = plan
+    state.results.append(CheckResult('required-plan', 'pass', 'current source-bound obligations captured before dispatch'))
+    return plan
+def _language_quality_report(root: Path, base: str | None, cancellation):
+    results = run_language_quality(root, base, cancellation=cancellation)
+    return ({'schema_version': 1, 'status': 'observed', 'results': results},
+            [CheckResult(**check) for check in language_quality_checks(results)])
 
 
 def _verification_run(root: Path, mode: str, profiles: list[str] | None, record: bool,
@@ -2825,6 +2197,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             checked_fingerprint,
             record=record,
             state=state,
+            requested_profiles=profiles,
         )
 
     # Admission precedes package checks: the prompt lane is provisional until source is measured.
@@ -2832,7 +2205,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     route = get_active_route(root) if route else None
     if route and (route.get('delivery_lane') == 'light' or route.get('light_lane_candidate') or 'light_diff' in route):
         from .light_lane import inspect_light_diff
-        from .router import escalate_route
+        from .review_plan import escalate_route
         light = inspect_light_diff(root, sorted({item.comparison_base_sha for item in git_ranges.bases}),
             risk=str(diff_metadata.get('effective_risk', 'high')),
             complete=diff_metadata.get('status') == 'computed' and not diff_metadata.get('gaps') and not git_ranges.findings)
@@ -2865,12 +2238,15 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             target for target in FOCUSED_TEST_TARGETS if (root / target).is_file()
         ],
     )
+    required_plan = _capture_required_plan(root, mode, profiles, state, docs_scope)
     state.stage = 'architecture-inputs'
     architecture_inputs = _architecture_preflight_check(root)
     preflight_failed = architecture_inputs.status == 'fail'
     # Retain the primary refusal before any subsequent consumer can cancel.
     state.results.append(architecture_inputs)
-    dispatch = _CheckDispatch(state.results, mode, docs_scope, keep_going=keep_going)
+    dispatch = _CheckDispatch(state.results, mode, docs_scope, keep_going=keep_going, required_plan=required_plan)
+    if required_plan is None and mode in {'pr', 'release'} and not keep_going:
+        dispatch.blocked_by = 'required-plan'
     if required_check_refused(architecture_inputs, mode=mode, docs_scope=docs_scope) and not keep_going:
         dispatch.blocked_by = architecture_inputs.name
     dispatch.add(_docs_state_scope_check(docs_scope))
@@ -2902,13 +2278,14 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             architecture_check = dispatch.run('architecture', None)
             architecture_metadata = {'status': 'not_run'}
         else:
-            architecture_check, architecture_metadata = _architecture_check(root, route)
+            architecture_check, architecture_metadata = _architecture_check(root, route, _trusted_ranges=git_ranges)
             dispatch.add(architecture_check)
         if dispatch.blocked_by:
             governance_check = dispatch.run('governance', None)
             governance_metadata = {'status': 'not_run'}
         else:
-            governance_check, governance_metadata = _governance_check(root, route, architecture_metadata)
+            governance_check, governance_metadata = _governance_check(root, route, architecture_metadata,
+                                                                     _trusted_ranges=git_ranges)
             dispatch.add(governance_check)
     if architecture_check.status == 'fail' or governance_check.status == 'fail':
         state.receipt_eligible = False
@@ -2962,16 +2339,18 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         state.stage = 'php'
         cancellation.check()
         dispatch.run('php-lint', lambda: _php_lint(root, files))
-        for check in _composer(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by):
+        for check in _composer(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by, required_plan=required_plan):
             dispatch.add(check)
     if 'bitrix' in active_profiles:
         state.stage = 'bitrix'
         cancellation.check()
         dispatch.run('bitrix', lambda: _bitrix(root, files))
-    if 'frontend' in active_profiles or (root / 'package.json').is_file():
+    from .verification_plan import node_checks_required
+    if node_checks_required(root, profiles):
         state.stage = 'node'
         cancellation.check()
-        for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by):
+        for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by,
+                           required_plan=required_plan, requested_profiles=profiles):
             dispatch.add(check)
     state.stage = 'stacks'
     cancellation.check()
@@ -2980,7 +2359,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         dispatch.run('stacks', None)
         stack_metadata: dict[str, object] = {'status': 'not_run'}
     else:
-        stack_results, stack_metadata = stack_checks(root, mode, files, make=CheckResult, command=_command_check)
+        stack_results, stack_metadata = stack_checks(root, mode, files, make=CheckResult, command=_command_check, required_plan=required_plan)
         for check in stack_results:
             dispatch.add(check)
     report['stacks'] = stack_metadata
@@ -2995,6 +2374,10 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     state.stage = 'known-vulnerabilities'
     cancellation.check()
     dispatch.run('known-vulnerabilities', lambda: _known_vulnerabilities(root))
+    state.stage = 'expanded-security'
+    from .verification_plan import SECURITY_FAMILIES
+    dispatch.batch([name for name in SECURITY_FAMILIES if name != 'known-vulnerabilities'],
+                   lambda: [CheckResult(**item) for item in expanded_security_checks(root)])
     state.stage = 'opengrep'
     cancellation.check()
     dispatch.run('opengrep', lambda: _opengrep(root))
@@ -3002,6 +2385,19 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     for name, callback in planned_tool_checks(root, mode, make=CheckResult):
         cancellation.check()
         dispatch.run(name, callback)
+    state.stage = 'language-quality'
+    cancellation.check()
+    if dispatch.blocked_by:
+        language_report = {'schema_version': 1, 'status': 'not_run', 'results': [],
+                           'reason': 'required verification refused: ' + dispatch.blocked_by}
+    else:
+        bases = {item.comparison_base_sha for item in git_ranges.bases}
+        language_base = next(iter(bases)) if len(bases) == 1 and not git_ranges.findings else None
+        language_report, language_checks = _language_quality_report(root, language_base, cancellation)
+        for check in language_checks:
+            dispatch.add(check)
+    report.setdefault('advisory', {})['lqg'] = language_report
+    cancellation.check()
     state.stage = 'python'
     cancellation.check()
     if preflight_failed and mode not in {'pr', 'release'}:
@@ -3009,7 +2405,13 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         if (root / 'factory/tests').is_dir():
             results.append(CheckResult('factory-unit', 'skip', 'architecture input preflight failed; not started'))
     else:
-        results.extend(_python(root, mode, docs_scope, keep_going=keep_going, blocked_by=dispatch.blocked_by))
+        results.extend(_python(root, mode, docs_scope, keep_going=keep_going, blocked_by=dispatch.blocked_by, required_plan=required_plan))
+    if required_plan is not None:
+        references = sorted({reference for item in required_plan['obligations'] if item['check_id'] == 'criterion-tests'
+                             for reference in item['expected_tests']})
+        if references:
+            from .criterion_tests import run_required_tests
+            dispatch.run('criterion-tests', lambda: CheckResult(**run_required_tests(root, references)))
     state.stage = 'source-stability'
     try:
         final_fingerprint = tree_fingerprint(root)
@@ -3029,7 +2431,11 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         )
     )
     results.append(_task_context_check(root, state))
-    quality_gate = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope)
+    if required_plan is not None:
+        from .verification_plan import bind_result
+        for item in results:
+            bind_result(required_plan, item)
+    quality_gate = _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope)
     results.append(
         CheckResult(
             "quality-gate",
@@ -3069,3 +2475,90 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
                                      expected_context=state.context)
     cancellation.check()
     return report
+
+
+def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
+    from .live_evidence import CELLS
+    import uuid
+    names = CELLS[cell]
+    output = root / '.getzilla/runtime/live' / (cell + '-' + uuid.uuid4().hex)
+    result = _command_check(root, names[0], [sys.executable, 'scripts/getzilla_live.py', '--cell', cell,
+                            '--output', str(output), '--timeout-seconds', str(budget)],
+                            budget + 300, termination_grace=180)
+    try:
+        record = json.loads((output / 'manifest.json').read_text(encoding='utf-8'))
+        checks = record['checks']
+        from .live_evidence import evidence_name, _held_bytes
+        files = record.get('files')
+        if (not isinstance(files, list) or not 1 <= len(files) <= 128
+                or any(not isinstance(row, dict) or set(row) != {'path', 'sha256'}
+                       or not isinstance(row['path'], str) or Path(row['path']).name != row['path']
+                       or not evidence_name(row['path']) for row in files)
+                or len({row['path'] for row in files}) != len(files)):
+            raise ValueError('live retained-file index is incomplete or malformed')
+        for row in files:
+            if hashlib.sha256(_held_bytes(output / row['path'])).hexdigest() != row['sha256']:
+                raise ValueError('live retained component bytes changed')
+        from .live_evidence import read_document, valid_binding, validate_components, _producer_digest
+        binding = read_document(output / 'invocation.json')
+        if (not valid_binding(binding) or record.get('binding') != binding
+                or binding['cell'] != cell or binding['head'] != git_head(root)
+                or binding['tree'] != _git(root, ['rev-parse', 'HEAD^{tree}']).decode('ascii').strip()
+                or binding['producer_sha256'] != _producer_digest(root, cell)
+                or cell != 'factory' and not validate_components(output, cell, binding)):
+            raise ValueError('live source or sealed component identity differs')
+        if (record.get('status') != 'pass' or {item['id'] for item in checks} != set(names)
+                or len(checks) != len(names) or any(item['status'] != 'pass' for item in checks)):
+            raise ValueError('live component evidence did not pass')
+    except (OSError, ValueError, KeyError, TypeError):
+        result.status = 'fail'
+        result.summary += '; live evidence missing or failed'
+    return [CheckResult(name, result.status, result.summary, command=result.command,
+                        stdout=result.stdout, stderr=result.stderr,
+                        details=[{'kind': 'live-acceptance-observation', 'cell': cell,
+                                  'manifest': str(output / 'manifest.json'), 'authority': 'local observation only'}])
+            for name in names]
+
+
+def _dispatch_additional_live(root: Path, mode: str, dispatch: _CheckDispatch) -> None:
+    if mode not in {'pr', 'release'} or not (root / 'scripts/getzilla_live.py').is_file():
+        return
+    installed = (root / '.getzilla/AGBP_SYNC.json').is_file()
+    for cell, names, budget in (('trust-ci', ['trust-ci-postgres', 'trust-ci-postgres-restart'], 1200),
+                                ('lifecycle', ['factory-lifecycle'], 900)):
+        if installed or os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox':
+            reason = CONSUMER_INFRA_SKIP if installed else 'repository-sandbox has no nested-container/database capability'
+            dispatch.batch(names, lambda names=names, reason=reason: [CheckResult(name, 'skip', reason) for name in names])
+        else:
+            dispatch.batch(names, lambda cell=cell, budget=budget: _live_cell(root, cell, budget))
+
+
+def _expanded_security_checks(root: Path) -> list[CheckResult]:
+    from .expanded_security import run_checks
+    return [CheckResult(**item) for item in run_checks(root)]
+
+
+def _dispatch_required_obligations(root: Path, state: _RunState, dispatch) -> None:
+    plan = state.required_plan
+    if plan is None:
+        return
+    for name in ('python-unittest', 'coverage'):
+        selected = [item for item in plan['obligations'] if item['check_id'] == name]
+        if selected and all(item['applicability'] == 'not_applicable' for item in selected) and not any(
+                check.name == name for check in state.results):
+            def observe_absence(name=name):
+                uses_pytest, has_unittest = python_check_selection(root)
+                return CheckResult(name, 'fail' if uses_pytest or has_unittest else 'skip',
+                    'Python discovery inputs changed after planning' if uses_pytest or has_unittest
+                    else 'no native Python discovery inputs', details=[{
+                        'kind': 'native-python-applicability', 'uses_pytest': uses_pytest,
+                        'has_unittest_files': has_unittest}])
+            dispatch.run(name, observe_absence)
+    names = sorted({item['check_id'] for item in plan['obligations'] if item['check_id'].startswith('security-')})
+    if names:
+        dispatch.batch(names, lambda: _expanded_security_checks(root))
+    refs = sorted({ref for item in plan['obligations'] if item['check_id'] == 'criterion-tests'
+                   for ref in item['expected_tests']})
+    if refs:
+        from .criterion_tests import run_required_tests
+        dispatch.run('criterion-tests', lambda: CheckResult(**run_required_tests(root, refs)))

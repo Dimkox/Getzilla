@@ -194,7 +194,11 @@ class GetzillaCliTests(unittest.TestCase):
 
     def test_project_scripts_take_precedence_inside_a_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = Path(tmp) / 'project'
+            parent = Path(tmp)
+            (parent / '.getzilla').mkdir()
+            (parent / 'scripts').mkdir()
+            (parent / 'scripts/getzilla_status.py').write_text("print('ancestor status')\n", encoding='utf-8')
+            project = parent / 'project'
             (project / '.getzilla').mkdir(parents=True)
             (project / 'scripts').mkdir()
             (project / 'scripts/getzilla_status.py').write_text("print('project status')\n", encoding='utf-8')
@@ -206,7 +210,12 @@ class GetzillaCliTests(unittest.TestCase):
             self.assertEqual(proc.stdout.strip(), 'project status')
             outside = Path(tmp) / 'elsewhere'
             outside.mkdir()
-            self.assertEqual(cli.script_path('getzilla_status.py', outside), ROOT / 'scripts/getzilla_status.py')
+            # Runtime scratch can itself be inside a real Getzilla checkout.
+            # Give the ancestor its own marker instead of assuming no project.
+            self.assertEqual(cli.script_path('getzilla_status.py', outside), parent / 'scripts/getzilla_status.py')
+            proc = run('status', cwd=outside)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), 'ancestor status')
 
 
 class ShimTests(unittest.TestCase):
@@ -237,7 +246,9 @@ class ShimTests(unittest.TestCase):
     def test_both_installers_put_getzilla_on_path(self) -> None:
         shell = (ROOT / 'scripts/install.sh').read_text(encoding='utf-8')
         powershell = (ROOT / 'scripts/install.ps1').read_text(encoding='utf-8')
-        self.assertIn('ln -sf "$home/bin/getzilla" "$HOME/.local/bin/getzilla"', shell)
+        self.assertIn('ln -s "$home/bin/getzilla" "$command"', shell)
+        self.assertIn('User command conflict: $command; existing bytes preserved.', shell)
+        self.assertNotIn('ln -sf', shell)
         self.assertLess(shell.index('  fetch_getzilla "$repo" "$ref" "$home"\n'),
                         shell.index('  link_getzilla_command "$home"\n'))
         self.assertIn("Add-UserPath (Join-Path $GetzillaHome 'bin')", powershell)

@@ -24,6 +24,17 @@ Getzilla installs a local Grok/Codex-style agent workflow into another repositor
 
 External merge checks follow repository visibility: GitHub Actions for public repositories, paid Trust CI with its configured signed approvals and holdout checks for private repositories. Local exploration and installation planning do not grant merge authority.
 
+The historical issue170 publication has one narrow source-data catalogue entry:
+`engineering/benchmarks/issue170/upstream-source.tar.gz`. Admission requires original
+commit `b106b5cc5acc0dbbe4d3112446512a077cea546f` in the candidate ancestry, the unchanged
+complete publication tree, exact original blob/size/SHA-256 and checksum manifest, and
+bounded complete gzip/tar validation. The assessment retains every member path,
+size, mode and digest. It does not extract or execute archived source. This entry
+forces high risk, the full profile and code/security/data/release reviews. The four
+original binary artifacts retain their high-risk classifications. Other archives,
+renamed copies, substitutions and missing provenance remain incomplete; this is not
+a general binary exception or a current runtime/source execution permission.
+
 ## Working order
 
 Route the task automatically and explore on its own branch. Keep bounded low-risk exploration free of a change package or review wave until delivery needs them. Commit the candidate and reconcile the route with its exact diff before selecting reviews and final verification. The [delivery contract](../AGENTS.md#delivery-contract) defines light, full and release qualification; [QUICKSTART.md](../QUICKSTART.md) shows the commands. Nothing merges without the selected reviews, qualifying local evidence and required external exact-head checks.
@@ -176,11 +187,11 @@ Each modern review report contains exactly one standalone line `reviewed-context
 
 Identity: **2.3.1 source candidate**, unpublished. Fetch current refs to establish the source head; dated observations below do not cap the current source inventory. Latest published [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0) is immutable: published 2026-10-21T11:01:37Z, annotated tag `815aeabc5d215d65e72651692a6457920de9fa71`, commit `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, tree `81076df2cd7db8713f7178ead66ebaa2728f861e`, with ZIP and checksum assets. This publication does not establish installation, provider activation or production acceptance.
 
-Historical source snapshot on 2026-10-24: `a45fbdd90e4f98e05c2f45c43afb28a63b3e448c`, the PR #179 merge. Since v2.3.0, `main` gained `getzilla update` (#132, #135), the light lane for small changes (#121, #142), exact-diff review plans (#144), disk cleanup for issue #168 (#174–#178) and session-bound protected-path grants (#179). The dated `PROJECT_STATE.json.current_continuation` names the Low batch in issue #134 and the 2.3.1 release; reconcile that handoff with fetched branches and current issues before choosing work.
+Current-session source observation on 2026-11-19: `main` was `e99548d7cefca730cfad63c2f8cea1afe67bacd8`; refresh refs before continuing. `PROJECT_STATE.json.current_continuation` now scopes all 64 originally inventoried open issues and regressions #433 and #434, outstanding commits and open PRs #425, #411, #393 and #318 on `integration/all-fixes-20261117`, for one combined PR, full verification, merge and a 2.3.1 release. Claw is the confirmed exact owner target; its installation and requested production acceptance remain unverified. Finish source/evidence joins, freeze the candidate, obtain fresh selected independent reviews and run one final PR verifier at full scope. Public Actions `linux` and `windows`, App ID `15368`, are the required checks observed in this session; this is a settings observation, not a successful exact-head verdict or completed independent security rollout. The old October 24 issue #134 handoff is preserved separately as historical provenance.
 
 The finished PR #79 contour (`fix/codex-cmd-hooks-20261011`, route `43786cadd549`, [source package](../engineering/changes/20261012-task-43786c/brief.md)) is kept in `historical_pr79_continuation`. Today, reports and receipts live in ignored runtime storage under `.getzilla/runtime` and in portable evidence exports, not in committed Markdown. PASS receipts require `--reviewed-commit <exact-full-sha>`; runtime consumers recheck exact reviewed HEAD/tree and the report-content hash. Historical tracked receipts retain their legacy compatibility rules. Public Actions linux/windows provide the required exact-head checks. The historical private Trust CI identity is `adaptive-trust-ci/verified@06ecf1c875bc`, App ID `<redacted-app-id>`; this record is not fresh verification. Conditional AGENTS L5 covers exact-grant merge/tag/release after checks, independent review and resolved threads; production mutation, deploy, external writes and human security approvals remain separate.
 
-The native harness executes local tasks. Do not add a daemon or enable providers to complete this source repair. The [historical M8 package](../engineering/changes/20261004-task-b25860/brief.md) and predecessor release records remain dated provenance.
+The native harness executes local tasks. Local source work does not require daemon or provider activation. Claw production work follows the owner's current task and exact scoped authority; finish available preparation and actual permitted operations without re-requesting existing authority. Missing legal wording approval, human security approval or exact operation access still blocks only its dependent action. The [historical M8 package](../engineering/changes/20261004-task-b25860/brief.md) and predecessor release records remain dated provenance.
 
 Historical pre-publication core observation: the conditional source included the frozen test-only025 [cursor reset seam](../factory/tests/postgres_fixture_reset.py), its two unchanged-boundary callers and narrowly typed lock-refusal acceptance controls. Pending joined-fitness/source-acceptance statements in that old record remain dated provenance, not current release instructions. F's026 inventory/runtime work remains absent.
 
@@ -211,7 +222,7 @@ Without opt-in, fast verification and the Trust runner keep their existing behav
 
 To select the existing automatic policy, create `.getzilla-test-runner.json` containing `{"schema_version":1,"workers":"auto"}`; `GETZILLA_TEST_WORKERS` overrides the requested value after the configuration file is validated. Accepted requests are `auto` or an integer from 0 through 64. Explicit integers are not quota-clamped, and `GETZILLA_TEST_WORKERS=0` selects sequential execution. An explicit allocation takes precedence over the PR/release default, so a coordinator can share its measured CPU budget across concurrent tasks.
 
-On Linux, `auto` uses the minimum of 28, process affinity or CPU-count fallback, and finite CPU quotas visible through actual cgroup membership and mounts. Finite quotas use `max(1, quota // period)`; malformed, unreadable or ambiguous capacity conservatively selects one worker. This does not establish hidden ancestor limits, reserved CPU time or available PID/memory capacity.
+The common budget reserves two from total host logical CPUs, then caps by actual process affinity (which includes online/cpuset constraints) and finite visible ancestor quotas. Host28 with affinity22 gives22; a verified26-CPU child gives26. Explicit28 also caps at26. Unknown affinity uses one worker. Finite quotas use `max(1, quota // period)`; unknown quota also caps at one. The helper does not widen affinity or establish hidden limits, reserved CPU time, PID or memory capacity. All concurrent heavy workers share this budget.
 
 On Windows, `auto` uses the minimum of 28 and the logical CPU count; Windows has no cgroup quotas or `sched_getaffinity`. Each owned child starts suspended, joins its own Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and no breakaway right, and only then runs. Cancellation, timeout, the output limit, normal child exit and controller exit therefore end the whole process tree, including descendants whose parent already exited. This is the counterpart of the POSIX session that the runner stops with `SIGTERM`, then `SIGKILL`.
 
@@ -424,7 +435,7 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [governance CLI](../scripts/getzilla_governance.py)
 - [`scripts/getzilla_verify.py`](../scripts/getzilla_verify.py)
 - [`scripts/getzilla_review.py`](../scripts/getzilla_review.py)
-- [`scripts/getzilla_approve.py`](../scripts/getzilla_approve.py) — exact action/resource delegated local grant only
+- [`scripts/getzilla_approve.py`](../scripts/getzilla_approve.py) — exact action/resource delegated local grant only. Before editing a new protected file, explicitly extend one current grant with `protected-path --extend <grant-id> --request-id <32-lowercase-hex> --action protected-path-write --resource <old-file> --resource <new-file> --reason <delegation>`. Repeat `--resource` for the complete literal strict superset. This requires existing delegation for every new path. It retains the original branch/task/owner/epoch/anchor and caps expiry at the earlier parent deadline or requested TTL. It replaces the parent with supported non-authority history in the same store. An exact current replay returns the same grant; stale, revoked or pruned requests never remint or follow a larger successor. Uncertain publication returns no grant and requires inspection. Other grants do not contribute resources or TTL. Production, external-write, release and human-signed approval boundaries retain their existing rules.
 - [`scripts/getzilla_deploy.py`](../scripts/getzilla_deploy.py) — [local deployment preflight](deploy-preflight.md) and release preparation
 - [`scripts/getzilla_doctor.py`](../scripts/getzilla_doctor.py)
 - [`scripts/getzilla_demo.py`](../scripts/getzilla_demo.py)
@@ -542,6 +553,10 @@ python3 scripts/getzilla_doctor.py --offer-install
 ```
 
 Machine-readable local pins: `.getzilla/config/toolchain.json` (its `workflow_sources` block pins the advisory workflow-document parsers). Trust CI uses separately built API, worker and runner images pinned by immutable SHA-256 digest in deployment and server policy.
+
+`getzilla trust audit --json` hashes a closed inventory of existing public source declarations. It requires an owner-matching, single-link regular file with public mode `0444`, `0644`, `0555` or `0755`; it checks anchored no-follow ancestry and stable metadata before and after reading. Private, linked, unsupported or changed inputs remain `unqualified`, with no digest or byte count. Missing optional sources remain missing; an incomplete inventory returns exit 1. The command does not look up credentials, contact endpoints or verify installed components. These are local metadata observations, not authenticated group membership, Windows ACL proof or protection against same-UID/group writers. Windows custody remains unqualified. Source hashes, model lists and aliases do not prove endpoint provenance or pin served model weights.
+
+The canonical policy and shared hook refuse external MCP calls with `mcp_identity_unverified` until a supported host adapter can prove endpoint identity and provenance. Read-shaped names, `mcp_read_tools` exceptions, configured trust labels and exact operation grants do not provide that proof. Local tools retain their existing policy and grant checks. This source guard does not stop an existing external process or provider request and does not establish OS isolation.
 
 ### Workflow sources (dated advisory-parser compatibility pins)
 
@@ -825,3 +840,7 @@ Explicit owner overrides of local workflow rules must record the exact rule, sco
 New workflow state stays under ignored runtime and can move to `ready` without changing source. Reports bind exact reviewed HEAD/tree and content hashes. No report-only or workflow freeze commit is needed. Historical tracked evidence remains unchanged.
 
 Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under the active change evidence directory. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
+
+For signature or holdout digest failures, preserve evidence and use the [security recovery handoff](../engineering/runbooks/security-handoff.md).
+
+The mandatory PreToolUse bootstrap uses the standard-library bounded request decoder even when `_lib.py` is absent or cannot import. Malformed or ambiguous requests produce the fixed `invalid_tool_request` denial. Bootstrap refusals emit the selected native verdict schema and exit 2; exit 1 is not a blocking contract across all supported clients. Valid bounded public reads retain the existing fallback checks and return normally with exit 0 when admitted. Required semantic intake, protected paths, unknown MCP identities and namespaced tool fences still apply. The generated native launcher and source entrypoint preserve this status; legacy root shims translate a bootstrap failure to their own native denial with exit 2. Historical tests that expected exit 0 for bootstrap refusals now assert this blocking status.

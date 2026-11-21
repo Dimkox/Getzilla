@@ -308,24 +308,28 @@ class ProgressTests(unittest.TestCase):
         root, _ = self.directory()
         paths = [f'tests/test_{i}.py' for i in range(60)]
         reads = []
+        source = ('# ' + 'x' * 989970 + '\ndef test_public():\n pass\n').encode()
+        blob = 'b' * 40
         def git(command, **kwargs):
             if command[1:3] == ['rev-parse', 'HEAD']:
-                value = 'a' * 40
+                value = ('a' * 40).encode()
             elif command[1] == 'ls-files':
                 self.assertLessEqual(len(command[5:]), 50)
-                value = '\0'.join(paths)
-            elif command[1] == 'cat-file':
-                value = '990000'
+                value = '\0'.join(paths).encode()
+            elif command[1:3] == ['cat-file', '--batch-check']:
+                self.assertEqual(len(kwargs['input'].splitlines()),50)
+                value = ((blob+' blob '+str(len(source))+'\n')*50).encode()
             else:
-                reads.append(command)
-                value = '# ' + 'x' * 989970 + '\ndef test_public():\n pass\n'
-            return subprocess.CompletedProcess(command, 0, value, '')
-        with patch.object(verification_progress_evidence, 'run', side_effect=git):
+                self.assertEqual(command[1:3],['cat-file','--batch'])
+                reads.extend(kwargs['input'].splitlines())
+                value = b''.join((blob+' blob '+str(len(source))+'\n').encode()+source+b'\n' for _ in reads)
+            return subprocess.CompletedProcess(command, 0, value, b'')
+        with patch.object(verification_progress_evidence, '_observed_run', side_effect=git):
             result = verification._trusted_progress_metadata(root, paths)
         self.assertEqual(len(reads), 8)
         self.assertEqual(len(result), 8)
-        with patch.object(verification_progress_evidence, 'run', side_effect=AssertionError('deadline must precede Git')), \
-             patch.object(verification.time, 'monotonic', side_effect=[0.0, 3.0]):
+        with patch.object(verification_progress_evidence, '_observed_run', side_effect=AssertionError('deadline must precede Git')), \
+             patch.object(verification.time, 'monotonic', side_effect=[0.0, 3.0, 3.0]):
             self.assertEqual(verification._trusted_progress_metadata(root, paths), {})
 
     def test_progress_deadline_also_bounds_identity_resolution(self):

@@ -52,19 +52,9 @@ def find_root(start: str | Path | None = None) -> Path:
     for candidate in [current, *current.parents]:
         if (candidate / '.getzilla').is_dir():
             return candidate
-    try:
-        proc = _observed_run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            cwd=current,
-            text=True,
-            encoding='utf-8',
-            capture_output=True,
-            check=False,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return Path(proc.stdout.strip()).resolve()
-    except OSError:
-        pass
+    for candidate in [current, *current.parents]:
+        if (candidate / '.git').exists():
+            return candidate
     return current
 
 
@@ -213,13 +203,22 @@ def command_exists(name: str) -> bool:
     return find_tool(name) is not None
 
 
+def _git_observation(root, arguments, *, timeout=30):
+    from .architecture_diff import run_git_read
+    code, output, error = run_git_read(root, list(arguments), timeout=timeout)
+    return subprocess.CompletedProcess(['git', *arguments], code, output, error)
+
+
 def git_output(root: Path, *args: str) -> str | None:
     if not command_exists('git'):
         return None
-    proc = run(['git', *args], cwd=root, timeout=30)
+    try:
+        proc = _git_observation(root, args)
+    except (OSError, ValueError):
+        return None
     if proc.returncode != 0:
         return None
-    return proc.stdout.strip()
+    return proc.stdout.decode('utf-8', 'replace').strip()
 
 
 def git_head(root: Path) -> str | None:
@@ -255,10 +254,8 @@ def _git_paths(root: Path, *args: str) -> set[str] | None:
     try:
         # -z emits filesystem bytes, not quoted text. Binary mode also avoids
         # newline translation changing legal carriage returns in filenames.
-        proc = _observed_run(
-            ['git', *args], cwd=root, capture_output=True, timeout=60, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        proc = _git_observation(root, args, timeout=60)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
     # An unsuccessful or malformed inventory cannot establish untracked ownership.
     if proc.returncode != 0 or (proc.stdout and not proc.stdout.endswith(b'\0')):
@@ -270,10 +267,8 @@ def _git_name_status(root: Path, *args: str) -> list[dict[str, str]] | None:
     try:
         # Name-status records use one NUL-delimited field per status/path.  A
         # rename or copy has an additional original-path field.
-        proc = _observed_run(
-            ['git', *args], cwd=root, capture_output=True, timeout=60, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        proc = _git_observation(root, args, timeout=60)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0 or (proc.stdout and not proc.stdout.endswith(b'\0')):
         return None
@@ -420,7 +415,14 @@ def changed_files(root: Path, base: str | None = None) -> list[str]:
     return sorted(paths)
 
 
-def file_sha256(path: Path) -> str:
+def file_sha256(path: Path, *, strict_root: Path | None = None) -> str:
+    if strict_root is not None:
+        from .fsx import ReadOnlyBoundRoot
+        with ReadOnlyBoundRoot(strict_root) as binding:
+            snapshot = binding.read(path.relative_to(strict_root).as_posix())
+            if snapshot is None:
+                raise ValueError('grant source disappeared')
+            return snapshot.sha256
     digest = hashlib.sha256()
     with path.open('rb') as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b''):
@@ -431,9 +433,8 @@ def file_sha256(path: Path) -> str:
 def _grant_index_entries(root: Path, excluded: set[str]) -> bytes:
     """Bind staged blobs separately: worktree bytes can conceal a different index."""
     try:
-        proc = _observed_run(['git', 'ls-files', '--stage', '-z'], cwd=root,
-                              capture_output=True, timeout=60, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = _git_observation(root, ['ls-files', '--stage', '-z'], timeout=60)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         raise ValueError('cannot establish grant index inventory') from exc
     if proc.returncode != 0 or (proc.stdout and not proc.stdout.endswith(b'\0')):
         raise ValueError('cannot establish grant index inventory')
@@ -450,9 +451,12 @@ def _grant_index_entries(root: Path, excluded: set[str]) -> bytes:
     return b'\0'.join(entries)
 
 
-def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | None = None) -> str:
+def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | None = None,
+                     strict: bool = False) -> str:
     """Legacy HEAD/worktree binding, or independent committed/index/worktree edit binding."""
     skipped = {str(item).replace('\\', '/') for item in exclude}
+    if strict and not anchor:
+        raise ValueError('strict grant observation requires an anchor')
     digest = hashlib.sha256()
     head = anchor or git_head(root) or 'NO_HEAD'
     digest.update(head.encode())
@@ -475,15 +479,27 @@ def tree_fingerprint(root: Path, exclude: Iterable[str] = (), *, anchor: str | N
         digest.update(os.fsencode(rel))
         path = root / rel
         try:
+            before = path.lstat() if strict and (path.exists() or path.is_symlink()) else None
             if anchor and path.exists():
                 digest.update(str(path.lstat().st_mode).encode())
             if path.is_symlink():
                 digest.update(os.fsencode(os.readlink(path)))
             elif path.is_file():
-                digest.update(file_sha256(path).encode())
+                digest.update((file_sha256(path, strict_root=root) if strict else file_sha256(path)).encode())
             else:
+                if strict and before is not None:
+                    raise ValueError('grant source is not a regular file or link')
                 digest.update(b'MISSING')
+            if strict:
+                after = path.lstat() if path.exists() or path.is_symlink() else None
+                fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+                def identity(info):
+                    return None if info is None else tuple(getattr(info, key) for key in fields)
+                if identity(before) != identity(after):
+                    raise ValueError('grant source changed during observation')
         except OSError:
+            if strict:
+                raise ValueError('grant source observation unavailable') from None
             digest.update(b'ERROR')
     return digest.hexdigest()
 

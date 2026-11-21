@@ -6,7 +6,7 @@ import time
 from .landing_contracts import MAX_INPUT_BYTES, LandingContractError, landing_digest
 from .landing_failover_config import JOB_ID
 from .landing_failover_contracts import backend_capability, validate_receipt
-from .landing_failover_transport import BackendAmbiguous, BackendRejected, BackendUnavailable, UnixLandingBackend
+from .landing_failover_transport import BackendAmbiguous, BackendRejected, BackendUnavailable, UnixLandingBackend, SharedAuthorityUnixBackend
 from .landing_http import HttpLandingProfile
 from .landing_intake import PrivateLandingBlobStore
 from .landing_normalizer import _extract_docx_text, MAX_NORMALIZED_TEXT_BYTES
@@ -18,8 +18,9 @@ MEDIA = {"text/plain": "text", "application/vnd.openxmlformats-officedocument.wo
 
 
 class FailoverCoordinator:
-    def __init__(self, config, journal, *, backend_factory=UnixLandingBackend, clock=time.time):
-        self.config, self.journal, self.backend_factory, self.clock = config, journal, backend_factory, clock
+    def __init__(self, config, journal, *, backend_factory=None, clock=time.time):
+        self.config, self.journal, self.clock = config, journal, clock
+        self.backend_factory = backend_factory or (SharedAuthorityUnixBackend if config.shared_task_id is not None else UnixLandingBackend)
 
     def submit(self, job_id, payload, media_type):
         if not isinstance(job_id, str) or not JOB_ID.fullmatch(job_id):
@@ -80,10 +81,15 @@ class FailoverCoordinator:
                            "child_id": child, "state": "planned", "receipt": None}
                 record["attempts"].append(attempt)
                 self.journal.save(record)
+            # A resumed dispatching attempt has no proof its POST response was
+            # delivered. It may recover a winner, but cannot authorize fallback.
+            ambiguous_delivery = attempt['state'] == 'dispatching'
             client = None
             try:
                 client = self.backend_factory(backend, config=self.config,
                                               timeout_seconds=max(1, min(330, record["deadline_at"] - int(self.clock()))))
+                if isinstance(client, SharedAuthorityUnixBackend):
+                    client.bind_attempt(record["parent_digest"],ordinal)
                 if attempt["state"] == "planned":
                     capability = client.capability()
                     expected = backend_capability(HttpLandingProfile.for_provider(backend.profile_id, available=True),
@@ -98,7 +104,7 @@ class FailoverCoordinator:
                     try:
                         client.submit(attempt["child_id"], payload, record["request"]["media_type"])
                     except BackendAmbiguous:
-                        pass  # Only the same child may now be observed.
+                        ambiguous_delivery = True  # Only this child may be observed.
                 receipt = client.observe(attempt["child_id"])
                 observation, artifact = self._bind_receipt(record, attempt, receipt)
                 attempt["receipt"] = receipt
@@ -115,6 +121,10 @@ class FailoverCoordinator:
                     return self._finish(record, "artifact_ready", "selected")
                 if not receipt["terminal"] or observation is None:
                     return self._finish(record, "needs_human", "outcome_unknown", purge=False)
+                if self.config.shared_task_id is not None and (
+                    ambiguous_delivery or observation.usage_status not in {'reported','not_dispatched'}
+                ):
+                    return self._finish(record,'needs_human','outcome_unknown',purge=False)
                 if (receipt["phase"] == "provider" and receipt["artifact"] is None
                         and receipt["state"] in {"provider_unavailable", "needs_human"}
                         and observation.category in FALLBACK_CATEGORIES):

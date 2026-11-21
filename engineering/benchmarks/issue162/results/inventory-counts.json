@@ -1,0 +1,20 @@
+[
+  {
+    "ast_function_declarations": 62,
+    "candidate_files": 8,
+    "corpus": "small",
+    "decorated_overload_stubs": 7,
+    "indexed_windows": 64,
+    "source_bytes": 42346,
+    "source_lines": 1199
+  },
+  {
+    "ast_function_declarations": 2194,
+    "candidate_files": 140,
+    "corpus": "large",
+    "decorated_overload_stubs": 0,
+    "indexed_windows": 3820,
+    "source_bytes": 2292141,
+    "source_lines": 52123
+  }
+]

@@ -12,6 +12,7 @@ import platform
 import re
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -51,6 +52,15 @@ _DATABASE_CLASSES = {
     "test_runtime_capability_postgres.RuntimeCapabilityPostgresTests": "FACTORY_TEST_DATABASE_URL must name a disposable database",
     "test_execution_persistence_postgres.FreshClusterArtifactAttestorMigrationTests": "FACTORY_FRESH_CLUSTER_DATABASE_URL must name an empty disposable PG17 cluster",
     "test_postgres_fixture_reset.FixtureResetPostgresTests": "requires exact disposable PostgreSQL",
+    "test_retrieval_access_postgres.RetrievalAccessPostgresTests": "owned disposable PostgreSQL is required",
+    "test_access_release_postgres.AccessReleasePostgresTests": "owned disposable PostgreSQL is required",
+    "test_factory_stop.FactoryStopAuthorityTests": "requires bound disposable PostgreSQL",
+    "test_factory_stop_migration.FactoryStopMigrationTests": "requires explicitly bound disposable PostgreSQL",
+    "test_result_grade_postgres.ResultGradePostgresTests": "owned disposable PostgreSQL required",
+}
+_DATABASE_CASES = {
+    "test_landing_failover_cli.UnixCallerTests.test_absent_primary_real_unix_secondary_lost_post_recovers_existing_winner":
+        "shared-control positive requires bound disposable PostgreSQL; legacy POST stays blocked",
 }
 _LINUX_CASES = frozenset({
     "test_real_child_has_fixed_identity_health_logs_and_bounded_shutdown",
@@ -304,6 +314,8 @@ def observed_context(path: str | None = None) -> dict:
     except (OSError, subprocess.SubprocessError, UnicodeError):
         pass
     return {"unit_database_bindings": "scrubbed", "host_supported": supported,
+            "unix_peer_credentials": os.name == 'posix' and hasattr(socket, 'SO_PEERCRED'),
+            "posix_source_custody": os.name == 'posix' and hasattr(os, 'geteuid'),
             "procfs_descriptor_reopen": _procfs_descriptor_reopen(),
             "pypdf_version": child.stdout.strip() or None,
             "jsonschema_cli": shutil.which("jsonschema", path=path)}
@@ -328,6 +340,14 @@ def skip_allowance(identifier: str, context: dict) -> tuple[str, str] | None:
     group, _, method = case.rpartition(".")
     if group in _DATABASE_CLASSES and context["unit_database_bindings"] == "scrubbed":
         return "separate-disposable-postgres", _DATABASE_CLASSES[group]
+    if case in _DATABASE_CASES and context["unit_database_bindings"] == "scrubbed":
+        return "separate-disposable-postgres", _DATABASE_CASES[case]
+    if (case == 'test_retrieval_receiver.RetrievalReceiverTests.test_real_unarmed_receiver_denies_payload_and_retirement_without_logging_source'
+            and context.get('unix_peer_credentials') is False):
+        return 'unsupported-owned-uds-profile', 'requires local POSIX peer credentials'
+    if (group == 'test_retrieval_current_authority.CurrentAuthorityRetrievalTests'
+            and context.get('posix_source_custody') is False):
+        return 'unsupported-native-source-profile', 'requires POSIX native source custody'
     if (group == "test_linux_process_adapter.LinuxProcessAdapterTests"
             and method in _LINUX_CASES and not context["host_supported"]):
         return "unsupported-process-host", "requires the supported host profile: Ubuntu 24.04 x86_64 with /usr/bin/python3.12"
