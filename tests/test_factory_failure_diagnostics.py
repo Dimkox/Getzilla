@@ -183,6 +183,60 @@ class FactoryFailureDiagnosticTests(unittest.TestCase):
         self.assertIsInstance(status.args[2], ast.Call)
         self.assertIn("'longMessage', False", source)
 
+    def test_optional_helper_interception_covers_real_import_shapes(self):
+        # Observe Python's import calling convention using a new closed module,
+        # without loading or executing the retained availability test body.
+        seen = []
+        def capture(name, globals=None, locals=None, fromlist=(), level=0):
+            seen.append((name, fromlist, level))
+            return SimpleNamespace(verification_failure_excerpt=object())
+        exec('from . import verification_failure_excerpt',
+             {'__builtins__': {'__import__': capture}, '__package__': 'owned_fixture'})
+        self.assertEqual(seen, [('', ('verification_failure_excerpt',), 1)])
+        tree = ast.parse((ROOT / 'tests/test_verification_failure_excerpt.py').read_bytes())
+        method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+            and node.name == 'test_progress_import_survives_unavailable_optional_diagnostic_helper')
+        hook = next(node for node in method.body if isinstance(node, ast.FunctionDef)
+                    and node.name == 'without_helper')
+        condition = next(node.test for node in hook.body if isinstance(node, ast.If))
+        terms = {ast.unparse(node) for node in ast.walk(condition) if isinstance(node, ast.Compare)}
+        self.assertIn("name.rsplit('.', 1)[-1] == 'verification_failure_excerpt'", terms)
+        self.assertIn("'verification_failure_excerpt' in (kwargs.get('fromlist') or ())", terms)
+        self.assertIn("'verification_failure_excerpt' in (args[2] or ())", terms)
+        self.assertIn('len(args) >= 3', terms)
+        assertions = {ast.unparse(node) for node in ast.walk(method) if isinstance(node, ast.Call)}
+        self.assertIn('self.assertIsNone(holder._pending_diagnostic)', assertions)
+        self.assertIn("self.assertEqual(len(blocked), 1, 'helper is attempted only inside the guarded diagnostic hook')",
+                      assertions)
+
+    def test_nullable_fromlist_predicate_uses_closed_import_records(self):
+        tree = ast.parse((ROOT / 'tests/test_verification_failure_excerpt.py').read_bytes())
+        method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+            and node.name == 'test_progress_import_survives_unavailable_optional_diagnostic_helper')
+        hook = next(node for node in method.body if isinstance(node, ast.FunctionDef)
+                    and node.name == 'without_helper')
+        condition = next(node.test for node in hook.body if isinstance(node, ast.If))
+        # Evaluate only the source predicate, never the old method/hook body or
+        # any import. Records are new closed fixtures of Python import arguments.
+        code = compile(ast.Expression(condition), '<owned-import-predicate>', 'eval')
+        cases = [('hashlib', (), {}, False),
+                 ('hashlib', (None, None, None, 0), {}, False),
+                 ('hashlib', (), {'fromlist': None}, False),
+                 ('verification_failure_excerpt', (None, None, None), {}, True)]
+        for value in ([], (), ['other'], ('other',),
+                      ['verification_failure_excerpt'], ('verification_failure_excerpt',)):
+            expected = 'verification_failure_excerpt' in value
+            cases.extend([('', (None, None, value, 1), {}, expected),
+                          ('getzilla', (), {'fromlist': value}, expected)])
+        for name, args, kwargs, expected in cases:
+            with self.subTest(name=name, args=args, kwargs=kwargs):
+                try:
+                    actual = eval(code, {'__builtins__': {'len': len}},
+                                  {'name': name, 'args': args, 'kwargs': kwargs})
+                except TypeError:
+                    self.fail('valid nullable import shape raised TypeError')
+                self.assertIs(actual, expected)
+
 
 if __name__ == '__main__':
     unittest.main()

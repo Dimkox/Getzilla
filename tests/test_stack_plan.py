@@ -66,10 +66,11 @@ class StackPlanTests(unittest.TestCase):
                 self.assertEqual({row['check_id'] for row in plan},
                     {'toolchain:rust', 'cargo-lockfile', 'cargo-fmt', 'cargo-clippy', 'cargo-build', 'cargo-test'})
                 self.assertTrue(all(row['applicability'] == 'required' for row in plan))
-                with mock.patch.dict(stacks.RUNNERS, {'rust': lambda context: []}):
-                    refused = stacks.planned_stack_checks(root, 'pr', ['Cargo.toml'], registry={'rust': stack})
-                self.assertEqual([row['check_id'] for row in refused], ['stack:rust'])
-                self.assertEqual(refused[0]['applicability'], 'required')
+                replacement = mock.Mock(side_effect=AssertionError('mismatched runner must not execute'))
+                with mock.patch.dict(stacks.RUNNERS, {'rust': replacement}), \
+                     self.assertRaisesRegex(ValueError, 'required-plan-incomplete'):
+                    stacks.planned_stack_checks(root, 'pr', ['Cargo.toml'], registry={'rust': stack})
+                replacement.assert_not_called()
 
     def test_actual_missing_stack_results_cannot_silently_disappear(self):
         self.assertIn('required_plan', __import__('inspect').signature(stacks.stack_checks).parameters)
@@ -110,7 +111,7 @@ class StackPlanTests(unittest.TestCase):
         self.write('b/src/lib.rs')
         planned = self.planner()(self.root, 'pr', ['a/src/lib.rs'])
         self.assertEqual({item['check_id'] for item in planned},
-                         {'cargo-fmt:a', 'cargo-clippy:a', 'cargo-build:a', 'cargo-test:a'})
+                         {'toolchain:rust', 'cargo-fmt:a', 'cargo-clippy:a', 'cargo-build:a', 'cargo-test:a'})
         untouched = self.planner()(self.root, 'pr', ['README.md'])
         self.assertEqual([(item['check_id'], item['applicability']) for item in untouched],
                          [('stack:rust', 'not_applicable')])
@@ -190,16 +191,24 @@ class StackPlanTests(unittest.TestCase):
         self.assertEqual(by_name['python-unittest']['applicability'], 'not_applicable')
         self.assertEqual(by_name['ruff']['applicability'], 'not_applicable')
         self.assertEqual(by_name['bandit']['applicability'], 'not_applicable')
-        plan = verification_plan.build_required_plan(self.root, mode='pr', context=None,
-            source={}, inventory={}, risk={}, selection={}, extra_obligations=obligations)
+        from getzilla.util import tree_fingerprint
+        plan = verification_plan.build_required_plan(self.root, mode='pr', context={},
+            source={'fingerprint': tree_fingerprint(self.root)}, inventory={}, risk={},
+            selection={'requested_profiles': None}, extra_obligations=obligations)
         checks = []
         for item in obligations:
             check = {'name': item['check_id'], 'status': 'skip' if item['applicability'] == 'not_applicable' else 'pass',
                      'summary': 'structural fixture', 'details': []}
             verification_plan.bind_result(plan, check)
             checks.append(check)
+        queried_sources = []
+        def reject_unexpected_source(*args, **_kwargs):
+            queried_sources.append(args)
+            raise AssertionError('native applicability fixture has no external data sources')
         decision = evaluate_quality_gate(mode='pr', checks=checks, required_plan=plan,
-            current_binding=plan['binding'], now_utc=datetime(2026, 11, 3, tzinfo=timezone.utc))
+            current_binding=plan['binding'], now_utc=datetime(2026, 11, 3, tzinfo=timezone.utc),
+            data_source_validator=reject_unexpected_source)
+        self.assertEqual(queried_sources, [])
         self.assertEqual(decision.status, 'pass', decision.details)
 
 
@@ -207,22 +216,18 @@ class StackPlanTests(unittest.TestCase):
 class CollectedStackRepairTests(unittest.TestCase):
     def test_unavailable_obligation_cannot_credit_a_forged_fallback_pass(self):
         from datetime import datetime, timezone
-        from getzilla import verification_plan as api, quality_gates
+        from getzilla import quality_gates
         stack = stacks.Stack('owned', ('owned.build',), ())
         def unknown(context):
             self.fail('unadmitted runner callback')
         with mock.patch.dict(stacks.RUNNERS, {'owned': unknown}), mock.patch.dict(stacks.PLANNERS, {}, clear=True):
-            rows = stacks.planned_stack_checks(Path('.'), 'fast', ['owned.build'], registry={'owned': stack}, files=['owned.build'])
-        self.assertEqual([row['check_id'] for row in rows], ['stack:owned'])
-        with mock.patch.object(api, 'policy_binding', return_value={'digest': 'a' * 64}):
-            plan = api.build_required_plan(Path('.'), mode='fast', context={}, source={}, inventory={}, risk={}, selection={},
-                extra_obligations=[api.obligation(row['check_id'], evidence=row['evidence']) for row in rows])
+            with self.assertRaisesRegex(ValueError, 'required-plan-incomplete'):
+                stacks.planned_stack_checks(Path('.'), 'fast', ['owned.build'], registry={'owned': stack}, files=['owned.build'])
         result = CheckResult('stack:owned', 'pass', 'unproved fallback assertion')
-        api.bind_result(plan, result)
-        decision = quality_gates.evaluate_quality_gate(mode='fast', checks=[result], required_plan=plan,
-            current_binding=plan['binding'], now_utc=datetime(2026,11,9,tzinfo=timezone.utc),
-            data_source_validator=lambda *args, **options: True)
+        decision = quality_gates.evaluate_quality_gate(mode='fast', checks=[result], required_plan=None,
+            now_utc=datetime(2026,11,9,tzinfo=timezone.utc))
         self.assertEqual(decision.status, 'fail')
+        self.assertTrue(any(row['code'] == 'required-plan-unavailable' for row in decision.details))
 
     def observe(self, *, unknown=False, missing=False):
         from datetime import datetime, timezone
@@ -243,6 +248,11 @@ class CollectedStackRepairTests(unittest.TestCase):
             (root / 'owned.build').write_text('# inert public marker\n')
             with mock.patch.dict(stacks.RUNNERS, {'owned': runner}), \
                  mock.patch.dict(stacks.PLANNERS, {} if missing else {'owned': (known, lambda context: ['owned-required'])}, clear=missing):
+                if unknown or missing:
+                    with self.assertRaisesRegex(ValueError, 'required-plan-incomplete'):
+                        stacks.planned_stack_checks(root, 'fast', ['owned.build'], registry={'owned': stack}, files=['owned.build'])
+                    self.assertEqual(calls, [], 'unadmitted pair must not execute')
+                    return calls, None, None
                 rows = stacks.planned_stack_checks(root, 'fast', ['owned.build'], registry={'owned': stack}, files=['owned.build'])
                 result, _ = stacks.stack_checks(root, 'fast', ['owned.build'], make=CheckResult, command=forbidden,
                     ensure=forbidden, registry={'owned': stack}, files=['owned.build'], required_plan={'obligations': rows})
@@ -267,8 +277,8 @@ class CollectedStackRepairTests(unittest.TestCase):
             with self.subTest(missing=missing):
                 calls, result, decision = self.observe(unknown=True, missing=missing)
                 self.assertEqual(calls, [])
-                self.assertEqual([(row.name,row.status) for row in result], [('stack:owned','fail')])
-                self.assertEqual(decision.status, 'fail')
+                self.assertIsNone(result, 'no runner result may be manufactured after plan refusal')
+                self.assertIsNone(decision, 'no quality decision may credit an unavailable plan')
 
 
 ROOT = Path(__file__).resolve().parents[1]

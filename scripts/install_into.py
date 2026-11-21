@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
 
 from getzilla import fsx
+from getzilla.harnesses import platform_hook_payload
 from getzilla.skill_inventory import inspect_payload as inspect_skill_payload
 from getzilla.baseline_assets import archive_entries, validate_resources, BLOB_PREFIX
 from getzilla.component_state import (
@@ -95,6 +96,7 @@ MANAGED_FILES = (
     "scripts/getzilla_ci_evidence.py",
     "scripts/getzilla_platform_install.py",
     "scripts/getzilla_update.py",
+    "scripts/getzilla_baseline.py",
     "scripts/getzilla_git.py",
     "scripts/getzilla_entire.py",
     "session_start.py",
@@ -1044,7 +1046,8 @@ def _build_full_payload(
             if PurePosixPath(*parts[:length]).as_posix() in seen:
                 raise UnsafeInstallTarget(f"managed file/directory collision: {path}")
     inspect_skill_payload((entry.path, entry.content) for entry in entries)
-    return tuple(entries)
+    return tuple(InstallEntry(entry.path, platform_hook_payload(entry.path, entry.content), entry.mode)
+                 for entry in entries)
 
 
 def _dependency_advice(

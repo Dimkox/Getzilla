@@ -494,7 +494,7 @@ class NativeAliasTests(unittest.TestCase):
 
     def test_description_rejects_invalid_alias_shape_elements_and_ids_without_echo(self):
         malformed = ('CVE-2099-9999', {}, {'CVE-2099-9999': True}, 0, True,
-                     [1], [None], [[]], [''], ['GHSA-public,'], [' CVE-2099-9999 '],
+                     [1], [None], [[]], [' CVE-2099-9999 '],
                      ['CVE-2099-9999\n'], ['CVE-2099-9999', False])
         for case, aliases in enumerate(malformed):
             with self.subTest(case=case):
@@ -502,13 +502,18 @@ class NativeAliasTests(unittest.TestCase):
                     KV._describe(self.record(aliases=aliases), self.dependency)
                 except KV.VulnerabilityError as error:
                     prefix, detail = str(error).split('; ', 1)
-                    self.assertEqual(prefix, 'OSV aliases must be null or a list of valid identifiers')
+                    self.assertIn(prefix, ('OSV aliases must be null or a list of strings',
+                                           'OSV decision identifier is malformed'))
                     self.assertEqual(json.loads(detail), error.osv_alias_detail)
                     self.assertEqual(error.osv_alias_detail['kind'], 'osv-alias-rejection')
                 except (TypeError, ValueError):
                     self.fail('malformed aliases escaped as an untyped error')
                 else:
                     self.fail('malformed aliases were accepted or coerced')
+        for aliases in ([''], ['GHSA-public,']):
+            finding = KV._describe(self.record(aliases=aliases), self.dependency)
+            self.assertEqual(finding.raw_aliases, aliases)
+            self.assertEqual(finding.aliases, [])
 
     def test_offline_alias_admission_precedes_every_record_filter(self):
         for case in ('matched', 'withdrawn', 'unrelated', 'unaffected'):

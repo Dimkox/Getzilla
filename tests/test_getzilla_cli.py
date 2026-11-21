@@ -237,7 +237,9 @@ class ShimTests(unittest.TestCase):
     def test_both_installers_put_getzilla_on_path(self) -> None:
         shell = (ROOT / 'scripts/install.sh').read_text(encoding='utf-8')
         powershell = (ROOT / 'scripts/install.ps1').read_text(encoding='utf-8')
-        self.assertIn('ln -sf "$home/bin/getzilla" "$HOME/.local/bin/getzilla"', shell)
+        self.assertIn('ln -s "$home/bin/getzilla" "$command"', shell)
+        self.assertIn('User command conflict: $command; existing bytes preserved.', shell)
+        self.assertNotIn('ln -sf', shell)
         self.assertLess(shell.index('  fetch_getzilla "$repo" "$ref" "$home"\n'),
                         shell.index('  link_getzilla_command "$home"\n'))
         self.assertIn("Add-UserPath (Join-Path $GetzillaHome 'bin')", powershell)

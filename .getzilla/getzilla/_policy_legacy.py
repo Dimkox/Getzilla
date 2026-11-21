@@ -3381,8 +3381,10 @@ def evaluate_pre_tool(
         secret = shell_secret_reference(root, command, secret_read)
         if secret == _GH_OPAQUE_MARKER:
             return False, 'GitHub CLI arguments must be literal; quote or escape data and use explicit option values.'
+        if secret == _BUDGET_MARKER:
+            return False, f'Reading secret material is blocked: {_BUDGET_MARKER}'
         if secret is not None:
-            return False, f'Reading secret material is blocked: the shell command references {secret}'
+            return False, 'Reading secret material is blocked by repository policy.'
         authority = analyze_command_authority(command)
         if authority.ambiguous or (authority.actions and not authority.context_proven):
             return False, (
@@ -3481,8 +3483,7 @@ def evaluate_pre_tool(
                 if not isinstance(raw, str) or not raw:
                     continue
                 if _secret_reference(root, raw, secret_read, budget=budget):
-                    rel = safe_relative_path(root, raw)
-                    return False, f'Reading secret material is blocked: {rel if rel is not None else raw}'
+                    return False, 'Reading secret material is blocked by repository policy.'
                 directory = _resolve_under_root(root, raw)
                 if directory and os.path.isdir(directory):
                     hit = _walk_for_secret(
@@ -3490,8 +3491,7 @@ def evaluate_pre_tool(
                         skip_hidden=is_grep and glob_filter is None,
                     )
                     if hit is not None:
-                        rel = safe_relative_path(root, hit)
-                        return False, f'Reading secret material is blocked: {rel if rel is not None else hit}'
+                        return False, 'Reading secret material is blocked by repository policy.'
         except _BudgetExceeded:
             return False, f'Reading secret material is blocked: {_BUDGET_MARKER}'
 

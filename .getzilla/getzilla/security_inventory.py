@@ -508,11 +508,24 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
             if 'include' in document:
                 gap('unsupported-compose-composition', relative, 'Compose include needs qualified referenced-source coverage')
             services = _yaml_map(document.get('services'), 'Compose services')
-            for service in services.values():
+            for service_name, service in services.items():
                 fields = _yaml_map(service, 'Compose service')
-                for indirect in ('build', 'extends', 'provider'):
+                for indirect in ('extends', 'provider'):
                     if indirect in fields:
                         gap('unsupported-compose-composition', relative, f'Compose {indirect} needs qualified build/composition coverage')
+                if 'build' in fields:
+                    from .security_build_inputs import describe_build
+                    try:
+                        build = describe_build(root, relative, service_name, fields, files, bindings)
+                    except (OSError, ValueError, UnicodeError, TypeError, KeyError) as exc:
+                        gap('unsupported-compose-composition', relative, str(exc)[:300])
+                    else:
+                        result.setdefault('builds', []).append(build)
+                        for item in build['context_files']:
+                            if item['path'] not in result['files']:
+                                result['files'].append(item['path'])
+                        image(build['source_reference'], relative, build['line'], require_digest=True,
+                              platform=build['platform'])
                 if 'image' in fields:
                     yaml_image(fields['image'], relative, 'Compose image', platform=compose_image_platform(fields))
                 elif not set(fields) & {'build', 'extends', 'provider'}:
@@ -591,6 +604,15 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
     if len(files) > MAX_FILES:
         gap('inventory-limit', '.', 'source file inventory exceeds its bound')
         files = []
+    from .security_corresponding_source import classify
+    try:
+        corresponding = classify(root, files)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        corresponding = []
+        gap('corresponding-source-unverified', '<corresponding-source>', str(exc)[:300])
+    if corresponding:
+        result['corresponding_sources'] = corresponding
+    retained_manifests = {row['manifest'] for row in corresponding}
     for relative in files:
         pure = PurePosixPath(relative)
         if relative.startswith('.getzilla/runtime/') or any(part in {'.git', '.venv', 'node_modules'} for part in pure.parts):
@@ -640,6 +662,8 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                           require_digest=True, platform=data['platform'])
                     result['images'][-1].update(image_id=image_id, usage='build-ci')
             elif name == 'pyproject.toml':
+                if relative in retained_manifests:
+                    continue  # Exact constraints remain typed in corresponding_sources.
                 data = tomllib.loads(text)
                 project = data.get('project', {})
                 if 'dependencies' in project.get('dynamic', []):
@@ -745,6 +769,7 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                     continue
             if reference is not None:
                 image(reference, relative, line_number, platform=platform)
+    result['files'] = sorted(set(result['files']))
     result['dependencies'] = sorted(dependencies.values(), key=lambda item: (item['ecosystem'], item['name'], item['version'], item['manifest'], item['usage']))
     if isinstance(bindings, list) and used_image_bindings != {canonical_digest(row) for row in bindings}:
         gap('unused-image-source-selection', '<image-selection>', 'selected image use is absent or differs from current source')

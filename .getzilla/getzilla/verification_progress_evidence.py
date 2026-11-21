@@ -17,8 +17,9 @@ from . import verification_failure_excerpt as _failure_excerpt
 def _valid_failure_diagnostic(value):
     if valid_policy_diagnostic(value):
         return True
-    validate = getattr(_failure_excerpt, 'valid_factory_diagnostic', None)
-    return callable(validate) and validate(value) is True
+    return any(callable(validate) and validate(value) is True for validate in
+               (getattr(_failure_excerpt, 'valid_factory_diagnostic', None),
+                getattr(_failure_excerpt, 'valid_update_diagnostic', None)))
 
 
 def _pytest_source_metadata(source: str) -> tuple[int, set[str]]:
@@ -190,7 +191,7 @@ def _progress_failure_rows(progress, workers):
     return sorted(rows, key=lambda row: row['worker'])
 
 
-def _failure_progress_details(rows, identities, workers):
+def _failure_progress_details(rows, identities, workers, *, trusted_paths=()):
     output = {'version': 1, 'observation': 'FAILED_REPORTS_BEFORE_STOP', 'prefix_only': True,
               'status': 'unavailable', 'overflow': None, 'dropped': None, 'partial_tail': None,
               'render_truncated': False, 'omitted_events': 0, 'events': []}
@@ -213,7 +214,7 @@ def _failure_progress_details(rows, identities, workers):
             unknown |= identity is None
             candidate = {'worker': row['worker'], 'ordinal': event['ordinal'],
                          'phase': event['phase'], 'identity': identity}
-            if identity is None:
+            if identity is None and event['path'] in trusted_paths:
                 candidate['source'] = {'path': event['path'], 'key': event['key']}
             if identity is not None and 'diagnostic' in event:
                 candidate['diagnostic'] = dict(event['diagnostic'])
@@ -305,14 +306,14 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
     if expired:
         identities = {}
         source_lookup.update(status='unavailable', reason='node-deadline', currentness='unknown')
-    output['failure_events'] = _failure_progress_details(failures, identities, workers)
+    output['failure_events'] = _failure_progress_details(failures, identities, workers, trusted_paths=trusted)
     rendered = []
     unknown = False
     for worker, state, path, key in sorted(slots):
         identity = identities.get((path, key))
         unknown |= identity is None
         candidate = {'worker': worker, 'state': state, 'identity': identity}
-        if identity is None and path is not None:
+        if identity is None and path in trusted:
             candidate['source'] = {'path': path, 'key': key}
         if len(json.dumps({**output, 'slots': rendered + [candidate]}).encode('utf-8')) > 16000:
             break

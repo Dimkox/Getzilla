@@ -1738,7 +1738,9 @@
     },
     {
       "allowed_data": [
-        "DATA-ATTESTATION"
+        "DATA-ATTESTATION",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-REPOSITORY-SOURCE"
       ],
       "authentication": "none",
       "direction": "from_to",
@@ -3186,6 +3188,129 @@
       "sync_or_async": "synchronous",
       "to": "NODE-GITHUB",
       "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-LOCAL-ROUTE-POLICY",
+      "id": "EDGE-LOCAL-CURRENT-ARTIFACT-REVALIDATION",
+      "network_policy": "no_network",
+      "protocol": "python_call",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-SUPPLY-CHAIN-UPDATER",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 900000
+      },
+      "from": "NODE-SECURITY-ACQUISITION",
+      "id": "EDGE-SECURITY-IMAGE-GRAPHS",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 1800000
+      },
+      "from": "NODE-SECURITY-ACQUISITION",
+      "id": "EDGE-SECURITY-OWNED-IMAGE-JOB",
+      "network_policy": "isolated_executor",
+      "protocol": "local_subprocess",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SECURITY-IMAGE-EXECUTOR",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 900000
+      },
+      "from": "NODE-SECURITY-IMAGE-EXECUTOR",
+      "id": "EDGE-IMAGE-BUILD-HTTPS-INPUTS",
+      "network_policy": "isolated_executor",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 900000
+      },
+      "from": "NODE-SECURITY-IMAGE-EXECUTOR",
+      "id": "EDGE-IMAGE-BUILD-HTTP-INPUTS",
+      "network_policy": "isolated_executor",
+      "protocol": "http",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -3947,6 +4072,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/config/ci-images.json",
+        ".getzilla/config/ci-image-blobs",
         ".getzilla/getzilla/disposable_resources.py",
         ".getzilla/getzilla/factory_tests.py",
         "trust-ci/scripts/postgres-integration.sh",
@@ -4158,6 +4284,7 @@
         ".getzilla/config",
         ".getzilla/cursor-rules",
         ".getzilla/getzilla",
+        ".getzilla/getzilla/queue_refusal.py",
         ".getzilla/getzilla/component_state.py",
         ".getzilla/getzilla/model_data_admission.py",
         ".getzilla/hooks",
@@ -4166,7 +4293,8 @@
         ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
         ".getzilla/templates",
         ".grok",
-        ".qwen"
+        ".qwen",
+        "scripts/getzilla_hook.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4203,8 +4331,21 @@
       "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
+        ".getzilla/getzilla/current_workflows.py",
+        ".getzilla/getzilla/latest_releases.py",
+        ".getzilla/getzilla/managed_environment.py",
+        ".getzilla/getzilla/managed_npm.py",
+        ".getzilla/getzilla/managed_pyyaml.py",
+        ".getzilla/getzilla/managed_runtime.py",
+        ".getzilla/getzilla/managed_software.py",
+        ".getzilla/getzilla/managed_source_build.py",
+        ".getzilla/getzilla/opengrep_releases.py",
         ".getzilla/getzilla/updater.py",
-        "scripts/getzilla_update.py"
+        "scripts/getzilla_baseline.py",
+        "scripts/getzilla_install_managed.py",
+        "scripts/getzilla_update.py",
+        "scripts/install.ps1",
+        "scripts/install.sh"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4668,7 +4809,10 @@
       "repository_paths": [
         ".getzilla/getzilla/security_cli.py",
         ".getzilla/getzilla/public_security_context.py",
-        "scripts/getzilla_security.py"
+        "scripts/getzilla_security.py",
+        ".getzilla/getzilla/security_image_producer.py",
+        ".getzilla/getzilla/security_image_registry.py",
+        ".getzilla/getzilla/security_image_provision.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4706,6 +4850,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/getzilla/security_data.py",
+        ".getzilla/getzilla/security_data_windows.py",
         ".getzilla/getzilla/security_intelligence.py",
         ".getzilla/getzilla/security_inventory.py",
         ".getzilla/getzilla/security_artifacts.py",
@@ -4713,7 +4858,8 @@
         ".getzilla/getzilla/security_licenses.py",
         ".getzilla/getzilla/expanded_security.py",
         ".getzilla/config/license-policy.json",
-        ".getzilla/getzilla/security_osv_diagnostics.py"
+        ".getzilla/getzilla/security_osv_diagnostics.py",
+        ".getzilla/getzilla/security_build_inputs.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4854,6 +5000,7 @@
         "trust-ci/src/adaptive_trust_ci/cli.py",
         "trust-ci/src/adaptive_trust_ci/customers.py",
         "trust-ci/src/adaptive_trust_ci/github.py",
+        "trust-ci/src/adaptive_trust_ci/http_response.py",
         "trust-ci/src/adaptive_trust_ci/github_app.py",
         "trust-ci/src/adaptive_trust_ci/lookup.py",
         "trust-ci/src/adaptive_trust_ci/models.py",
@@ -4950,6 +5097,25 @@
       "secrets": [],
       "trust_domain": "TD-TRUST-CI-CONTROL",
       "type": "datastore"
+    },
+    {
+      "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-SECURITY-IMAGE-EXECUTOR",
+      "owner": "repository engineering / explicitly allocated ephemeral job",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/security_image_backend.py",
+        ".getzilla/getzilla/security_image_job.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "job",
+        "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
     }
   ],
   "schema_version": 1,

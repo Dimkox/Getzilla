@@ -18,14 +18,14 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.disposable_resources import OwnedDocker, image_pins
 from getzilla.live_acceptance import (owned_postgres_endpoint, read_document, valid_binding,
-    acknowledge_cleanup, seal_component, _write, _producer_digest)
+    acknowledge_cleanup, seal_component, _write, _producer_digest, FACTORY_PYTHON_RELATIVE)
 
 POSTGRES = image_pins(ROOT)['postgres']
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".getzilla"))
-from getzilla.disposable_resources import image_pins, ensure_images
+from getzilla.disposable_resources import image_pins, ensure_images, runtime_image_id
 
 POSTGRES = image_pins(ROOT)["postgres"]
 
@@ -102,7 +102,7 @@ def _binding_matches(
         container_id,
         f"/{name}",
         POSTGRES["reference"],
-    ] and fields[3] in {"true", "false"} and fields[4] == nonce and fields[5] == POSTGRES["image_id"]
+    ] and fields[3] in {"true", "false"} and fields[4] == nonce and fields[5] == runtime_image_id(ROOT, POSTGRES)
     return identity_matches and (not require_running or fields[3] == "true")
 
 
@@ -189,7 +189,7 @@ def _postgres(owner, suffix, password, network):
     volume = owner.volume(suffix+'-data')
     item = owner.container(suffix, POSTGRES['reference'], volume=volume, network=network,
         environment={'POSTGRES_DB': 'factory_exit', 'POSTGRES_USER': 'factory_exit', 'POSTGRES_PASSWORD': password})
-    if item['image_id'] != POSTGRES['image_id']:
+    if item['image_id'] != runtime_image_id(ROOT, POSTGRES):
         raise RuntimeError('Pinned PostgreSQL image identity mismatch')
     deadline = time.monotonic()+45
     while not _final_postgres_ready(item['id']):
@@ -233,7 +233,8 @@ def _live_main() -> int:
             PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT/'factory/src'), str(ROOT/'.getzilla'))))
         phase = 'venv-use'
         environment['UV_PROJECT_ENVIRONMENT'] = str(venv_path)
-        uv = ['uv', 'run', '--project', str(ROOT/'factory'), 'python']
+        uv = ['uv', 'run', '--python', sys.executable, '--project', str(ROOT/'factory'),
+              str(venv_path/FACTORY_PYTHON_RELATIVE)]
         phase = 'preflight'
         _run([*uv, str(ROOT/'factory/tests/postgres_restart_probe.py'), '--preflight-only'], environment=environment)
         _run([*uv, str(ROOT/'factory/tests/postgres_restart_probe.py'), '--preflight-only',
@@ -322,7 +323,7 @@ def main() -> int:
         phase = "venv-create"
         venv = tempfile.TemporaryDirectory(prefix="adaptive-factory-exit-venv-", dir=owner.manifest.parent)
         environment["UV_PROJECT_ENVIRONMENT"] = venv.name
-        uv = ["uv", "run", "--locked", "--project", "factory"]
+        uv = ["uv", "run", "--locked", "--python", sys.executable, "--project", "factory"]
         phase = "preflight"
         _run(
             [

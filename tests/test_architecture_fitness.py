@@ -5991,7 +5991,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
             for node in system['nodes']:
                 node['repository_paths'] = [p for p in node['repository_paths'] if p not in FIT._PUBLIC_WORKER_SOURCES]
             repo.model(system, snapshot.rules)
-            base = repo.commit('unowned public worker membership fixture')
+            if repo.git('diff', '--', 'architecture/system.yaml').strip():
+                base = repo.commit('unowned public worker membership fixture')
+            self.assertTrue(all(not any(path in FIT._PUBLIC_WORKER_SOURCES for path in node['repository_paths'])
+                                for node in system['nodes']))
         descriptors = (
             ("github-public-lifecycle-projection", "CONTRACT-GITHUB-PUBLIC-LIFECYCLE-PROJECTION",
              "NODE-TRUST-CI-API", "json_schema", "consumer", "consumer_accepts_old", "api.py"),
@@ -6034,9 +6037,19 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertEqual(result.status, "pass", result.findings)
                 qualified = FIT._trust_ci_metadata_paths(diff)
                 self.assertIn("architecture/system.yaml", qualified)
+                introduced = (
+                    "CONTRACT-GITHUB-PUBLIC-LIFECYCLE-PROJECTION",
+                    "CONTRACT-TRUST-CI-PUBLIC-PROFILE-SELECTION",
+                    "CONTRACT-TRUST-CI-PUBLIC-EFFECTIVE-POLICY",
+                    "CONTRACT-TRUST-CI-PUBLIC-ATTESTATION-ENVELOPE",
+                )
+                expected = {introduced[index] for index in indices}
+                observed = set()
                 for contract in snapshot.system["contracts"]:
-                    if "PUBLIC" in contract["id"]:
+                    if contract["id"] in expected:
+                        observed.add(contract["id"])
                         self.assertIn(contract["path"], qualified)
+                self.assertEqual(observed, expected)
 
     def test_change_separation_public_contracts_preserve_original_envelope(self) -> None:
         mutations = (

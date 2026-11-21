@@ -730,21 +730,25 @@ def _project_channel_tree(tree: ast.AST, imported: ast.AST, replaced: set[int]) 
 
 def literal_patch_members(tree: ast.AST) -> dict[int, tuple[str, str, ast.AST | None, bool]]:
     """Resolve only unshadowed stdlib mock.patch.object with a literal member."""
-    if not namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS):
-        return {}
+    nodes = tuple(ast.walk(tree))
     aliases: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.ImportFrom) and node.module == 'unittest':
             aliases.update((alias.asname or alias.name) + '.patch.object' for alias in node.names if alias.name == 'mock')
         elif isinstance(node, ast.ImportFrom) and node.module == 'unittest.mock':
             aliases.update((alias.asname or alias.name) + '.object' for alias in node.names if alias.name == 'patch')
         elif isinstance(node, ast.Import):
             aliases.update((alias.asname or alias.name) + '.patch.object' for alias in node.names if alias.name == 'unittest.mock')
+    # No recognized supplier means no special patch facts, never "no queue".
+    if not aliases:
+        return {}
+    if not namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS):
+        return {}
     bindings = binding_events(tree)
     counts = Counter(event.name for event in bindings)
     aliases = {name for name in aliases if counts[name.split('.')[0]] == 1}
     result = {}
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.Call) or len(node.args) < 2 or any(isinstance(arg, ast.Starred) for arg in node.args) or any(item.arg is None for item in node.keywords):
             continue
         parts = []

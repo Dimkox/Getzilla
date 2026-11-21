@@ -229,10 +229,9 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                 if verification_fixture and Path(directory) == PROJECT / '.getzilla/config':
                     # The named closed providers below replace these fixture-only
                     # host tool installations. Default project copies retain both.
-                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt'})
                     # This opted-in metadata fixture owns an empty security world;
-                    # optional CI payload images must not enter its initial commit.
-                    omitted.add('ci-images.json')
+                    # quality tools and optional CI images stay outside its first commit.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
                 if Path(directory) == PROJECT / '.getzilla/runtime':
                     # Runtime can contain the fixture destination or a changing review snapshot.
                     # Exclude it before descending; deleting copied state afterward is too late.
@@ -472,13 +471,24 @@ def offline_mirror(base: Path) -> Path:
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
     from getzilla import baseline, updater
+    from getzilla.security_osv_snapshot import download_database
 
     mirror = base / 'update-mirror'
+    archives = {}
     for ecosystem in updater.OSV_ECOSYSTEMS:
         archive = mirror / 'osv' / ecosystem / 'all.zip'
         archive.parent.mkdir(parents=True)
         with zipfile.ZipFile(archive, 'w') as bundle:
-            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': []}))
+            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': [{
+                'package': {'ecosystem': ecosystem, 'name': 'example/owned' if ecosystem in {'Go', 'Packagist'} else 'owned-fixture'},
+                'versions': ['1.0.0'],
+            }]}))
+        archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip'] = archive.read_bytes()
+    def fetch_owned_archive(url, body=None):
+        if body is not None or url not in archives:
+            raise AssertionError('offline fixture permits only its own archive bytes')
+        return archives[url]
+    download_database(mirror / 'osv', fetch=fetch_owned_archive)
     opengrep = {}
     for asset, _ in updater.OPENGREP_ASSETS.values():
         data = f'#!/bin/sh\necho "opengrep {updater.OPENGREP_VERSION} fixture ({asset})"\n'.encode()

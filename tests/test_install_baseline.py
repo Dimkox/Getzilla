@@ -425,6 +425,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
         from getzilla.component_state import BoundRoot
         with BoundRoot(ROOT) as source:
             expected = harnesses._render(source, ('qwen',))['.qwen/settings.json']
+        expected = harnesses.platform_hook_payload('.qwen/settings.json', expected, source_launcher=False)
         current = (self.project / '.qwen/settings.json').read_bytes()
         self.assertEqual(current, expected)
         self.assertIn(b'.getzilla/hooks/', current)

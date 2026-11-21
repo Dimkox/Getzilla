@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy": "minimum_or_newer; built is the tested pin",
+  "policy": "doctor verifies actual minimum; installer resolves current stable every invocation; built is historical tested metadata",
   "tools": [
     {
       "id": "python3",
@@ -58,10 +58,10 @@
       "minimum": "1.0.0",
       "fallback": "1.0.5",
       "install": {
-        "linux": "curl -fsSL https://x.ai/cli/install.sh | bash",
-        "darwin": "curl -fsSL https://x.ai/cli/install.sh | bash",
-        "windows": "irm https://x.ai/cli/install.ps1 | iex",
-        "generic": "https://x.ai/build"
+        "windows": "https://x.ai/cli",
+        "linux": "https://x.ai/cli",
+        "darwin": "https://x.ai/cli",
+        "generic": "https://x.ai/cli"
       }
     },
     {
@@ -186,7 +186,7 @@
       "install": {
         "linux": "curl -sS https://getcomposer.org/installer | php && sudo mv composer.phar /usr/local/bin/composer",
         "darwin": "brew install composer",
-        "windows": "winget install -e --id Composer.Composer",
+        "windows": "getzilla install-managed --tool composer",
         "generic": "https://getcomposer.org/download/"
       }
     },
@@ -270,9 +270,11 @@
       "install": {
         "linux": "curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.4.3/cosign-linux-amd64 -o /tmp/cosign && sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign",
         "darwin": "brew install cosign",
-        "windows": "winget install -e --id sigstore.cosign",
+        "windows": "getzilla install-managed --tool cosign",
         "generic": "https://github.com/sigstore/cosign/releases"
-      }
+      },
+      "windows_package_id": "Sigstore.Cosign",
+      "windows_portable_command": "cosign"
     },
     {
       "id": "jscpd",

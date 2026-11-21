@@ -42,6 +42,7 @@ from .architecture_diff import (
 from .queue_provenance import (QueueAnalysisLimit, analyze_queue_tree, literal_patch_members,
                                QueueRefusalCapture as _QueueRefusalCapture, queue_refusal_text as _queue_limit_text)
 from .python_source_proof import binding_events, binding_owner, literal_import_reads, namespace_is_closed
+from . import verification_journal as diagnostics
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -1939,6 +1940,168 @@ def _byte_only_http_imports(tree: ast.AST) -> set[str]:
     return {item[2] for item in http_events} if calls else set()
 
 
+def _shutdown_constant_socket_imports(tree: ast.AST) -> set[str]:
+    """Prove one unchanged module binding supplies shutdown constants only."""
+    if not namespace_is_closed(tree):
+        return set()
+    events = [event for event in binding_events(tree) if event.name == 'socket']
+    if len(events) != 1 or events[0].node not in getattr(tree, 'body', ()):
+        return set()
+    declaration = events[0].node
+    if not isinstance(declaration, ast.Import):
+        return set()
+    imports = [alias for node in ast.walk(tree) if isinstance(node, ast.Import)
+               for alias in node.names if alias.name.split('.')[0] == 'socket']
+    if (len(imports) != 1 or imports[0].name != 'socket' or imports[0].asname is not None
+            or any(isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] == 'socket'
+                   for node in ast.walk(tree))):
+        return set()
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    used = False
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and 'socket' in node.names:
+            return set()
+        if not isinstance(node, ast.Name) or node.id != 'socket':
+            continue
+        member = parents.get(node)
+        if (not isinstance(node.ctx, ast.Load) or not isinstance(member, ast.Attribute)
+                or member.value is not node or not isinstance(member.ctx, ast.Load)
+                or member.attr not in {'SHUT_RD', 'SHUT_WR', 'SHUT_RDWR'}):
+            return set()
+        parent = parents.get(member)
+        if isinstance(parent, ast.Call) and parent.func is member:
+            return set()
+        used = True
+    return {'socket'} if used else set()
+
+
+def _constructor_only_urllib_imports(tree: ast.AST) -> set[str]:
+    """Prove stdlib request/error data construction, never arbitrary client use."""
+    if not namespace_is_closed(tree, allow_instrumentation=True):
+        return set()
+    nodes = tuple(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    events = binding_events(tree)
+    bindings = defaultdict(list)
+    for event in events:
+        bindings[(binding_owner(event.node, parents), event.name)].append(event.node)
+
+    def resolve(name):
+        scope = binding_owner(name, parents)
+        while True:
+            found = bindings.get((scope, name.id), ())
+            if found:
+                return found[0] if len(found) == 1 else None
+            if scope is None:
+                return None
+            scope = binding_owner(scope, parents)
+            while isinstance(scope, ast.ClassDef):
+                scope = binding_owner(scope, parents)
+
+    def imported(value):
+        parts = []
+        while isinstance(value, ast.Attribute) and isinstance(value.ctx, ast.Load):
+            parts.append(value.attr)
+            value = value.value
+        if not isinstance(value, ast.Name):
+            return None
+        declaration = resolve(value)
+        if isinstance(declaration, ast.Import):
+            matches = [a for a in declaration.names if (a.asname or a.name.split('.')[0]) == value.id]
+            prefix = matches[0].name if matches and matches[0].asname else value.id
+        elif isinstance(declaration, ast.ImportFrom) and declaration.level == 0:
+            matches = [a for a in declaration.names if (a.asname or a.name) == value.id]
+            prefix = declaration.module + '.' + matches[0].name if matches else ''
+        else:
+            return None
+        return '.'.join((prefix, *reversed(parts)))
+
+    declarations = {}
+    imported_modules = set()
+    for event in events:
+        if isinstance(event.node, ast.Import):
+            imported_modules.update(alias.name for alias in event.node.names)
+        elif isinstance(event.node, ast.ImportFrom) and event.node.level == 0 and event.node.module:
+            imported_modules.add(event.node.module)
+    for event in events:
+        declaration = event.node
+        if isinstance(declaration, ast.ImportFrom) and (declaration.module or '').split('.')[0] == 'urllib':
+            return set()
+        if isinstance(declaration, ast.Import):
+            for alias in declaration.names:
+                if alias.name.split('.')[0] == 'urllib':
+                    if alias.name not in {'urllib.request', 'urllib.error'} or alias.asname is not None:
+                        return set()
+                    declarations[declaration] = alias.name
+        if event.name == 'urllib' and declaration not in declarations:
+            return set()
+    if not declarations:
+        return set()
+    used = set()
+    instrumentor_names = {e.name for e in events if isinstance(e.node, (ast.Import, ast.ImportFrom))
+                         and ((isinstance(e.node, ast.ImportFrom) and (e.node.module or '').split('.')[0] in {'unittest', 'mock', 'pytest', '_pytest'})
+                              or (isinstance(e.node, ast.Import) and any(a.name.split('.')[0] in {'unittest', 'mock', 'pytest', '_pytest'} for a in e.node.names)))}
+    for node in nodes:
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and 'urllib' in node.names:
+            return set()
+        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load):
+            continue
+        if node.id != 'urllib' and node.id not in instrumentor_names:
+            continue
+        member = node
+        while isinstance(parents.get(member), ast.Attribute) and parents[member].value is member:
+            member = parents[member]
+        call = parents.get(member)
+        canonical = imported(member)
+        if node.id == 'urllib':
+            declaration = resolve(node)
+            if (declaration not in declarations or canonical not in {'urllib.request.Request', 'urllib.error.HTTPError'}
+                    or canonical.rsplit('.', 1)[0] != declarations[declaration]
+                    or not isinstance(call, ast.Call) or call.func is not member):
+                return set()
+            used.add(declaration)
+            continue
+        if canonical == 'unittest.TestCase' and isinstance(call, ast.ClassDef) and member in call.bases:
+            continue
+        if not isinstance(call, ast.Call) or call.func is not member:
+            return set()
+        if canonical in {'unittest.main', 'unittest.mock.Mock', 'unittest.mock.MagicMock'}:
+            continue
+        if any(k.arg is None for k in call.keywords) or not call.args:
+            return set()
+        if canonical == 'unittest.mock.patch':
+            target = call.args[0]
+            if (not isinstance(target, ast.Constant) or type(target.value) is not str
+                    or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]{0,4095}', target.value)
+                    or any(p in {'urllib', 'Request', 'HTTPError', 'builtins', 'sys', 'importlib',
+                                 'namespace_is_closed', 'binding_events', 'binding_owner'} or p.startswith('__')
+                           for p in target.value.split('.'))):
+                return set()
+            parts = target.value.split('.')
+            # A declared module member, or its imported stdlib dependency member.
+            # Unknown target factories and unrelated policy globals are not proof.
+            direct = '.'.join(parts[:-1]) in imported_modules
+            stdlib_member = (len(parts) > 2 and '.'.join(parts[:-2]) in imported_modules
+                             and parts[-2] in sys.stdlib_module_names)
+            if not (direct or stdlib_member):
+                return set()
+        elif canonical == 'unittest.mock.patch.object':
+            if (len(call.args) < 2 or imported(call.args[0]) != 'sys'
+                    or not isinstance(call.args[1], ast.Constant) or call.args[1].value not in {'stdin', 'stdout'}):
+                return set()
+        elif canonical == 'unittest.mock.patch.dict':
+            if imported(call.args[0]) != 'os.environ':
+                return set()
+        else:
+            return set()
+    return set(declarations.values()) if used == set(declarations) else set()
+
+
+def _non_client_imports(tree: ast.AST) -> set[str]:
+    return (_byte_only_http_imports(tree) | _shutdown_constant_socket_imports(tree)
+            | _constructor_only_urllib_imports(tree))
+
+
 def _network_clients(
     snapshot: ArchitectureSnapshot,
     diff: ArchitectureDiff,
@@ -1956,7 +2119,7 @@ def _network_clients(
         try:
             tree = python.tree(path)
             imports = _import_targets(tree)
-            byte_only = _byte_only_http_imports(tree)
+            byte_only = _non_client_imports(tree)
         except SyntaxError as exc:
             unsupported.append(f"{path}: {exc}")
             continue
@@ -2454,8 +2617,10 @@ def _operation_dependencies(
     requested: frozenset[str] = frozenset(),
 ) -> _OperationDependencies:
     """Return names that can feed a changed callable/decorator expression."""
+    # This invocation owns a fresh index, so caller mutation cannot reuse facts.
+    nodes = tuple(ast.walk(tree))
     dependencies: set[str] = set(requested)
-    for node in ast.walk(tree):
+    for node in nodes:
         values: list[ast.AST] = []
         if isinstance(node, ast.Call):
             values.append(node.func)
@@ -2467,7 +2632,7 @@ def _operation_dependencies(
             )
     assignments: dict[str, set[str]] = {}
     imported_names = {
-        alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        alias.asname or alias.name for node in nodes if isinstance(node, ast.ImportFrom)
         for alias in node.names
     }
     def target_names(target: ast.AST) -> set[str]:
@@ -2480,7 +2645,7 @@ def _operation_dependencies(
         if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             return {target.value.id}
         return set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 for name in target_names(target):
@@ -3384,15 +3549,26 @@ def _queue_import_equivalent_tree(tree: ast.Module) -> ast.Module:
     return projected
 
 
+class _QueueNormalizedSource(NamedTuple):
+    tree: ast.Module
+    nodes: int
+    declared_exports: tuple[str, ...]
+
+
 @lru_cache(maxsize=128)
-def _queue_normalized_source_tree(path: str, source: bytes) -> ast.Module:
+def _queue_normalized_source(path: str, source: bytes) -> _QueueNormalizedSource:
     """Prepare an analysis-owned tree once per exact immutable source version.
 
     Downstream slicing/projection copies before changing nodes. Caller-owned
     ASTs enter _queue_import_equivalent_tree directly and never reuse a proof
     cached by mutable object identity.
     """
-    return _queue_import_equivalent_tree(_queue_source_tree(path, source))
+    tree = _queue_import_equivalent_tree(_queue_source_tree(path, source))
+    return _QueueNormalizedSource(tree, sum(1 for _ in ast.walk(tree)), _declared_module_exports(tree))
+
+
+def _queue_normalized_source_tree(path: str, source: bytes) -> ast.Module:
+    return _queue_normalized_source(path, source).tree
 
 
 class _QueueSourcePreparation(NamedTuple):
@@ -3433,11 +3609,38 @@ def _queue_owned_callable_mutation(path: str, source: bytes, requested: frozense
 
 def _budgeted_queue_tree(path: str, source: bytes, budget: _QueueBudget) -> ast.Module:
     budget.source(path, source)
-    tree = _queue_source_tree(path, source)
+    _queue_source_tree(path, source)
     budget.source(path, source, _queue_source_node_count(path, source))
-    tree = _queue_normalized_source_tree(path, source)
-    budget.source(path, source, sum(1 for _ in ast.walk(tree)))
-    return tree
+    normalized = _queue_normalized_source(path, source)
+    budget.source(path, source, normalized.nodes)
+    return normalized.tree
+
+
+def _diagnostic_step(phase: str, locator=None, demand=None) -> str:
+    """Reconstructable private locators; source/demand text never enters logs."""
+    if not isinstance(phase, str) or not re.fullmatch('[a-z][a-z0-9-]{0,23}', phase):
+        return 'arch-unavailable'
+    try:
+        suffix = '' if locator is None else '-' + _digest(locator)[:16]
+        if demand is not None:
+            suffix += '-' + _digest(demand)[:16]
+        return 'arch-' + phase + suffix
+    except (ValueError, TypeError, RecursionError):
+        return 'arch-unavailable'
+
+
+def _diagnostic_location(path):
+    if (isinstance(path, str) and len(path) <= 256
+            and re.fullmatch(r'(?:tests|scripts|\.getzilla/getzilla)/[A-Za-z0-9_./-]+\.py', path)
+            and all(part not in {'', '.', '..'} for part in path.split('/'))):
+        return path, 1
+    return None
+
+
+def _source_span(path, side, stage):
+    side = side if isinstance(side, str) and side in ('head', 'base') else 'unknown'
+    return diagnostics.span(_diagnostic_step('source-' + side + '-' + stage, path), stage='action',
+                            location=_diagnostic_location(path))
 
 
 def _local_queue_resolution(
@@ -3527,12 +3730,14 @@ def _local_queue_resolution_impl(
         # Declaration inspection does not expand a dependency. It is bounded by
         # the prefetched module batch and AST node cap, unlike recursive returns.
         source_path, value, _package = prefetched.sources[0]
-        declaration = _budgeted_queue_tree(source_path, value, budget)
-        prepared = _queue_source_preparation(source_path, value)
+        with _source_span(source_path, side, 'prepare'):
+            _budgeted_queue_tree(source_path, value, budget)
+            prepared = _queue_source_preparation(source_path, value)
         if _queue_owned_callable_mutation(source_path, value, requested):
             raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
         if requested and requested <= prepared.plain_callables:
-            result = _QueueAdapterResolution('not_queue', 'local_module_not_queue', declared_exports=_declared_module_exports(declaration))
+            result = _QueueAdapterResolution('not_queue', 'local_module_not_queue',
+                declared_exports=_queue_normalized_source(source_path, value).declared_exports)
             cache.demands[demand_key] = result
             return result
     if module not in visited:
@@ -3559,30 +3764,25 @@ def _local_queue_resolution_impl(
             cache.values[module] = result
             return result
         source_path, value, current_package = sources[0]
-        tree = _budgeted_queue_tree(source_path, value, budget)
-        prepared = _queue_source_preparation(source_path, value)
-        declared = _declared_module_exports(tree)
+        with _source_span(source_path, side, 'prepare'):
+            tree = _budgeted_queue_tree(source_path, value, budget)
+            prepared = _queue_source_preparation(source_path, value)
+        declared = _queue_normalized_source(source_path, value).declared_exports
         requested = requested if requested is not None else frozenset(declared)
         if _queue_owned_callable_mutation(source_path, value, requested):
             raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
-        tree = _queue_owned_export_slice(source_path, value, requested)
-        imported = _queue_adapter_names(
-            root,
-            diff,
-            tree,
-            side,
-            cache,
-            resolving,
-            visited,
-            current_package=current_package,
-            source_roots=source_roots,
-            requested=requested or frozenset(),
-            callable_only_exports=callable_only,
-            source_preparation=prepared if tree is prepared.tree else None,
-            budget=budget,
-        )
+        with _source_span(source_path, side, 'slice'):
+            tree = _queue_owned_export_slice(source_path, value, requested)
+        with _source_span(source_path, side, 'imports'):
+            imported = _queue_adapter_names(
+                root, diff, tree, side, cache, resolving, visited, current_package=current_package,
+                source_roots=source_roots, requested=requested or frozenset(),
+                callable_only_exports=callable_only,
+                source_preparation=prepared if tree is prepared.tree else None, budget=budget,
+            )
         try:
-            analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.modules)
+            with _source_span(source_path, side, 'values'):
+                analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.modules)
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code="limit") from exc
         if imported.unproved_queue_callback:
@@ -3590,7 +3790,8 @@ def _local_queue_resolution_impl(
         # A projection with no queue imports, values or effects cannot create a
         # queue return. Avoid reslicing every ordinary helper in that case.
         try:
-            factories = _queue_return_exports_scoped(tree, imported.names, None, 0, budget) if analysis.signals or imported.names else set()
+            with _source_span(source_path, side, 'returns'):
+                factories = _queue_return_exports_scoped(tree, imported.names, None, 0, budget) if analysis.signals or imported.names else set()
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code='limit') from exc
         if factories:
@@ -3967,59 +4168,58 @@ def _new_queue_sources(
     changed_signals: set[str] = set()
     limits: list[tuple[str, str, str]] = []
     causes: list[tuple[str, str, str, str, str]] = []
-    head_cache = _queue_module_inventory(root, diff, "head", source_roots)
-    base_cache = _queue_module_inventory(root, diff, "base", source_roots)
+    with diagnostics.span('arch-queue-inventory-head', stage='action'):
+        head_cache = _queue_module_inventory(root, diff, "head", source_roots)
+    with diagnostics.span('arch-queue-inventory-base', stage='action'):
+        base_cache = _queue_module_inventory(root, diff, "base", source_roots)
     for path in _python_paths(diff):
         side = "head"
         stage = "resolve_package"
         try:
-            current_package = _module_package(path, source_roots, head_cache.paths)
+            with _source_span(path, side, 'resolve'):
+                current_package = _module_package(path, source_roots, head_cache.paths)
             stage = 'read'
-            head_value = read_diff_file(root, diff, path, 'head')
+            with _source_span(path, side, 'read'):
+                head_value = read_diff_file(root, diff, path, 'head')
             if head_value is None:
                 raise ArchitectureError('changed Python source is unavailable', code='missing')
             head_budget = _QueueBudget('head')
             stage = 'admit'
-            head_budget.source(path, head_value)
+            with _source_span(path, side, 'admit'):
+                head_budget.source(path, head_value)
             # These two boundaries retain complete parsed source scopes.
             # Synthetic export/return consumers do not grant module provenance.
             stage = 'parse'
-            head_tree = python.tree(path)
+            with _source_span(path, side, 'parse'):
+                head_tree = python.tree(path)
             stage = 'classify'
-            head = _queue_signals(
-                root,
-                diff,
-                head_tree,
-                "head",
-                head_cache,
-                current_package,
-                source_roots,
-                source_path=path, source=head_value, budget=head_budget, complete_module=True,
-            )
+            with _source_span(path, side, 'classify'):
+                head = _queue_signals(
+                    root, diff, head_tree, "head", head_cache, current_package, source_roots,
+                    source_path=path, source=head_value, budget=head_budget, complete_module=True,
+                )
             side = "base"
             stage = "read"
-            base_value = read_diff_file(root, diff, path, "base")
+            with _source_span(path, side, 'read'):
+                base_value = read_diff_file(root, diff, path, "base")
             base = _QueueProvenanceResult("not_queue", "no_base_source", ())
             if base_value is not None:
                 base_budget = _QueueBudget('base')
                 stage = 'admit'
-                base_budget.source(path, base_value)
+                with _source_span(path, side, 'admit'):
+                    base_budget.source(path, base_value)
                 stage = 'parse'
-                base_tree = ast.parse(base_value.decode("utf-8"), filename=path)
-                if sum(1 for _ in ast.walk(base_tree)) > MAX_ANALYZED_AST_NODES:
-                    raise ArchitectureError(f"Python AST node limit exceeded: {path}", code="limit")
+                with _source_span(path, side, 'parse'):
+                    base_tree = ast.parse(base_value.decode("utf-8"), filename=path)
+                    if sum(1 for _ in ast.walk(base_tree)) > MAX_ANALYZED_AST_NODES:
+                        raise ArchitectureError(f"Python AST node limit exceeded: {path}", code="limit")
                 stage = 'classify'
                 try:
-                    base = _queue_signals(
-                        root,
-                        diff,
-                        base_tree,
-                        "base",
-                        base_cache,
-                        current_package,
-                        source_roots,
-                        source_path=path, source=base_value, budget=base_budget, complete_module=True,
-                    )
+                    with _source_span(path, side, 'classify'):
+                        base = _queue_signals(
+                            root, diff, base_tree, "base", base_cache, current_package, source_roots,
+                            source_path=path, source=base_value, budget=base_budget, complete_module=True,
+                        )
                 except _UnsupportedQueueCallbackError:
                     if not head.complete_empty:
                         raise
@@ -4320,7 +4520,7 @@ def _new_import_family(
 
 
 def _network_families(tree: ast.AST, project_roots: set[str]) -> set[str]:
-    byte_only = _byte_only_http_imports(tree)
+    byte_only = _non_client_imports(tree)
     values = {
         imported for imported in _import_targets(tree) if imported not in byte_only and _network_protocol(imported) is not None
     }
@@ -4476,47 +4676,55 @@ def evaluate_fitness(
     *,
     pre_risk: str,
 ) -> FitnessReport:
-    repository = Path(root).resolve(strict=True)
-    supplied_paths = tuple(sorted(set(changed_paths)))
-    if supplied_paths != diff.changed_paths:
-        raise ArchitectureError("changed_paths must exactly match the architecture diff", code="fitness")
-    if architecture_digests(snapshot)["architecture_digest"] != diff.head_architecture_digest:
-        raise ArchitectureError("fitness snapshot does not match the diff head", code="fitness")
-    python = _PythonInventory(repository, diff)
-    queue_provenance = _new_queue_sources(
-        repository, diff, python, _queue_source_roots(snapshot)
-    )
-    raw_results = tuple(
-        sorted(
-            (
-                _background_jobs(
-                    repository, snapshot, diff, python, queue_provenance
-                ),
-                _change_separation(snapshot, diff, root),
-                _code_budget(snapshot, diff, python),
-                _contract_compatibility(snapshot, diff),
-                _forbidden_edges(snapshot, diff),
-                _governance_promotion(repository, diff),
-                _migration_safety(repository, snapshot, diff),
-                _module_boundaries(snapshot, diff, python),
-                _network_clients(snapshot, diff, python),
-                _production_imports(diff, python),
-                _secret_flows(snapshot, diff),
-                _tenant_authorization(snapshot, diff),
-                _workspace_trust(snapshot, diff),
-            ),
-            key=lambda item: item.category,
-        )
-    )
-    results = tuple(
-        _bind_applicability_inventory(repository, snapshot, diff, result)
-        for result in raw_results
-    )
+    with diagnostics.span('arch-fitness-inputs', stage='action'):
+        repository = Path(root).resolve(strict=True)
+        supplied_paths = tuple(sorted(set(changed_paths)))
+        if supplied_paths != diff.changed_paths:
+            raise ArchitectureError("changed_paths must exactly match the architecture diff", code="fitness")
+        if architecture_digests(snapshot)["architecture_digest"] != diff.head_architecture_digest:
+            raise ArchitectureError("fitness snapshot does not match the diff head", code="fitness")
+        python = _PythonInventory(repository, diff)
+    with diagnostics.span('arch-queue-analysis', stage='action'):
+        queue_provenance = _new_queue_sources(repository, diff, python, _queue_source_roots(snapshot))
+    measured = []
+    with diagnostics.span('arch-fitness-background-job', stage='action'):
+        measured.append(_background_jobs(repository, snapshot, diff, python, queue_provenance))
+    with diagnostics.span('arch-fitness-change-separation', stage='action'):
+        measured.append(_change_separation(snapshot, diff, root))
+    with diagnostics.span('arch-fitness-code-budget', stage='action'):
+        measured.append(_code_budget(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-contracts', stage='action'):
+        measured.append(_contract_compatibility(snapshot, diff))
+    with diagnostics.span('arch-fitness-forbidden-edges', stage='action'):
+        measured.append(_forbidden_edges(snapshot, diff))
+    with diagnostics.span('arch-fitness-governance', stage='action'):
+        measured.append(_governance_promotion(repository, diff))
+    with diagnostics.span('arch-fitness-migration', stage='action'):
+        measured.append(_migration_safety(repository, snapshot, diff))
+    with diagnostics.span('arch-fitness-module-boundary', stage='action'):
+        measured.append(_module_boundaries(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-network-client', stage='action'):
+        measured.append(_network_clients(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-production-import', stage='action'):
+        measured.append(_production_imports(diff, python))
+    with diagnostics.span('arch-fitness-secret-flow', stage='action'):
+        measured.append(_secret_flows(snapshot, diff))
+    with diagnostics.span('arch-fitness-tenant-authorization', stage='action'):
+        measured.append(_tenant_authorization(snapshot, diff))
+    with diagnostics.span('arch-fitness-workspace-trust', stage='action'):
+        measured.append(_workspace_trust(snapshot, diff))
+    raw_results = tuple(sorted(measured, key=lambda item: item.category))
+    bound = []
+    for result in raw_results:
+        with diagnostics.span(_diagnostic_step('applicability', result.category), stage='action'):
+            bound.append(_bind_applicability_inventory(repository, snapshot, diff, result))
+    results = tuple(bound)
     if tuple(item.category for item in results) != FITNESS_CATEGORIES:
         raise ArchitectureError("mandatory fitness category coverage is incomplete", code="fitness")
-    escalation, post_risk, triggers = _risk(
-        repository, snapshot, diff, python, pre_risk, queue_provenance
-    )
+    with diagnostics.span('arch-risk', stage='action'):
+        escalation, post_risk, triggers = _risk(
+            repository, snapshot, diff, python, pre_risk, queue_provenance
+        )
     architecture_significant = diff.baseline_introduced or bool(diff.changes or triggers)
     docs_only = bool(diff.changed_paths) and all(
         _matches(path, ("docs",)) or path.endswith(".md") for path in diff.changed_paths

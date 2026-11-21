@@ -250,7 +250,7 @@ def planned_changes(installer, home: Path, project: Path,
     )
     payload = installer.build_payload(home, selection=selection)
     if any(entry.path == MANIFEST for entry in payload):
-        raise UpdateError('source component state must never enter a consumer payload')
+        raise UpdateError('source component state must never enter a consumer payload', reason='source-payload', phase='plan')
     plan = installer._make_plan(home, project, include_dependencies=False, include_optional=False,
                                 selection=selection, payload=payload, accepted_kept_digests=digests)
     if plan['target_state'] != 'directory':
@@ -419,11 +419,11 @@ def planned_changes(installer, home: Path, project: Path,
                 and not historical_match and current.content != content):
             raise UpdateError(f'custom policy is not a trusted baseline: {entry.path}')
         if policy_reconciliation_required(entry.path, current, content, entry.mode) and not historical_match:
-            raise UpdateError(f'custom generated policy requires reconciliation before updating: {entry.path}')
+            raise UpdateError(f'custom generated policy requires reconciliation before updating: {entry.path}', reason='generated-policy', phase='plan')
         if (current is not None and (current.content != content or not mode_matches(current.mode, entry.mode))
                 and not matches_owned(current, owned_proof(manifest, entry.path))
                 and not historical_match and not initial_agents_block):
-            raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating')
+            raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating', reason='ownership', phase='plan')
         changed = tree.get(entry.path) != (mode, blob_id(content, object_format))
         owned_mode = _published_mode(mode)
         if not changed and current is not None and not mode_matches(current.mode, owned_mode):
@@ -621,7 +621,7 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
     except installer.UnsafeInstallTarget as exc:
         hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
                 if 'no longer matches its declared divergence' in str(exc) else '')
-        raise UpdateError(f'{exc}{hint}') from exc
+        raise UpdateError(f'{exc}{hint}', reason='source-payload', phase='plan') from exc
     except json.JSONDecodeError as exc:
         raise UpdateError(f'the pre-rename sync record is not valid JSON: {exc}') from exc
     historical = [path for path in importers if HISTORICAL_EVIDENCE.match(path)]

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import platform
 import re
+import subprocess
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +11,22 @@ from typing import Any
 from .util import command_exists, load_json, run
 
 VERSION_RE = re.compile(r'(\d+(?:\.\d+){0,3})')
+_NUMBER = r'(\d+(?:\.\d+){1,3})(?![\w.-])'
+_BANNERS = {
+    'python3': r'^Python\s+', 'git': r'^git version\s+', 'php': r'^PHP\s+',
+    'pwsh': r'^PowerShell\s+', 'gh': r'^gh version\s+', 'composer': r'^Composer(?: version)?\s+',
+    'docker': r'^Docker version\s+', 'syft': r'^\s*Version:\s*v?',
+    'trivy': r'^Version:\s*v?', 'cosign': r'^\s*GitVersion:\s*v?',
+    'grok': r'^(?:grok(?: version)?\s+)?v?', 'node': r'^v', 'npm': r'^', 'jscpd': r'^',
+}
+
+
+@dataclass(frozen=True)
+class CommandProbe:
+    command: str
+    returncode: int | None
+    actual: str | None
+    diagnostic: str
 
 
 @dataclass
@@ -30,6 +48,18 @@ class ToolCheck:
 def parse_version(text: str) -> str | None:
     match = VERSION_RE.search(text or '')
     return match.group(1) if match else None
+
+
+def parse_tool_version(tool_id: str, text: str) -> str | None:
+    if len(text) > 65536:
+        return None
+    pattern = _BANNERS.get(tool_id)
+    match = re.search(pattern + _NUMBER, text, re.M) if pattern else None
+    if tool_id == 'claude':
+        match = re.search(r'^(\d+\.\d+\.\d+) \(Claude Code\)$', text, re.M) or re.search(r'^Claude Code '+_NUMBER, text, re.M)
+    if tool_id == 'git':
+        match = re.search(r'^git version (\d+(?:\.\d+){1,3}(?:\.windows\.\d+)?)(?![\w.-])', text, re.M)
+    return match[1] if match else None
 
 
 def version_tuple(value: str) -> tuple[int, ...]:
@@ -73,15 +103,32 @@ def load_toolchain(root: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def detect_command(spec: dict[str, Any]) -> tuple[str | None, str | None]:
+def probe_commands(spec: dict[str, Any]) -> list[CommandProbe]:
+    probes = []
     for name in spec.get('commands') or []:
         if not command_exists(str(name)):
             continue
-        args = [str(name), *list(spec.get('version_args') or ['--version'])]
-        proc = run(args, cwd=Path.cwd(), timeout=10)
+        executable = shutil.which(str(name)) or str(name)
+        args = [executable, *list(spec.get('version_args') or ['--version'])]
+        try:
+            proc = run(args, cwd=Path.cwd(), timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            probes.append(CommandProbe(executable, None, None, type(exc).__name__))
+            continue
+        code = getattr(proc, 'returncode', None)
         text = (proc.stdout or '') + '\n' + (proc.stderr or '')
-        version = parse_version(text)
-        return str(name), version
+        actual = parse_tool_version(str(spec.get('id')), text) if code == 0 else None
+        probes.append(CommandProbe(executable, code, actual,
+                                   'verified' if actual else 'version probe failed or returned no recognized version'))
+        if actual:
+            break
+    return probes
+
+
+def detect_command(spec: dict[str, Any]) -> tuple[str | None, str | None]:
+    for probe in probe_commands(spec):
+        if probe.actual:
+            return probe.command, probe.actual
     return None, None
 
 
@@ -95,14 +142,14 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
     install = install_command(spec, host)
     command, found = detect_command(spec)
     # A tool without a recorded build-host version says nothing about it, never "built )".
-    built_on = f', built on {built}' if built else ''
-    built_note = f' (built {built})' if built else ''
-    built_pin = f', built {built}' if built else ''
+    built_on = f', historically tested {built}' if built else ''
+    built_note = f' (historically tested {built}; freshness not checked)' if built else ''
+    built_pin = f', historically tested {built}; freshness not checked' if built else ''
     offer = (
         f'Install fallback {name} {fallback} (or newer{built_on}): {install}'
         if install else f'Install fallback {name} {fallback} (or newer{built_on})'
     )
-    if not command:
+    if not command or not found:
         return ToolCheck(
             id=tool_id,
             name=name,
@@ -137,7 +184,7 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
         )
     extra = ''
     if found and built and version_tuple(found) < version_tuple(built):
-        extra = f'; older than built pin {built}, still supported'
+        extra = f'; older than historically tested {built}, meets minimum; freshness not checked'
     return ToolCheck(
         id=tool_id,
         name=name,

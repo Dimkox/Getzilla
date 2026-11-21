@@ -366,7 +366,7 @@ def source_inventory(root, subtree):
         visited += 1
         if visited > 20000 or time.monotonic() > deadline:
             raise ValueError('Explicit source inventory exceeds existing entry/time bound')
-        if {'__pycache__', '.pytest_cache', '.venv', 'runtime', '.git'} & set(path.parts):
+        if {'__pycache__', '.pytest_cache', '.venv', 'runtime', '.git'} & set(path.relative_to(root / subtree).parts):
             continue
         if path.is_symlink():
             raise ValueError('Live source inventory refuses links')

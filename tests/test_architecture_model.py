@@ -578,18 +578,26 @@ class ArchitectureModelTests(unittest.TestCase):
         for artifact in payload["artifacts"].values():
             self.assertTrue(artifact.startswith("flowchart "))
             self.assertTrue(artifact.endswith("\n"))
-        self.assertEqual(
-            tuple(sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))),
-            before_inventory,
-        )
-        self.assertEqual(
-            {
-                path.relative_to(root).as_posix(): path.read_bytes()
-                for path in root.rglob("*")
-                if path.is_file()
-            },
-            before_bytes,
-        )
+        # Runtime diagnostics are an owned observation, not a diagram/product write.
+        journals=root/'.getzilla/runtime/verification-history'
+        indexes=list(journals.glob('*/index.json'))
+        self.assertEqual(len(indexes),1)
+        metadata=json.loads(indexes[0].read_text())
+        self.assertEqual(metadata['entrypoint'],'architecture')
+        self.assertEqual(metadata['status'],'closed')
+        self.assertRegex(indexes[0].parent.name,r'^[0-9a-f]{32}$')
+        registry=json.loads((journals/'registry.json').read_text())
+        self.assertEqual([row['run_id'] for row in registry['runs']],[indexes[0].parent.name])
+        ancestors={'.getzilla','.getzilla/runtime','.getzilla/runtime/verification-history',
+                   '.getzilla/runtime/verification-history/registry.json',
+                   '.getzilla/runtime/verification-history/registry.lock'}
+        def product(path):
+            relative=path.relative_to(root).as_posix()
+            return relative not in ancestors and not path.is_relative_to(indexes[0].parent)
+        self.assertEqual(tuple(sorted(path.relative_to(root).as_posix() for path in root.rglob('*') if product(path))),
+                         before_inventory)
+        self.assertEqual({path.relative_to(root).as_posix():path.read_bytes()
+                          for path in root.rglob('*') if path.is_file() and product(path)},before_bytes)
 
     def test_every_authoritative_object_is_closed_and_required(self) -> None:
         system = _system()

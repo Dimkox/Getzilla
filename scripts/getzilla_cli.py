@@ -23,10 +23,12 @@ from getzilla.interpreter import project_python  # noqa: E402
 from getzilla import verification_journal as diagnostics  # noqa: E402
 
 COMMANDS: dict[str, tuple[str, str]] = {
+    'hook': ('getzilla_hook.py', 'run one native project hook with unchanged stdin and exit status'),
     'search': ('getzilla_search_gateway.py', 'optional bounded universal web search, HTTP and MCP stdio'),
     'design-reference': ('getzilla_design_reference.py', 'explicit optional local JSON/CSS token reference'),
     'duplicates': ('getzilla_duplicates.py', 'read-only source duplication analysis (optional jscpd)'),
     'doctor': ('getzilla_doctor.py', 'check this machine and the repository'),
+    'install-managed': ('getzilla_install_managed.py', 'resolve, install and verify current selected Getzilla-managed tools'),
     'cpu': ('getzilla_startup_cpu.py', 'startup CPU step zero: measure and record capacity'),
     'par': ('getzilla_par.py', 'run independent commands in parallel on the verified CPUs'),
     'route': ('getzilla_route.py', 'create or inspect the adaptive task route'),

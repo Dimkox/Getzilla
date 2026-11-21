@@ -71,6 +71,8 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
         return summary == "no python quality paths"
     if name == "bandit":
         return summary == "no non-test python paths"
+    if name == "php-lint":
+        return summary == "no changed PHP files"
     if name == "architecture-inputs":
         return summary == "architecture authority inputs are absent; not executed"
     if name == "change-spec":
@@ -146,14 +148,17 @@ def evaluate_quality_gate(
     checks = list(checks)
     check_map = _by_name(checks)
     details: list[dict[str, str]] = []
+    valid_plan = False
     if (not isinstance(required_plan, dict) or not isinstance(current_binding, dict)
             or now_utc is None or not callable(data_source_validator)):
         details.append(_detail('required-plan-unavailable', 'required_plan',
                                'current plan, binding, aware clock and trusted validator are required'))
     else:
         from .verification_plan import plan_gaps
-        details.extend(plan_gaps(required_plan, checks, current_binding=current_binding,
-                                 now_utc=now_utc, data_source_validator=data_source_validator))
+        findings = plan_gaps(required_plan, checks, current_binding=current_binding,
+                             now_utc=now_utc, data_source_validator=data_source_validator)
+        details.extend(findings)
+        valid_plan = not findings
 
     if mode in {"pr", "release"}:
         required = set(MANDATORY_PR_CHECKS)
@@ -180,7 +185,17 @@ def evaluate_quality_gate(
                 'focused-discovery-unscoped', 'python-focused-unittest',
                 'focused discovery requires an eligible documentation/state scope and explicit replaced-runner and coverage skip records',
             ))
-        if not (full_discovery_reported or focused_admitted):
+        binding = required_plan.get('binding') if isinstance(required_plan, dict) else None
+        selection = binding.get('selection', {}) if isinstance(binding, dict) else {}
+        requested = selection.get('requested_profiles', 'unproved') if isinstance(selection, dict) else 'unproved'
+        native_python_absent = (
+            valid_plan
+            and (requested is None or type(requested) is list and all(type(item) is str for item in requested)
+                 and 'python' not in requested)
+            and all(_plan_excludes(required_plan, name) and _value(check_map.get(name), 'status') == 'skip'
+                    for name in ('python-unittest', 'coverage', 'ruff', 'bandit'))
+        )
+        if not (full_discovery_reported or focused_admitted or native_python_absent):
             details.append(
                 _detail(
                     "mandatory-check-missing",
@@ -203,4 +218,11 @@ def _plan_excludes(required_plan: dict | None, name: str) -> bool:
     if not isinstance(required_plan, dict) or not isinstance(required_plan.get('obligations'), list):
         return False
     matched = [item for item in required_plan['obligations'] if isinstance(item, dict) and item.get('check_id') == name]
-    return bool(matched) and all(item.get('applicability') == 'not_applicable' and item.get('evidence') for item in matched)
+    binding = required_plan.get('binding')
+    source_info = binding.get('source') if isinstance(binding, dict) else None
+    source = source_info.get('fingerprint') if isinstance(source_info, dict) else None
+    return (isinstance(source, str) and len(source) == 64 and all(char in '0123456789abcdef' for char in source)
+            and bool(matched) and all(item.get('applicability') == 'not_applicable'
+                and isinstance(item.get('evidence'), dict)
+                and item['evidence'].get('kind') == 'native-applicability'
+                and item['evidence'].get('source') == source for item in matched))

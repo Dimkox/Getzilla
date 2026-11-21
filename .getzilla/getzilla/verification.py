@@ -1911,7 +1911,9 @@ def _known_vulnerabilities(root: Path) -> CheckResult:
 
 def _vulnerability_detail(item: dict[str, object]) -> dict[str, str]:
     """Flatten one finding and add the ``path``/``message`` keys the text report prints."""
-    detail = {key: ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
+    from .security_data import osv_alias_text
+    detail = {key: osv_alias_text(value) if key == 'raw_aliases' and isinstance(value, list)
+              else ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
     advisory = detail.get('id', '')
     if detail.get('aliases'):
         advisory = f"{advisory} ({detail['aliases']})"
@@ -1931,15 +1933,19 @@ OPENGREP_EXCLUDES = ('.getzilla/sast', 'tests', '**/fixtures/**', 'node_modules'
 
 def _unpinned_opengrep(executable: Path) -> str | None:
     """Why ``executable`` must not run: PATH is not trusted, only the pinned release digest is (#39)."""
-    from .updater import OPENGREP_ASSETS, OPENGREP_VERSION, _platform_key, _sha256_file
+    import zipfile
+    from .updater import OPENGREP_ASSETS, OPENGREP_VERSION, _platform_key, _sha256_file, _release_fetch
 
     pinned = OPENGREP_ASSETS.get(_platform_key())
-    if pinned is None:
-        return f'no pinned OpenGrep v{OPENGREP_VERSION} digest for {_platform_key()}; {executable} not run'
     actual = _sha256_file(executable)
-    if actual != pinned[1]:
-        return (f'{executable} sha256 {actual} does not match pinned OpenGrep v{OPENGREP_VERSION} {pinned[1]}; '
-                'not run (reinstall with `python3 scripts/getzilla_update.py --only opengrep`)')
+    if pinned is not None and actual == pinned[1]:
+        return None  # Retain the immutable reviewed CI release's original #39 proof.
+    from . import opengrep_releases
+    try:
+        opengrep_releases.verify_active(executable, fetch=_release_fetch, key=_platform_key())
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return (f'{executable} sha256 {actual} is not the reviewed OpenGrep v{OPENGREP_VERSION}; '
+                f'fresh upstream integrity verification refused: {exc}; not run')
     return None
 
 
@@ -2005,7 +2011,11 @@ def _trivy_config_present(root: Path) -> bool:
 
 
 @diagnostics.observed('node')
-def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None, required_plan=None) -> list[CheckResult]:
+def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None, required_plan=None,
+          requested_profiles=('frontend',)) -> list[CheckResult]:
+    from .verification_plan import node_checks_required
+    if not node_checks_required(root, requested_profiles):
+        return []
     results: list[CheckResult] = []
     with _retain_checks(results):
         return _node_checks(root, mode, results, _CheckDispatch(results, mode, keep_going=keep_going,
@@ -2034,7 +2044,7 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
     package = root / 'package.json'
     if not package.is_file():
         if dispatch.required_plan is not None:
-            dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'explicit frontend profile has no package.json'))
+            dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'selected Node workspace or explicit frontend profile has no root package.json'))
             return results
         return []
     try:
@@ -2525,6 +2535,7 @@ def _verify_focused_static_seo_landing(
     *,
     record: bool,
     state: _RunState | None = None,
+    requested_profiles=None,
 ) -> dict[str, object]:
     active_change = get_active_change(root) or {}
     change_package = active_change.get('path')
@@ -2548,7 +2559,7 @@ def _verify_focused_static_seo_landing(
     )
     scope['mode'] = FOCUSED_STATIC_SEO_LANDING_MODE
     state = state or _RunState({})
-    required_plan = _capture_required_plan(root, FOCUSED_STATIC_SEO_LANDING_MODE, active_profiles, state, scope)
+    required_plan = _capture_required_plan(root, FOCUSED_STATIC_SEO_LANDING_MODE, requested_profiles, state, scope)
     results: list[CheckResult] = state.results if state else []
     if state:
         state.report['verification_scope'] = scope
@@ -2559,7 +2570,8 @@ def _verify_focused_static_seo_landing(
         results.append(_focused_landing_contract(root, scope, required_plan=required_plan))
 
     if required_plan is not None:
-        dispatch = _CheckDispatch(results, FOCUSED_STATIC_SEO_LANDING_MODE, required_plan=required_plan)
+        dispatch = _CheckDispatch(results, FOCUSED_STATIC_SEO_LANDING_MODE, required_plan=required_plan,
+                                 blocked_by=None if scope.get('eligible') is True else 'scope-selection')
         for name, callback in [('secret-scan', lambda: _secret_scan(root, files)),
                                ('known-vulnerabilities', lambda: _known_vulnerabilities(root)),
                                ('opengrep', lambda: _opengrep(root)), ('bandit', lambda: _bandit(root))]:
@@ -2586,7 +2598,7 @@ def _verify_focused_static_seo_landing(
         from .verification_plan import bind_result
         for item in results:
             bind_result(required_plan, item)
-    gate = _required_quality_gate(root, FOCUSED_STATIC_SEO_LANDING_MODE, active_profiles, results, required_plan, scope)
+    gate = _required_quality_gate(root, FOCUSED_STATIC_SEO_LANDING_MODE, requested_profiles, results, required_plan, scope)
     results.append(CheckResult('quality-gate', gate.status, gate.summary, details=gate.details))
     failures = [result for result in results if result.status == 'fail']
     not_run = {
@@ -2833,7 +2845,7 @@ def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[s
     metadata = {'status': 'complete' if status.complete else 'incomplete', 'agent': agent, **status.to_dict()}
     workflow_missing = [item for item in status.missing if not item.startswith('SECURITY_BASELINE_MISSING')]
     if not workflow_missing:
-        return CheckResult('workflow-baseline', 'pass', f'pinned Superpowers, BMAD and Spec Kit connected for {agent}'), metadata
+        return CheckResult('workflow-baseline', 'pass', f'bound Superpowers, BMAD and Spec Kit connected for {agent}; freshness={status.details.get("freshness", "not_checked")}'), metadata
     message = (', '.join(workflow_missing) + '. Install: scripts/getzilla_update.py --only baseline; connect: '
                f'scripts/getzilla_baseline.py apply --project . --agent {agent}')
     if mode in {'pr', 'release'}:
@@ -2847,6 +2859,7 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
     report = {
         'schema_version': 1, 'created_at': now_utc(), 'mode': mode,
         'profiles': profiles or ['base'], 'route_id': None, 'tree_fingerprint': None,
+        'requested_profiles': None if profiles is None else list(profiles),
         'changed_files': [], 'changed_file_inventory': {}, 'checks': [],
         'spec': {}, 'architecture': {}, 'governance': {}, 'workflow_artifacts': {},
         'status': 'fail', 'terminal_state': 'interrupted', 'evidence_status': 'not_recorded',
@@ -2891,19 +2904,25 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
 
 
 def _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope=None):
-    """Both local admission and stored receipt consumers require fresh, explicit bindings."""
+    """Failed admission cannot supply fresh bindings; other paths still rederive them."""
     from .verification_plan import current_required_plan
     from .expanded_security import validate_data_source
+    hard_failure = any(isinstance(item, CheckResult) and item.status in {'fail', 'cancelled'} for item in results)
     current = None
-    try:
-        observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
-        if observed == required_plan:
-            current = observed['binding']
-    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
-        pass
-    return evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
+    if not hard_failure:
+        try:
+            observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+            if observed == required_plan:
+                current = observed['binding']
+        except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+            pass
+    decision = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
         required_plan=required_plan, current_binding=current, now_utc=datetime.now(timezone.utc),
         data_source_validator=lambda source, *, now: validate_data_source(source, root=root, now=now))
+    if hard_failure:
+        decision.details.append({'severity': 'info', 'code': 'required-plan-revalidation-unexecuted',
+            'path': 'required_plan', 'message': 'Final plan revalidation not executed after a prior failed or cancelled check; current binding unavailable.'})
+    return decision
 
 
 def _capture_required_plan(root, mode, profiles, state, docs_scope=None):
@@ -2966,6 +2985,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             checked_fingerprint,
             record=record,
             state=state,
+            requested_profiles=profiles,
         )
 
     # Admission precedes package checks: the prompt lane is provisional until source is measured.
@@ -3006,7 +3026,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             target for target in FOCUSED_TEST_TARGETS if (root / target).is_file()
         ],
     )
-    required_plan = _capture_required_plan(root, mode, active_profiles, state, docs_scope)
+    required_plan = _capture_required_plan(root, mode, profiles, state, docs_scope)
     state.stage = 'architecture-inputs'
     architecture_inputs = _architecture_preflight_check(root)
     preflight_failed = architecture_inputs.status == 'fail'
@@ -3113,10 +3133,12 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         state.stage = 'bitrix'
         cancellation.check()
         dispatch.run('bitrix', lambda: _bitrix(root, files))
-    if 'frontend' in active_profiles or (root / 'package.json').is_file():
+    from .verification_plan import node_checks_required
+    if node_checks_required(root, profiles):
         state.stage = 'node'
         cancellation.check()
-        for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by, required_plan=required_plan):
+        for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by,
+                           required_plan=required_plan, requested_profiles=profiles):
             dispatch.add(check)
     state.stage = 'stacks'
     cancellation.check()
@@ -3188,7 +3210,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         from .verification_plan import bind_result
         for item in results:
             bind_result(required_plan, item)
-    quality_gate = _required_quality_gate(root, mode, active_profiles, results, required_plan, docs_scope)
+    quality_gate = _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope)
     results.append(
         CheckResult(
             "quality-gate",

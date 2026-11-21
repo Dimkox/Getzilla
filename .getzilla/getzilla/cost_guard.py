@@ -517,21 +517,28 @@ def evaluate(root: Path, route: Mapping[str, Any] | None, mode: str, bases: list
         changed_code.update(change.path for change in changed_paths(root, base, head)
                             if change.status != 'D' and not matches(change.path, rules['tests'])
                             and not matches(change.path, rules['trivial']['allow']))
-    if not signal and not findings:
-        return CostReport('pass', 'no paid or unbounded operation in the prompt or the diff')
+    contract_path = package / CONTRACT_NAME if package is not None else None
+    try:
+        declared = contract_path is not None and contract_path.lstat() is not None
+    except FileNotFoundError:
+        declared = False
+    except OSError:
+        # An inaccessible declaration is not evidence that no contract exists.
+        declared = True
+    if not signal and not findings and not declared:
+        return CostReport('pass', 'no paid or unbounded operation detected by prompt/diff heuristics; '
+                          'absence of paid operations is not established')
     problems = [f'{item.kind}: {item.path}:{item.line} {item.detail}' for item in findings if item.blocking]
     scheduled = [item for item in findings if item.kind == 'SCHEDULED_PAID_CALL']
-    contract_path = package / CONTRACT_NAME if package is not None else None
-    if contract_path is None or not contract_path.is_file():
+    if not declared:
         problems.append(f'COST_CONTRACT_MISSING: add {CONTRACT_NAME} to the active change package '
                         '(provider, max_calls, max_spend_usd_cents, stop_condition, alert, limit_symbol)')
     else:
         try:
             contract = json.loads(contract_path.read_text(encoding='utf-8'))
         except (OSError, ValueError) as error:
-            contract = None
             problems.append(f'COST_CONTRACT_INVALID: {error}')
-        if contract is not None:
+        else:
             invalid = contract_problems(contract)
             problems.extend(invalid)
             if scheduled and not invalid and 'max_scheduled_runs_per_day' not in contract:
@@ -547,4 +554,5 @@ def evaluate(root: Path, route: Mapping[str, Any] | None, mode: str, bases: list
         status = 'fail' if strict else 'pass'
         prefix = '' if strict else 'will fail pr/release: '
         return CostReport(status, prefix + problems[0], findings, problems, signal)
-    return CostReport('pass', f'budget contract and tested bound present ({len(findings)} paid call sites)', findings, [], signal)
+    return CostReport('pass', f'budget contract and bound test reference present ({len(findings)} detected paid call sites)',
+                      findings, [], signal)

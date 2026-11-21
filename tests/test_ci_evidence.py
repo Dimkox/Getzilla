@@ -23,6 +23,13 @@ class CiEvidenceTests(unittest.TestCase):
             (source / 'private-grants.json').write_text('do not export')
             (source / 'manifest.json').write_text(json.dumps({'schema': 'getzilla-live-acceptance-v1',
                 'files': [{'path': 'command.log', 'sha256': hashlib.sha256(payload).hexdigest()}]}))
+            with self.assertRaisesRegex(ValueError, 'binding'):
+                ci_evidence.export_live_evidence(source, root / 'unbound')
+            from getzilla.live_contracts import ci_binding
+            manifest = json.loads((source / 'manifest.json').read_bytes())
+            manifest['binding'] = ci_binding(head='a'*40, tree='b'*40, run_id='123', attempt='1',
+                                             cell='factory', producer_sha256='c'*64)
+            (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8', newline='\n')
             ci_evidence.export_live_evidence(source, root / 'export')
             self.assertEqual({path.name for path in (root / 'export').iterdir()}, {'manifest.json', 'command.log'})
 

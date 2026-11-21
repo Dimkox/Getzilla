@@ -33,7 +33,7 @@ from .architecture_diff import (ArchitectureError, MAX_GIT_OUTPUT_BYTES, _git_co
                                 _git_environment, _run_capped)
 from .package_status import _git_read
 from .security_data import (OSV_BUCKET, OSV_ECOSYSTEMS, SecurityDataError,
-                            osv_aliases, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
+                            osv_aliases, osv_decision_ids, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
 
 try:
     import tomllib
@@ -72,6 +72,7 @@ class Finding:
     severity: str = ''
     fixed: list[str] = field(default_factory=list)
     accepted_until: str | None = None
+    raw_aliases: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -85,6 +86,7 @@ class Finding:
             'severity': self.severity,
             'fixed': self.fixed,
             'accepted_until': self.accepted_until,
+            'raw_aliases': list(self.aliases if self.raw_aliases is None else self.raw_aliases),
         }
 
 
@@ -568,8 +570,10 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
         raise VulnerabilityError('malformed OSV package')
     ecosystem = ecosystem if ecosystem is not None else package.get('ecosystem', '')
     ranges = affected.get('ranges', [])
-    if not isinstance(ranges, list) or (not ranges and not versions):
-        raise VulnerabilityError('malformed OSV affected entry: versions or ranges required')
+    if not isinstance(ranges, list):
+        raise VulnerabilityError('malformed OSV ranges')
+    if not ranges and not versions:
+        raise VulnerabilityError('OSV affected version coverage is unknown for matched package')
     errors = []
     if versions:
         try:
@@ -598,6 +602,7 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
 def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     try:
         aliases = osv_aliases(record)
+        decision_ids = set(osv_decision_ids({'id': record.get('id'), 'aliases': aliases}))
     except SecurityDataError as exc:
         raise VulnerabilityError(str(exc)) from exc
     severity = ''
@@ -632,7 +637,8 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     return Finding(
         dependency=dependency,
         vuln_id=str(record.get('id', '')),
-        aliases=sorted(aliases),
+        aliases=sorted(alias for alias in aliases if alias in decision_ids),
+        raw_aliases=list(aliases),
         summary=str(record.get('summary') or record.get('details') or '')[:300],
         severity=severity,
         fixed=fixed,
@@ -667,7 +673,12 @@ def query_online(dependencies: list[Dependency], *, fetch: Fetch = _default_fetc
             next_pending = []
             for index, result in zip(pending, results):
                 for vuln in result.get('vulns') or []:
-                    hits.append((chunk[index], str(vuln['id'])))
+                    identifier = vuln.get('id') if isinstance(vuln, dict) else None
+                    try:
+                        osv_decision_ids({'id': identifier})
+                    except SecurityDataError as exc:
+                        raise VulnerabilityError(str(exc)) from exc
+                    hits.append((chunk[index], identifier))
                 if result.get('next_page_token'):
                     tokens[index] = result['next_page_token']
                     next_pending.append(index)
@@ -770,7 +781,10 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
             accepted_ids[str(item['id'])] = str(item['expires'])
     open_findings = []
     for finding in findings:
-        names = {finding.vuln_id, *finding.aliases}
+        try:
+            names = osv_decision_ids(finding.to_dict())
+        except SecurityDataError as exc:
+            raise VulnerabilityError(str(exc)) from exc
         expiry = next((accepted_ids[name] for name in names if name in accepted_ids), None)
         if expiry:
             finding.accepted_until = expiry

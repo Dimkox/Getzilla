@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -30,6 +31,24 @@ class Incomplete:
 
 
 class FreshInstallBaselineTests(unittest.TestCase):
+    def test_installed_baseline_apply_help_uses_only_consumer_engine(self) -> None:
+        runtime = ROOT / '.getzilla/runtime'
+        runtime.mkdir(parents=True, exist_ok=True)
+        for archived in (False, True):
+            with self.subTest(archived=archived), tempfile.TemporaryDirectory(dir=runtime) as tmp:
+                target = Path(tmp) / 'project'
+                selection = INSTALL.PayloadSelection(('qwen',), engine_archive=archived)
+                INSTALL._materialize_new(ROOT, target, include_dependencies=False, include_optional=False,
+                                         selection=selection)
+                command = [sys.executable, '-I', str(target / 'scripts/getzilla_baseline.py'), 'apply', '--help']
+                result = subprocess.run(command, cwd=target, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('--project', result.stdout)
+                self.assertNotIn(str(ROOT), result.stdout + result.stderr)
+                (target / 'scripts/getzilla_baseline.py').unlink()
+                plan = INSTALL.plan_install(ROOT, target, selection=selection)
+                self.assertIn('scripts/getzilla_baseline.py', {entry['path'] for entry in plan['entries']})
+
     def test_fresh_install_writes_the_sync_record_and_is_checked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / 'project'

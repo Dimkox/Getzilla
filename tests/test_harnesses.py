@@ -472,12 +472,14 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(set(gemini['hooks']), {GEMINI_EVENTS[event] for event in grok if event in GEMINI_EVENTS})
         self.assertEqual(gemini['hooks']['BeforeTool'][0]['hooks'][0]['timeout'],
                          grok['PreToolUse'][0]['hooks'][0]['timeout'] * 1000)
-        self.assertIn("'--harness','gemini'", gemini['hooks']['BeforeTool'][0]['hooks'][0]['command'])
+        self.assertEqual(gemini['hooks']['BeforeTool'][0]['hooks'][0]['command'],
+                         harnesses._source_hook_command('pre_tool_use.py', 'gemini'))
         copilot = json.loads((ROOT / '.github/hooks/getzilla.json').read_text(encoding='utf-8'))
         self.assertEqual(copilot['version'], 1)
         self.assertEqual(set(copilot['hooks']), {COPILOT_EVENTS[event] for event in grok if event in COPILOT_EVENTS})
         pre = copilot['hooks']['preToolUse'][0]
-        self.assertEqual(pre['bash'], pre['powershell'])
+        self.assertEqual(pre['bash'], harnesses._command('pre_tool_use.py', 'copilot'))
+        self.assertEqual(pre['powershell'], harnesses._powershell_command('pre_tool_use.py', 'copilot'))
         self.assertIn("'--harness','copilot'", pre['bash'])
         self.assertEqual(pre['timeoutSec'], grok['PreToolUse'][0]['hooks'][0]['timeout'])
 

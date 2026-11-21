@@ -7,6 +7,7 @@ inputs are synthetic hook payloads; nothing here executes the commands.
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterator
 from unittest import mock
 
@@ -183,6 +185,38 @@ class RecursiveRemoveTests(_Case):
 
 
 class SecretReadTests(_Case):
+    def test_secret_denials_do_not_echo_untrusted_operands(self) -> None:
+        directory = self.root / 'UNTRUSTED_OPERAND_CANARY'
+        directory.mkdir(exist_ok=True)
+        target = directory / '.env.CANARY'
+        target.write_text('inert fixture\n', encoding='utf-8', newline='\n')
+        for tool, data in (
+            ('Bash', {'command': f'cat {target}'}),
+            ('Read', {'file_path': str(target)}),
+            ('Grep', {'pattern': '.', 'path': str(directory), 'glob': '**/*'}),
+        ):
+            with self.subTest(tool=tool):
+                allowed, reason = self.tool(tool, data)
+                self.assertFalse(allowed)
+                self.assertIn('secret', reason)
+                self.assertNotIn('CANARY', reason)
+                self.assertNotIn(str(self.root), reason)
+
+    def test_private_denial_reason_keeps_exact_input_fingerprints_distinct(self) -> None:
+        spec = importlib.util.spec_from_file_location('owned_denial_hook', ROOT/'.getzilla/hooks/pre_tool_use.py')
+        hook = importlib.util.module_from_spec(spec)
+        with mock.patch.object(sys, 'path', [str(ROOT/'.getzilla/hooks'), *sys.path]):
+            spec.loader.exec_module(hook)
+        context = SimpleNamespace(session_root=self.root, effective_root=self.root,
+                                  resolution_status='resolved', sensitive_safe=True)
+        reason = 'Reading secret material is blocked by repository policy.'
+        with mock.patch.object(hook, '_grants_digest', return_value='f'*64):
+            first = hook._denial_fingerprints('owned', 'Read', {'file_path': '.env.FIRST'}, reason, context, 'secret-read')
+            second = hook._denial_fingerprints('owned', 'Read', {'file_path': '.env.SECOND'}, reason, context, 'secret-read')
+        self.assertNotEqual(first[0], second[0])
+        # The private category groups one objective; exact retries still bind operands.
+        self.assertEqual(first[1], second[1])
+
     def test_quoting_and_expansion_do_not_hide_secret_names(self) -> None:
         self.assert_denied((
             "cat .e''nv",

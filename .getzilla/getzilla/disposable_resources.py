@@ -81,6 +81,66 @@ def image_pins(root: Path) -> dict:
     return data
 
 
+def runtime_image_id(root: Path, pin: dict, *, inspection: dict | None = None) -> str:
+    """Keep configuration pins distinct from a content-proved Docker store ID."""
+    if (type(pin) is not dict or not _PIN.fullmatch(pin.get('reference', ''))
+            or not re.fullmatch(r'sha256:[0-9a-f]{64}', pin.get('image_id', ''))):
+        raise ValueError('Invalid CI image identity pin')
+    manifest_digest = pin['reference'].split('@', 1)[1]
+    def document(digest):
+        try:
+            raw = _read(Path(root) / '.getzilla/config/ci-image-blobs' / (digest[7:] + '.json')).content
+        except OSError as error:
+            raise ValueError('Pinned CI image content proof unavailable') from error
+        if hashlib.sha256(raw).hexdigest() != digest[7:]:
+            raise ValueError('Pinned CI image content digest mismatch')
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError('Duplicate CI image metadata field')
+                result[key] = value
+            return result
+        value = json.loads(raw, object_pairs_hook=unique)
+        if type(value) is not dict:
+            raise ValueError('Invalid CI image content object')
+        return raw, value
+    raw, manifest = document(manifest_digest)
+    config_raw, config = document(pin['image_id'])
+    descriptor = manifest.get('config')
+    if (manifest.get('schemaVersion') != 2
+            or manifest.get('mediaType') not in {'application/vnd.oci.image.manifest.v1+json',
+                                               'application/vnd.docker.distribution.manifest.v2+json'}
+            or type(descriptor) is not dict or descriptor.get('digest') != pin['image_id']
+            or descriptor.get('size') != len(config_raw)
+            or descriptor.get('mediaType') not in {'application/vnd.oci.image.config.v1+json',
+                                                 'application/vnd.docker.container.image.v1+json'}
+            or (config.get('os'), config.get('architecture')) != ('linux', 'amd64')):
+        raise ValueError('Pinned CI manifest/configuration/platform proof mismatch')
+    if inspection is None:
+        values = json.loads(_docker('image', 'inspect', pin['reference']))
+        if type(values) is not list or len(values) != 1:
+            raise ValueError('Expected one pinned runtime image')
+        inspection = values[0]
+    if (type(inspection) is not dict or type(inspection.get('RepoDigests')) is not list
+            or any(type(value) is not str for value in inspection['RepoDigests'])
+            or pin['reference'] not in inspection['RepoDigests']
+            or (inspection.get('Os'), inspection.get('Architecture')) != ('linux', 'amd64')):
+        raise ValueError('Runtime image manifest or platform mismatch')
+    runtime_id = inspection.get('Id')
+    target = inspection.get('Descriptor')
+    if target is not None and (type(target) is not dict or target.get('digest') != manifest_digest
+            or target.get('size') != len(raw) or target.get('mediaType') != manifest['mediaType']):
+        raise ValueError('Runtime image descriptor contradicts pinned manifest')
+    if runtime_id == pin['image_id']:
+        return runtime_id  # Classic image store exposes the verified configuration.
+    if (runtime_id != manifest_digest or type(target) is not dict
+            or target.get('digest') != manifest_digest or target.get('size') != len(raw)
+            or target.get('mediaType') != manifest['mediaType']):
+        raise ValueError('Runtime image store identity is not independently proved')
+    return runtime_id  # Containerd exposes the verified manifest, never a config claim.
+
+
 def ensure_images(root: Path, names=("postgres", "python")) -> None:
     pins = image_pins(root)
     for name in names:
@@ -90,8 +150,9 @@ def ensure_images(root: Path, names=("postgres", "python")) -> None:
         except subprocess.CalledProcessError:
             _docker("pull", "--platform", "linux/amd64", pin["reference"], timeout=120)
             inspected = json.loads(_docker("image", "inspect", pin["reference"]))
-        if len(inspected) != 1 or inspected[0]["Id"] != pin["image_id"] or pin["reference"] not in inspected[0].get("RepoDigests", []):
-            raise ValueError("Pulled image does not match the configured manifest and image digest")
+        if type(inspected) is not list or len(inspected) != 1:
+            raise ValueError('Expected one pinned runtime image')
+        runtime_image_id(root, pin, inspection=inspected[0])
 
 
 def _docker(*args: str, timeout: int = 30) -> str:

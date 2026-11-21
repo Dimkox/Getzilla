@@ -9,15 +9,15 @@ evaluator to validate their body schema, counts and publication dates.
 Each source has one atomically replaced manifest. It names an immutable object
 by digest, never by an input path. The legacy all.zip export is not authoritative.
 
-Snapshot I/O requires POSIX directory descriptors and a physical, non-symlink
+POSIX snapshot I/O requires directory descriptors and a physical, non-symlink
 database path. The updater/runner must exclusively control this directory tree;
 directories must belong to the current UID or root and forbid group/other writes
 (only sticky ancestors, such as /tmp, may be shared).
 Descriptors cannot stop another process with the same UID or root privilege
 from renaming an already opened directory. Every operation checks held directory
-and regular-file identities before/after use. Windows path/lstat fallbacks are
-not qualified for this boundary: I/O fails explicitly, while pure validation
-and structural no-source results remain available.
+and regular-file identities before/after use. Windows uses a separate native
+held-handle store on supported local NTFS volumes, never a path/lstat fallback.
+Pure validation and structural no-source results require neither backend.
 """
 from __future__ import annotations
 
@@ -109,11 +109,11 @@ def _json(data: bytes) -> dict[str, Any]:
 
 
 def osv_aliases(record: dict[str, Any]) -> list[str]:
-    """Keep strict alias admission; rejected shape diagnostics contain hashes only."""
+    """Retain exact provider strings; transport shape is not decision authority."""
     from .security_osv_diagnostics import alias_rejection
     def rejected(index=None):
         detail = alias_rejection(record, index)
-        error = SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error = SecurityDataError('OSV aliases must be an array of strings' + '; ' + json.dumps(detail, sort_keys=True))
         error.osv_alias_detail = detail
         return error
     if not isinstance(record, dict):
@@ -124,9 +124,42 @@ def osv_aliases(record: dict[str, Any]) -> list[str]:
     if not isinstance(aliases, list):
         raise rejected()
     for index, alias in enumerate(aliases):
-        if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', alias):
+        if not isinstance(alias, str):
             raise rejected(index)
     return list(aliases)
+
+
+CVE_ID = re.compile(r'CVE-[0-9]{4}-[0-9]{4,19}\Z')
+
+
+def osv_decision_ids(record: dict[str, Any]) -> list[str]:
+    """Revalidate retained raw identities before any matched lookup or waiver.
+
+    Existing non-CVE identifier syntax remains supported. Other provider text
+    stays opaque. A caller-supplied safe projection cannot hide uncertain CVEs.
+    """
+    from .security_osv_diagnostics import alias_rejection
+    aliases = osv_aliases(record)
+    if 'raw_aliases' in record and not isinstance(record['raw_aliases'], list):
+        raise SecurityDataError('OSV retained raw aliases must be an array')
+    raw = osv_aliases({'aliases': record['raw_aliases']}) if 'raw_aliases' in record else aliases
+    primary = record.get('id')
+    if not isinstance(primary, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', primary):
+        raise SecurityDataError('OSV decision primary identifier is malformed')
+    for values in ([primary], raw, aliases):
+        for index, value in enumerate(values):
+            if re.search(r'(?i)(?<![A-Za-z0-9])cve(?=[^A-Za-z]|$)', value) and not CVE_ID.fullmatch(value):
+                detail = alias_rejection({'id': primary, 'aliases': values}, index)
+                error = SecurityDataError('OSV decision identifier is malformed; ' + json.dumps(detail, sort_keys=True))
+                error.osv_alias_detail = detail
+                raise error
+    return list(dict.fromkeys(value for values in ([primary], raw) for value in values
+                              if re.fullmatch(r'[A-Za-z0-9:_.-]+', value)))
+
+
+def osv_alias_text(aliases: list[str]) -> str:
+    """Only the human projection is bounded/escaped; retained raw data is exact."""
+    return json.dumps([value[:160] for value in aliases[:3]], ensure_ascii=True)
 
 
 def _https_repository(value: Any) -> bool:
@@ -238,8 +271,9 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                         raise ValueError('malformed OSV versions')
                     if not isinstance(ranges, list) or not all(isinstance(value, dict) for value in ranges):
                         raise ValueError('malformed OSV ranges')
-                    if not versions and not ranges and not record.get('withdrawn'):
-                        raise ValueError('OSV affected package has neither versions nor ranges')
+                    # OSV permits named rows without version bounds. Retain
+                    # them as unknown coverage; a matching query must refuse
+                    # rather than interpreting missing bounds as all or none.
                     exact = package['ecosystem'] == ecosystem
                     family = exact or (ecosystem == 'Packagist' and qualified_packagist(package['ecosystem']))
                     if package['ecosystem'].startswith('Packagist:') and not qualified_packagist(package['ecosystem']):
@@ -576,6 +610,13 @@ class _SnapshotStore:
             os.close(descriptor)
 
 
+def _snapshot_store(database: Path, *, create: bool = False):
+    if os.name == 'nt':
+        from .security_data_windows import SnapshotStore
+        return SnapshotStore(database, create=create)
+    return _SnapshotStore(database, create=create)
+
+
 def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisition: dict[str, Any],
                      coverage: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     """Commit the authoritative pointer after its object; pre-commit failures keep the old pointer."""
@@ -593,7 +634,7 @@ def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisit
     source_parts = folder.relative_to(Path(database)).parts
     target = ('.snapshots', 'sha256', document['content_sha256'])
     try:
-        with _SnapshotStore(database, create=True) as store:
+        with _snapshot_store(database, create=True) as store:
             # Bind both trees before creating an object or committing a pointer.
             store.directory(source_parts, create=True)
             store.directory(target[:-1], create=True)
@@ -625,7 +666,7 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
     current = _clock(now)
     source_parts = folder.relative_to(Path(database)).parts
     try:
-        with _SnapshotStore(database) as store:
+        with _snapshot_store(database) as store:
             raw = store.read((*source_parts, 'snapshot.json'), MAX_MANIFEST_BYTES)
             document = _json(raw)
             digest = document.get('content_sha256')

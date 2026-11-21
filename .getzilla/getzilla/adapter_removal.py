@@ -69,11 +69,17 @@ def _native(content: bytes) -> dict:
 def _stock_guards(source: BoundRoot, agent: str) -> dict:
     events = harnesses._hook_events(source)
     if agent == 'copilot':
-        return harnesses._copilot_hooks(events)['hooks']
-    if agent == 'gemini':
-        return harnesses._renamed_hooks_block(events, harness=agent, names=harnesses.GEMINI_EVENTS)
-    return harnesses._hooks_block(events, harness=agent, milliseconds=agent == 'qwen',
-                                  only=harnesses.CODEX_HOOK_EVENTS if agent == 'codex' else None)
+        guards = harnesses._copilot_hooks(events)['hooks']
+        path = '.github/hooks/getzilla.json'
+    elif agent == 'gemini':
+        guards = harnesses._renamed_hooks_block(events, harness=agent, names=harnesses.GEMINI_EVENTS)
+        path = '.gemini/settings.json'
+    else:
+        guards = harnesses._hooks_block(events, harness=agent, milliseconds=agent == 'qwen',
+                                       only=harnesses.CODEX_HOOK_EVENTS if agent == 'codex' else None)
+        path = f'.{agent}/hooks.json' if agent in {'codex', 'grok'} else f'.{agent}/settings.json'
+    encoded = json.dumps({'hooks': guards}).encode('utf-8')
+    return _native(harnesses.platform_hook_payload(path, encoded, source_launcher=False))['hooks']
 
 
 def _subtract(content: bytes, expected: bytes, guards: dict) -> bytes | None:
@@ -189,7 +195,23 @@ def plan_removal(home: Path, binding: BoundRoot | ComponentTransaction,
 
 
 class UpdateError(RuntimeError):
-    pass
+    __slots__ = ('_update_diagnostic',)
+
+    def __init__(self, *args, reason='unknown', phase='unknown'):
+        super().__init__(*args)
+        reasons = ('target-index-mode', 'target-index-identity', 'target-root', 'dirty-target',
+                   'missing-manifest', 'generated-policy', 'reconciliation', 'ownership',
+                   'checkout', 'source-payload', 'git-command', 'branch-conflict',
+                   'ignored-target', 'legacy-dependency', 'concurrency', 'other', 'unknown')
+        phases = ('preflight', 'plan', 'git', 'publish', 'checkout', 'unknown')
+        reason = reason if type(reason) is str and reason in reasons else 'unknown'
+        phase = phase if type(phase) is str and phase in phases else 'unknown'
+        object.__setattr__(self, '_update_diagnostic', (reason, phase))
+
+    def __setattr__(self, name, value):
+        if name == '_update_diagnostic':
+            raise AttributeError('closed exception diagnostic is immutable')
+        super().__setattr__(name, value)
 
 
 
@@ -213,7 +235,7 @@ def _git_out(cwd: Path, *args: str, data: bytes | None = None, env: dict[str, st
     if isinstance(out, bytes):
         out, err = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
     if proc.returncode != 0:
-        raise UpdateError(f"git {args[0]} failed in {cwd}: {(err or out).strip()}")
+        raise UpdateError(f"git {args[0]} failed in {cwd}: {(err or out).strip()}", reason='git-command', phase='git')
     return out.strip()
 
 
@@ -222,7 +244,7 @@ def head_tree(project: Path, ref: str = 'HEAD') -> dict[str, tuple[str, str]]:
     """path -> (mode, object id) for every file and link committed at HEAD."""
     raw = git(project, 'ls-tree', '-r', '-z', '--full-tree', ref, data=b'')
     if raw.returncode != 0:
-        raise UpdateError(f'{project} has no commit yet: commit once first')
+        raise UpdateError(f'{project} has no commit yet: commit once first', reason='missing-manifest', phase='preflight')
     tree = {}
     for record in raw.stdout.split(b'\0'):
         if record:
@@ -271,31 +293,31 @@ def _require_checkout_index(project: Path) -> None:
                     named = fsx.lstat_at(parent, name)
                     if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or fsx.is_link(named)
                             or fsx._file_identity(opened) != fsx._file_identity(named)):
-                        raise UpdateError('mode-preserving checkout requires a stable regular single-link Git index')
+                        raise UpdateError('mode-preserving checkout requires a stable regular single-link Git index', reason='target-index-identity', phase='preflight')
                     if stat.S_IMODE(opened.st_mode) != 0o644:
                         raise UpdateError('mode-preserving checkout cannot preserve existing Git index '
-                                          f'permissions {stat.S_IMODE(opened.st_mode):04o}')
+                                          f'permissions {stat.S_IMODE(opened.st_mode):04o}', reason='target-index-mode', phase='preflight')
                     check()
                     if (fsx._file_identity(os.fstat(descriptor)) != fsx._file_identity(opened)
                             or fsx._file_identity(fsx.lstat_at(parent, name)) != fsx._file_identity(opened)):
-                        raise UpdateError('Git index changed during mode-preserving checkout preflight')
+                        raise UpdateError('Git index changed during mode-preserving checkout preflight', reason='target-index-identity', phase='preflight')
                 finally:
                     os.close(descriptor)
     except (ComponentStateError, OSError) as exc:
-        raise UpdateError('mode-preserving checkout requires an existing safely bound Git index') from exc
+        raise UpdateError('mode-preserving checkout requires an existing safely bound Git index', reason='target-index-identity', phase='preflight') from exc
 
 
 def _require_clean_project(project: Path) -> None:
     top = git(project, 'rev-parse', '--show-toplevel')
     if top.returncode != 0 or os.path.normcase(fsx.system_canonical(top.stdout.strip())) != os.path.normcase(str(project)):
-        raise UpdateError(f'{project} is not the root of a Git repository')
+        raise UpdateError(f'{project} is not the root of a Git repository', reason='target-root', phase='preflight')
     _require_checkout_index(project)
     status = _git_out(project, 'status', '--porcelain', '--untracked-files=all',
                       env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
     # The persistent administrative guard is not product content. Every other
     # tracked or untracked change still blocks the update.
     if any(line != '?? .getzilla/runtime/.components.guard.lock' for line in status.splitlines()):
-        raise UpdateError(f'{project} has uncommitted changes: commit or stash them first')
+        raise UpdateError(f'{project} has uncommitted changes: commit or stash them first', reason='dirty-target', phase='preflight')
 
 
 
@@ -307,7 +329,7 @@ def _committed_manifest(project: Path, binding: BoundRoot | ComponentTransaction
     committed = git(project, 'cat-file', 'blob', f'{head}:{MANIFEST}', data=b'')
     if (tree.get(MANIFEST, ('', ''))[0] != '100644' or committed.returncode != 0
             or snapshot is None or snapshot.content != committed.stdout):
-        raise UpdateError('the selected component manifest must be a committed regular file; review and commit it before updating')
+        raise UpdateError('the selected component manifest must be a committed regular file; review and commit it before updating', reason='missing-manifest', phase='preflight')
     return state, snapshot
 
 
@@ -318,12 +340,12 @@ def _publish_changes(project: Path, transaction: ComponentTransaction, changes: 
     """Shared guarded Git publication; no direct deletion or new recovery ledger."""
     _git_out(project, 'check-ref-format', '--branch', branch)
     if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
-        raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first')
+        raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first', reason='branch-conflict', phase='publish')
     # `git switch` overwrites ignored files without asking; an ignored local file on a managed path is work.
     ignored = _git_out(project, 'ls-files', '--others', '--ignored', '--exclude-standard', '--',
                        *(path for path, _, _ in changes))
     if ignored:
-        raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}')
+        raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}', reason='ignored-target', phase='publish')
     check_current()
     commit = commit_changes(project, changes, message, expected_head=expected_head)
     check_current()
@@ -334,12 +356,12 @@ def _publish_changes(project: Path, transaction: ComponentTransaction, changes: 
     try:
         check_current()
     except (UpdateError, ValueError, OSError) as exc:
-        raise UpdateError(f'update branch {branch} retained at {commit}; checkout not completed: {exc}') from exc
+        raise UpdateError(f'update branch {branch} retained at {commit}; checkout not completed: {exc}', reason='checkout', phase='checkout') from exc
     checkout_options = {'umask': 0o022} if os.name == 'posix' else {}
     switched = git(project, 'switch', '--quiet', branch, **checkout_options)
     if switched.returncode != 0:
         raise UpdateError(f'commit is on branch {branch}, but checking it out failed: '
-                          f'{switched.stderr.strip()}; run `git switch {branch}`')
+                          f'{switched.stderr.strip()}; run `git switch {branch}`', reason='checkout', phase='checkout')
     try:
         transaction.check()
         if (_git_out(project, 'rev-parse', 'HEAD') != commit
@@ -363,7 +385,7 @@ def _publish_changes(project: Path, transaction: ComponentTransaction, changes: 
                 or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != f'refs/heads/{branch}'):
             raise UpdateError('HEAD or branch changed while checking the checkout')
     except (UpdateError, ValueError, OSError) as exc:
-        raise UpdateError(f'update branch {branch} retained at {commit}; update incomplete after checkout: {exc}') from exc
+        raise UpdateError(f'update branch {branch} retained at {commit}; update incomplete after checkout: {exc}', reason='checkout', phase='checkout') from exc
     return commit
 
 

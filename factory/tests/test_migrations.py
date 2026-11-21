@@ -43,6 +43,10 @@ PRE_RECOVERY_MIGRATIONS = (
 
 
 class MigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(run_disposable_exit, 'runtime_image_id',
+                                      return_value=run_disposable_exit.POSTGRES['image_id']))
+
     def test_result_admission_is_definer_only_immutable_and_dormant_until_qualification(self):
         migration = discover_migrations()[-2]
         self.assertEqual((migration.version, migration.name), (24, "024_factory_v15_result_outbox.sql"))
