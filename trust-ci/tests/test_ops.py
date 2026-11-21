@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import json
+import os
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from _support import policy_data
 from adaptive_trust_ci.github import branch_protection_payload
@@ -12,6 +18,7 @@ from adaptive_trust_ci.sandbox import ContainerExecutor
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / '.getzilla'))
 
 
 class OperationsTests(unittest.TestCase):
@@ -164,9 +171,13 @@ class OperationsTests(unittest.TestCase):
 
     def test_runner_tools_and_build_backend_are_exactly_pinned(self) -> None:
         runner = (ROOT / 'trust-ci/runner.Dockerfile').read_text(encoding='utf-8')
+        profile = (ROOT / 'trust-ci/requirements-runner.txt').read_text(encoding='utf-8')
+        self.assertIn('--require-hashes', runner)
+        self.assertIn('-r requirements-runner.txt', runner)
+        self.assertIn('--no-deps --no-build-isolation .', runner)
         for pin in ('coverage==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
-                    'pytest-cov==7.1.0', 'ruff==0.16.2', 'bandit==1.9.4', 'tomli==2.4.1'):
-            self.assertIn(pin, runner)
+                    'pytest-cov==7.1.0', 'ruff==0.16.3', 'bandit==1.9.4', 'tomli==2.5.0'):
+            self.assertIn(pin, profile)
         self.assertIn('ARG OPENGREP_VERSION=1.30.1', runner)
         self.assertRegex(runner, r'ARG OPENGREP_SHA256=[0-9a-f]{64}\n')
         self.assertIn('sha256sum -c -', runner)
@@ -213,23 +224,150 @@ class OperationsTests(unittest.TestCase):
 
     def test_postgres_integration_runner_cleans_up_after_itself(self) -> None:
         script = (ROOT / 'trust-ci/scripts/postgres-integration.sh').read_text(encoding='utf-8')
-        self.assertIn('compose.test.yaml', script)
-        self.assertIn('down --volumes --remove-orphans', script)
-        self.assertIn('trap cleanup EXIT', script)
+        self.assertIn('exec python3 "$root/scripts/getzilla_live.py"', script)
+        self.assertIn('--cell trust-ci', script)
+        for primary, cleanup in ((None, None), (RuntimeError('suite failed'), None),
+                                 (RuntimeError('suite failed'), OSError('cleanup failed')),
+                                 (None, OSError('cleanup failed'))):
+            with self.subTest(primary=primary, cleanup=cleanup), self._trust_ci_harness(
+                    primary=primary, cleanup_error=cleanup) as (live, state, output):
+                if primary is not None or cleanup is not None:
+                    with self.assertRaises(type(primary or cleanup)) as raised:
+                        live._trust_ci(ROOT, output, state.binding)
+                    self.assertIs(raised.exception, primary or cleanup)
+                else:
+                    live._trust_ci(ROOT, output, state.binding)
+                self.assertEqual(state.cleanup_calls, 1)
+                if primary is not None:
+                    self.assertFalse((output / 'trust-ci-restart.json').exists())
+                    self.assertFalse(any(command[:2] == ['docker', 'restart'] for command in state.commands))
 
     def test_postgres_restart_drill_uses_named_volume_and_container_restart(self) -> None:
-        compose = (ROOT / 'trust-ci/compose.test.yaml').read_text(encoding='utf-8')
         script = (ROOT / 'trust-ci/scripts/postgres-restart-drill.sh').read_text(encoding='utf-8')
-        self.assertIn('trust-ci-pgtest-data:/var/lib/postgresql/data', compose)
-        self.assertNotIn('tmpfs:', compose)
-        self.assertIn('compose restart postgres-test', script)
-        self.assertIn('postgres_restart_probe seed', script)
-        self.assertIn('postgres_restart_probe verify', script)
+        self.assertIn('--cell trust-ci', script)
+        with self._trust_ci_harness() as (live, state, output):
+            live._trust_ci(ROOT, output, state.binding)
+            postgres = state.containers['db']
+            self.assertEqual(postgres['volume'], state.volumes['data'])
+            self.assertEqual(postgres['network'], state.network)
+            restart = [command for command in state.commands if command[:2] == ['docker', 'restart']]
+            self.assertEqual(restart, [['docker', 'restart', 'b' * 64]])
+            commands = [command[-1] for command in state.commands]
+            self.assertLess(commands.index('seed'), commands.index('b' * 64))
+            self.assertLess(commands.index('b' * 64), commands.index('verify'))
+            report = json.loads((output / 'trust-ci-restart.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['status'], 'pass')
+            self.assertEqual(report['restarts'][0]['cluster'], '123456789')
+            self.assertNotEqual(report['restarts'][0]['before'], report['restarts'][0]['after'])
+            self.assertEqual(state.image_proofs,
+                [(ROOT, state.pins[key]) for key in ('postgres', 'python', 'python')])
+
+    def test_postgres_restart_refuses_changed_cluster_job_or_unchanged_postmaster(self) -> None:
+        for drift in ('cluster', 'job', 'postmaster'):
+            with self.subTest(drift=drift), self._trust_ci_harness(drift=drift) as (live, state, output):
+                with self.assertRaises((RuntimeError, ValueError)):
+                    live._trust_ci(ROOT, output, state.binding)
+                self.assertEqual(state.cleanup_calls, 1)
+                self.assertFalse((output / 'trust-ci-restart.json').exists())
+
+    def test_trust_image_configuration_mismatch_refuses_before_suite_or_restart(self) -> None:
+        for key in ('postgres', 'python'):
+            with self.subTest(image=key), self._trust_ci_harness(image_drift=key) as (live, state, output):
+                with self.assertRaisesRegex(ValueError, 'Runtime image store identity'):
+                    live._trust_ci(ROOT, output, state.binding)
+                self.assertEqual(state.cleanup_calls, 1)
+                self.assertFalse((output / 'trust-ci-suite.json').exists())
+                self.assertFalse((output / 'trust-ci-restart.json').exists())
+                self.assertFalse(any('tests/run_postgres_suite.py' in command for command in state.commands))
+                self.assertFalse(any(command[:2] == ['docker', 'restart'] for command in state.commands))
+
+    @contextmanager
+    def _trust_ci_harness(self, *, primary=None, cleanup_error=None, drift=None, image_drift=None):
+        # Closed current-protocol orchestration fixture. No real input, DB,
+        # allocation, discovery or execution qualification is asserted.
+        from getzilla import live_acceptance as live
+        from getzilla import live_contracts
+        from getzilla import disposable_resources as resources
+        binding = dict(head='a'*40, tree='b'*40, run_id='local', attempt='1', cell='trust-ci',
+                       namespace='gz-test', nonce='c'*32, producer_sha256='d'*64)
+        expected = ['test_postgres_integration.Owned.test_case']
+        inventory = {'trust-ci/tests/test_postgres_integration.py': 'e'*64}
+        pins = live.image_pins(ROOT)
+        state = SimpleNamespace(commands=[], volumes={}, containers={}, cleanup_calls=0, pins=pins, image_proofs=[],
+            postmaster_reads=0, network={'identity': {'Id': 'd'*64}}, binding=binding)
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
+            output = Path(raw)
+            def image_proof(root, pin):
+                self.assertEqual(root, ROOT)
+                self.assertIn(pin, (pins['postgres'], pins['python']))
+                state.image_proofs.append((root, dict(pin)))
+                inspection = {'Id': pin['image_id'], 'RepoDigests': [pin['reference']],
+                              'Os': 'linux', 'Architecture': 'amd64'}
+                if image_drift is not None and pin == pins[image_drift]:
+                    inspection['Id'] = 'sha256:' + '0'*64
+                # Retain actual saved manifest/configuration/platform validation.
+                return resources.runtime_image_id(root, pin, inspection=inspection)
+            def volume(suffix):
+                item = {'kind':'volume', 'name':'gz-test-'+suffix}
+                state.volumes[suffix] = item
+                return item
+            def container(suffix, image, **options):
+                state.containers[suffix] = options
+                key = 'postgres' if suffix == 'db' else 'python'
+                self.assertEqual(image, pins[key]['reference'])
+                return {'id': {'provision':'a','db':'b','tests':'c'}[suffix]*64,
+                        'name':'gz-test-'+suffix, 'image_id':pins[key]['image_id']}
+            def cleanup():
+                state.cleanup_calls += 1
+                if cleanup_error is not None:
+                    raise cleanup_error
+                owner.cleanup_status = 'removed'
+                owner.manifest.write_text('{}')
+            def command(argv, **options):
+                state.commands.append(argv)
+                if argv[:3] == ['docker','container','inspect']:
+                    return json.dumps({'Running':False, 'ExitCode':0})
+                if 'pg_isready' in argv[-1]:
+                    return ''
+                if 'tests/run_postgres_suite.py' in argv:
+                    if primary is not None:
+                        raise primary
+                    return json.dumps({'schema':'getzilla-live-suite-v1', 'binding':binding, 'status':'pass',
+                        'expected_ids':expected, 'collected_ids':expected, 'required_ids':expected,
+                        'started':expected, 'executed':expected, 'missing_required':[], 'inapplicable_ids':[],
+                        'tests_run':1, 'failures':0, 'errors':0, 'loader_errors':0, 'problems':[],
+                        'requirements_complete':True, 'source_stable':True, 'allowed_skips':{},
+                        'skipped':[], 'applicability':None, 'source_inventory':inventory})
+                if 'psql' in argv:
+                    state.postmaster_reads += 1
+                    after = state.postmaster_reads > 1
+                    clock = '2026-11-01T00:00:01+00:00' if after and drift != 'postmaster' else '2026-11-01T00:00:00+00:00'
+                    cluster = '987654321' if after and drift == 'cluster' else '123456789'
+                    return clock+'|'+cluster
+                if argv[-1] in ('seed','verify'):
+                    return 'changed' if argv[-1]=='verify' and drift=='job' else 'durable-job'
+                if argv[:2] == ['docker','restart']:
+                    return ''
+                raise AssertionError('Unexpected owned command')
+            owner = SimpleNamespace(volume=volume, network=lambda suffix:state.network, container=container,
+                cleanup=cleanup, manifest=output/'trust-ci-resources.json', namespace='gz-test',
+                nonce='f'*32, resources=[], cleanup_status='allocated')
+            with patch.object(live, '_require_trust_producer'), \
+                 patch.dict(os.environ, {'GETZILLA_LIVE_WHEELHOUSE':raw}), \
+                 patch.object(live_contracts, 'trust_source_contract', return_value=(inventory,expected)), \
+                 patch.object(live, 'OwnedDocker', return_value=owner), \
+                 patch.object(live, 'owned_postgres_endpoint', return_value=('172.28.0.2',5432)), \
+                 patch.object(live, 'runtime_image_id', side_effect=image_proof), \
+                 patch.object(resources, '_docker', side_effect=AssertionError('unmocked Docker forbidden')), \
+                 patch('subprocess.Popen', side_effect=AssertionError('unmocked child forbidden')), \
+                 patch('socket.socket', side_effect=AssertionError('unmocked network forbidden')), \
+                 patch.object(live, '_run', side_effect=command):
+                yield live, state, output
 
     def test_repository_workflows_are_hardened(self) -> None:
         workflows = ROOT / '.github' / 'workflows'
-        self.assertEqual(sorted(path.name for path in workflows.iterdir()), ['getzilla.yml', 'windows-full-suite.yml'])
-        for name in ('getzilla.yml', 'windows-full-suite.yml'):
+        self.assertEqual(sorted(path.name for path in workflows.iterdir()), ['getzilla-public-producer.yml', 'getzilla.yml', 'windows-full-suite.yml'])
+        for name in ('getzilla-public-producer.yml', 'getzilla.yml', 'windows-full-suite.yml'):
             source = (workflows / name).read_text(encoding='utf-8')
             self.assertIn('permissions:\n  contents: read', source)
             self.assertNotIn('secrets.', source)

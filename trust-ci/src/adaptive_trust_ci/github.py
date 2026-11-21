@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
+
+from .http_response import RESPONSE_SECONDS, ResponseLimitError, request_bytes
 
 
 class GitHubError(RuntimeError):
@@ -31,13 +34,15 @@ class UrllibTransport:
         headers: dict[str, str],
         body: dict[str, Any] | None = None,
     ) -> tuple[int, dict[str, Any] | str]:
+        deadline = time.monotonic() + RESPONSE_SECONDS
         raw = json.dumps(body).encode('utf-8') if body is not None else None
         request = urllib.request.Request(url, data=raw, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310: URL is the configured GitHub API base plus a fixed path
-                return response.status, _decode_response(response.read())
-        except urllib.error.HTTPError as exc:
-            return exc.code, _decode_response(exc.read())
+            status, payload = request_bytes(request, deadline=deadline)
+            decoded = _decode_response(payload)
+            if time.monotonic() >= deadline:
+                raise ResponseLimitError('request elapsed budget exceeded; effect unknown')
+            return status, decoded
         except OSError as exc:
             raise GitHubError(f'GitHub request failed: {exc}') from exc
 

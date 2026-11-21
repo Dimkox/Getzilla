@@ -1,0 +1,51 @@
+name: Protected public security producer
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Target PR number in the configured protected repository
+        required: true
+        type: string
+  repository_dispatch:
+    types: [public-ci-refresh]
+
+# This is the separate protected producer-control boundary. It never runs
+# candidate repository commands. The tested Trust CI sandbox stays network=none.
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: public-security-producer-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  public-security-producer:
+    runs-on: [self-hosted, linux, x64, getzilla-public-producer]
+    timeout-minutes: 10
+    steps:
+      - name: Prepare exact source and qualified unsigned evidence
+        shell: bash
+        env:
+          TARGET_PR: ${{ inputs.pull_request || github.event.client_payload.pull_request }}
+          PUBLIC_PRODUCER_IMAGE: ${{ vars.PUBLIC_PRODUCER_IMAGE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_PR" =~ ^[1-9][0-9]{0,9}$ ]]
+          [[ ${#PUBLIC_PRODUCER_IMAGE} -le 512 ]]
+          [[ "$PUBLIC_PRODUCER_IMAGE" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$ ]]
+          docker run --rm --init --read-only --user 10001:10001 \
+            --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
+            --network bridge --cgroupns host --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --env GITHUB_TOKEN --env GITHUB_SHA --env GITHUB_RUN_ID \
+            --env GITHUB_RUN_ATTEMPT --env GITHUB_EVENT_NAME \
+            --mount type=bind,src=/sys/fs/cgroup/getzilla-public,dst=/sys/fs/cgroup/getzilla-public \
+            --mount type=bind,src=/etc/adaptive-trust-ci/public.json,dst=/etc/adaptive-trust-ci/public.json,readonly \
+            --mount type=bind,src=/etc/adaptive-trust-ci/producer.pub,dst=/etc/adaptive-trust-ci/producer.pub,readonly \
+            --mount type=bind,src=/var/lib/adaptive-trust-ci/public-inputs,dst=/var/lib/adaptive-trust-ci/public-inputs \
+            --mount type=bind,src=/var/lib/adaptive-trust-ci/public-snapshots,dst=/var/lib/adaptive-trust-ci/public-snapshots \
+            "$PUBLIC_PRODUCER_IMAGE" public-prepare \
+            --public-config /etc/adaptive-trust-ci/public.json --pr "$TARGET_PR"
