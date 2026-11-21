@@ -54,7 +54,7 @@
     },
     {
       "path": "runtime.py",
-      "sha256": "7ab4c797faa18dee78baad9433b19f6caab6c96dd4e7ff17c01efff49443a712",
+      "sha256": "cd449e1ebb635dba942dd9698e2b89679239281266292db8862fb22975928b14",
       "mode": 420,
       "mutable": false
     },
@@ -72,7 +72,7 @@
     },
     {
       "path": "worker.py",
-      "sha256": "c1d2c5f7ed3215353ad35f7ede74aae6e1b77e44117f35c1c7212aafee74e81d",
+      "sha256": "f44e0c11d8d0f94043e8a8bded7dd2f51afe21700a8e2d86b9cb7080a830590d",
       "mode": 420,
       "mutable": false
     }

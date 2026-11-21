@@ -167,6 +167,17 @@ class Binary:
         self.stack.close()
 
 
+def qualified_python(root):
+    host_python = str(Path(sys.executable).resolve())
+    try:
+        return Binary(root, host_python)
+    except execution.ExecutionError:
+        system_python = str(Path('/usr/bin/python3').resolve())
+        if system_python == host_python:
+            raise
+        return Binary(root, system_python)
+
+
 @state.serialized_task
 def _policy(root, tool):
     import shlex
@@ -365,16 +376,7 @@ def run(root, caller, *, tool_id, intent_key, hard_timeout_seconds):
     with ExitStack() as stack:
         binary = Binary(root, tool.executable, tool.digest)
         stack.callback(binary.close)
-        # The gate uses only the standard library. Hosted toolcache interpreters
-        # can have writable ancestors, so qualify the distribution Python too.
-        host_python = str(Path(sys.executable).resolve())
-        try:
-            bootstrap = Binary(root, host_python)
-        except execution.ExecutionError:
-            system_python = str(Path('/usr/bin/python3').resolve())
-            if system_python == host_python:
-                raise
-            bootstrap = Binary(root, system_python)
+        bootstrap = qualified_python(root)
         stack.callback(bootstrap.close)
         return execution.submit(root, caller, execution.SubmitRequest(
             intent_key, {'tool_id': tool.id}, hard_timeout_seconds, label='managed-local'),

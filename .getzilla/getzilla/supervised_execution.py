@@ -101,11 +101,11 @@ class Backend(managed.Backend):
         with ExitStack() as stack:
             binary = managed.Binary(root, tool.executable, tool.digest)
             stack.callback(binary.close)
-            bootstrap = managed.Binary(root, str(Path(sys.executable).resolve()))
+            bootstrap = managed.qualified_python(root)
             stack.callback(bootstrap.close)
             live = execution._LIVE[(str(root.resolve()), admission.execution_id)]
             process = fsx.owned_popen(
-                [str(Path(sys.executable).resolve()), "-I", "-S", _script(), "--supervisor"],
+                [bootstrap.path, "-I", "-S", _script(), "--supervisor"],
                 executable=f"/proc/self/fd/{bootstrap.fd}",
                 pass_fds=(bootstrap.fd,),
                 cwd=root,
@@ -335,7 +335,7 @@ def supervise():
     with ExitStack() as stack:
         binary = managed.Binary(root, tool.executable, tool.digest)
         stack.callback(binary.close)
-        bootstrap = managed.Binary(root, str(Path(sys.executable).resolve()))
+        bootstrap = managed.qualified_python(root)
         stack.callback(bootstrap.close)
         sandbox = managed.Binary(root, "/usr/bin/bwrap")
         stack.callback(sandbox.close)

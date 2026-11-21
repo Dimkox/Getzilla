@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import secrets
 import subprocess
-import sys
 import time
 
 from getzilla import execution, execution_store, fsx, managed_execution as managed, state as state
@@ -133,7 +132,7 @@ class Runtime:
         with ExitStack() as stack:
             actual = managed.Binary(self.root, selected.executable, selected.digest)
             stack.callback(actual.close)
-            bootstrap = managed.Binary(self.root, str(Path(sys.executable).resolve()))
+            bootstrap = managed.qualified_python(self.root)
             stack.callback(bootstrap.close)
             sandbox = managed.Binary(self.root, '/usr/bin/bwrap')
             stack.callback(sandbox.close)
@@ -196,7 +195,7 @@ class Runtime:
         with ExitStack() as stack:
             binary = managed.Binary(self.root, selected.executable, selected.digest)
             stack.callback(binary.close)
-            bootstrap = managed.Binary(self.root, str(Path(sys.executable).resolve()))
+            bootstrap = managed.qualified_python(self.root)
             stack.callback(bootstrap.close)
             sandbox = managed.Binary(self.root, '/usr/bin/bwrap')
             stack.callback(sandbox.close)
@@ -326,7 +325,7 @@ class SupervisorBackend(Backend):
         from .transport import CAP
         import selectors
         caller = execution.trusted_caller(root)
-        process = fsx.owned_popen([str(Path(sys.executable).resolve()), '-I', '-S',
+        process = fsx.owned_popen([self.bootstrap.path, '-I', '-S',
             str(Path(__file__).with_name('worker.py'))], executable=f'/proc/self/fd/{self.bootstrap.fd}',
             pass_fds=(self.bootstrap.fd,), cwd=root, env=supervisor._environment(caller.session_id),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)

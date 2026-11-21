@@ -23,7 +23,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         config = self.root / '.getzilla/config'
         config.mkdir(parents=True)
-        (config / 'policy.json').write_text('{}\n')
+        (config / 'policy.json').write_text('{"schema_version": 2}\n')
         (self.root / '.env').write_text('FIXTURE_ONLY=not-a-credential\n')
 
     def check(self, command):
@@ -158,7 +158,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
 
     def test_attached_scanner_paths_use_configured_secret_patterns(self):
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["fixture-sensitive.json"]}\n')
         for option in ('-c fixture-sensitive.json', '-cfixture-sensitive.json',
                        '-o fixture-sensitive.json', '-ofixture-sensitive.json'):
             with self.subTest(option=option):
@@ -168,7 +168,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
     def test_scanner_secret_operands_follow_possible_shell_directories(self):
         (self.root / 'nested/deeper').mkdir(parents=True)
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         # Config, report and positional source paths all use the command's directory.
         operands = (
             '-c fixture-sensitive.json -- example.py',
@@ -194,7 +194,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
     def test_scanner_directory_controls_keep_public_paths_and_fail_closed_when_unknown(self):
         (self.root / 'nested').mkdir()
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         # The || branch runs from the original directory when cd fails.
         for command in (
             'cd nested || python3 -m bandit -cfixture-sensitive.json -- example.py',
@@ -209,7 +209,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertFalse(self.check(command)[0], command)
-        (self.root / '.getzilla/config/policy.json').write_text('{}\n')
+        (self.root / '.getzilla/config/policy.json').write_text('{"schema_version": 2}\n')
         command = 'cd nested && python3 -m bandit -c.env.example -o.env.example -- example.py'
         self.assertTrue(self.check(command)[0], command)
 
@@ -218,7 +218,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
 
         (self.root / 'nested/deeper').mkdir(parents=True)
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         for prefix in ('cd nested || true; ', 'cd nested || true && ',
                        'cd nested && cd deeper || true; ', 'true || cd nested; '):
             for operand in ('-cfixture-sensitive.json -- example.py',
@@ -244,7 +244,7 @@ class PythonScannerPolicyTests(unittest.TestCase):
         directory = self.root / 'nested'
         (directory / 'deeper').mkdir(parents=True)
         (self.root / '.getzilla/config/policy.json').write_text(
-            '{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+            '{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         # A failed command can skip cd; a later join resumes in the original directory.
         for separator in ('; ', '\n', ' & ', ' | ', ' |& '):
             for operand in ('-cfixture-sensitive.json -- example.py',

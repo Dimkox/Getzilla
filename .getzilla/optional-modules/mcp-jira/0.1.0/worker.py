@@ -130,7 +130,7 @@ def main():
         managed._policy(root,tool)
         binary=managed.Binary(root,tool.executable,tool.digest)
         stack.callback(binary.close)
-        bootstrap=managed.Binary(root,str(Path(sys.executable).resolve()))
+        bootstrap=managed.qualified_python(root)
         stack.callback(bootstrap.close)
         sandbox=managed.Binary(root,'/usr/bin/bwrap')
         stack.callback(sandbox.close)

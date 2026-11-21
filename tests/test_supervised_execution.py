@@ -22,10 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(sys.platform == "linux" and shutil.which("bwrap"), "Linux namespace profile required")
 class SupervisedExecutionTests(unittest.TestCase):
     def setUp(self):
-        base = ROOT / ".getzilla/runtime"
-        base.mkdir(mode=0o700, parents=True, exist_ok=True)
-        base.chmod(0o700)
-        temporary = tempfile.TemporaryDirectory(dir=base)
+        temporary = tempfile.TemporaryDirectory(dir="/tmp")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.session = "supervised-test-only"
@@ -44,7 +41,7 @@ class SupervisedExecutionTests(unittest.TestCase):
     def configure(self, code):
         target = self.root / "bin/python3"
         target.parent.mkdir(mode=0o700, exist_ok=True)
-        shutil.copyfile(Path(sys.executable).resolve(), target)
+        shutil.copyfile(Path("/usr/bin/python3").resolve(), target)
         target.chmod(0o755)
         script = self.root / "fixture_program.py"
         script.write_text(code)
@@ -277,7 +274,7 @@ class SupervisedExecutionTests(unittest.TestCase):
                     # source bound. Pin the existing system ELF outside it.
                     config_path = target / ".getzilla/config/toolchain.json"
                     config = json.loads(config_path.read_text())
-                    executable = Path(sys.executable).resolve()
+                    executable = Path("/usr/bin/python3").resolve()
                     config["tools"][0]["commands"] = [executable.name]
                     config["tools"][0]["managed"]["executable"] = str(executable)
                     config["tools"][0]["managed"]["sha256"] = hashlib.sha256(executable.read_bytes()).hexdigest()
