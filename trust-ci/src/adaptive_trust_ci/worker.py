@@ -24,6 +24,11 @@ class Worker:
     stop_event: threading.Event
 
     @classmethod
+    def build_public(cls, config_path):
+        from .public_runtime import PublicWorker
+        return PublicWorker.load(config_path)
+
+    @classmethod
     def build(cls, settings: WorkerSettings) -> 'Worker':
         catalog = PolicyCatalog.load(settings.common.policy_path)
         cls._validate_catalog_paths(settings, catalog)

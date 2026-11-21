@@ -19,6 +19,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     worker = sub.add_parser('worker', help='Run a durable Trust CI worker')
     worker.add_argument('--once', action='store_true')
+    for command in (api, worker):
+        command.add_argument('--enable-public', action='store_true', help='Explicitly select default-off canonical public mode')
+        command.add_argument('--public-config', type=Path)
+
+    public_init = sub.add_parser('public-journal-init', help='Explicitly initialize or extend a public journal without erasing prior records')
+    public_init.add_argument('--public-config', required=True, type=Path)
+
+    public_prepare = sub.add_parser('public-prepare', help='Protected producer workflow: prepare unsigned qualified inputs for its actual run')
+    public_prepare.add_argument('--public-config', required=True, type=Path)
+    public_prepare.add_argument('--pr', required=True, type=int)
+
+    public_preflight = sub.add_parser('public-preflight', help='Measure the delegated Linux producer profile without keys, transport or scanning')
+    public_preflight.add_argument('--public-config', required=True, type=Path)
 
     sub.add_parser('migrate', help='Apply pending checksum-locked PostgreSQL migrations')
     sub.add_parser('migration-status', help='Report applied and pending migrations')
@@ -106,17 +119,51 @@ def main(argv: list[str] | None = None) -> int:
         from .api import create_app
         from .settings import ApiSettings
 
-        settings = ApiSettings.load()
-        uvicorn.run(create_app(settings), host=args.host, port=args.port, access_log=True)
+        if args.enable_public or args.public_config is not None:
+            from .settings import PublicApiSettings
+            from .public_runtime import load_ingress
+            if not args.enable_public or args.public_config is None:
+                raise ValueError('public mode requires --enable-public and --public-config')
+            settings = PublicApiSettings.load()
+            ingress = load_ingress(args.public_config, settings.webhook_secret.encode())
+            app = create_app(settings, public_enabled=True, public_ingress=ingress)
+        else:
+            app = create_app(ApiSettings.load())
+        uvicorn.run(app, host=args.host, port=args.port, access_log=True)
         return 0
 
     if args.command == 'worker':
         from .settings import WorkerSettings
         from .worker import Worker, install_signal_handlers
 
-        worker = Worker.build(WorkerSettings.load())
+        if args.enable_public or args.public_config is not None:
+            if not args.enable_public or args.public_config is None:
+                raise ValueError('public mode requires --enable-public and --public-config')
+            worker = Worker.build_public(args.public_config)
+        else:
+            worker = Worker.build(WorkerSettings.load())
         install_signal_handlers(worker)
         return worker.run(once=args.once)
+
+    if args.command == 'public-preflight':
+        import time
+        from .public_runtime import load_config
+        from .public_process import ProducerEnvelope
+        config = load_config(args.public_config, enabled=True)
+        with ProducerEnvelope(config.producer['cgroup_root'], time.monotonic() + 5) as envelope:
+            pass
+        print(json.dumps({'kind': 'local-producer-profile', 'empty_confirmed': envelope.empty_confirmed, 'external_eligible': False}))
+        return 0
+
+    if args.command == 'public-prepare':
+        from .public_producer import prepare_workflow
+        prepare_workflow(args.public_config, args.pr)
+        return 0
+
+    if args.command == 'public-journal-init':
+        from .public_runtime import initialize_journal
+        initialize_journal(args.public_config)
+        return 0
 
     if args.command == 'migrate':
         from .migrations import PostgresMigrator
@@ -219,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == 'approval-submit':
+        from .http_response import request_bytes
+
         payload = args.approval.read_bytes()
         request = urllib.request.Request(
             args.url.rstrip('/') + '/approvals',
@@ -227,11 +276,15 @@ def main(argv: list[str] | None = None) -> int:
             headers={'Content-Type': 'application/json', 'User-Agent': 'adaptive-trust-ci-human/2.1.0'},
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310: the operator names the Trust CI API URL
-                sys.stdout.buffer.write(response.read())
+            status, response_body = request_bytes(request)
+            if 200 <= status < 300:
+                sys.stdout.buffer.write(response_body)
                 sys.stdout.write('\n')
-        except urllib.error.HTTPError as exc:
-            sys.stderr.buffer.write(exc.read())
+            else:
+                sys.stderr.buffer.write(response_body)
+                return 1
+        except OSError as exc:
+            print(f'approval request failed: {exc}', file=sys.stderr)
             return 1
         return 0
 

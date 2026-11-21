@@ -15,7 +15,10 @@ from .models import canonical_json, parse_datetime, require_digest, require_sha
 
 BUNDLE_BYTES = 2097152
 CONTROL_BYTES, CONTROL_TOTAL = 1048576, 6291456
-SOURCE_BYTES = SNAPSHOT_BYTES = 33554432
+SOURCE_BYTES, SOURCE_FILES = 67108864, 8192
+SNAPSHOT_BYTES = 33554432
+PUBLIC_SNAPSHOT_BYTES = 768 * 1024 * 1024
+SNAPSHOT_PROFILES = {"legacy": SNAPSHOT_BYTES, "public-768": PUBLIC_SNAPSHOT_BYTES}
 MEMBER_BYTES, OUTPUT_BYTES = 16777216, 65536
 AGE_SECONDS = 259200
 MAX_CHECKS, MAX_SOURCES, MAX_JOBS = 64, 128, 100
@@ -183,6 +186,7 @@ class BundlePolicy:
     public_key_pem: bytes = b''
     authority_digest: str | None = None
     required_jobs: tuple = ()
+    snapshot_profile: str = "legacy"
 
 
 @dataclass(frozen=True)
@@ -329,6 +333,57 @@ def _binding(policy, source, value, now):
         return False
 
 
+def result_finding_count(name, marker):
+    # Only these independently recomputed passing families carry positive
+    # compliance/forecast evidence in findings. Keep their complete raw details;
+    # the count describes refusal findings, not the number of evidence records.
+    if name in ('security-licenses', 'security-epss') and marker.get('outcome') == 'pass':
+        return 0
+    return len(marker['findings'])
+
+
+def snapshot_limit(policy=None):
+    if policy is None:
+        return SNAPSHOT_BYTES
+    if type(policy) is not BundlePolicy or policy.snapshot_profile not in SNAPSHOT_PROFILES:
+        raise BundleError('protected-snapshot-profile-required')
+    return SNAPSHOT_PROFILES[policy.snapshot_profile]
+
+
+def source_size_ok(total, count):
+    """Owner-selected full-source capacity; snapshot/envelope limits stay separate."""
+    return (type(total) is int and type(count) is int
+            and 0 <= total <= SOURCE_BYTES and 0 <= count <= SOURCE_FILES)
+
+
+def coverage_refusal(facts, checks, *, now):
+    """Shared pure coverage precondition; this grants no admission authority."""
+    if (type(facts.required) is not tuple or not 1 <= len(facts.required) <= MAX_CHECKS or
+            any(type(row) is not Requirement or type(row.source_ids) is not tuple for row in facts.required) or
+            type(facts.sources) is not tuple or any(type(row) is not ValidatedSource for row in facts.sources)):
+        return 'coverage-unavailable'
+    names([row.name for row in facts.required], MAX_CHECKS)
+    supplied = {row['name']: row for row in checks}
+    if set(supplied) != {row.name for row in facts.required}:
+        return 'check-coverage'
+    names([row.source_id for row in facts.sources], MAX_SOURCES)
+    for row in facts.sources:
+        exact_digest(row.content_digest)
+        if row.validated is not True or not _age(row.acquired_at, now):
+            return 'source-freshness-or-validation'
+    available = {row.source_id for row in facts.sources}
+    for row in facts.required:
+        names(row.source_ids, MAX_SOURCES)
+        check = supplied[row.name]
+        expected = ('pass', 'pass') if row.required is True else ('skip', 'not_applicable')
+        if (type(row.required) is not bool or (check['status'], check['outcome']) != expected or
+                check['finding_count'] != 0 or check['gap_count'] != 0 or
+                set(check['source_ids']) != set(row.source_ids) or not set(row.source_ids) <= available or
+                check['coverage_sha256'] != row.coverage_digest or row.coverage_digest != facts.inventory_digest):
+            return 'check-outcome-or-coverage'
+    return None
+
+
 def evaluate_bundle(policy, source, evidence, observed, facts, *, now):
     """Explicit data only. A consistent result never authorizes an external effect."""
     try:
@@ -350,29 +405,9 @@ def evaluate_bundle(policy, source, evidence, observed, facts, *, now):
         created, expires = parse_datetime(report['created_at']), parse_datetime(report['valid_until'])
         if not _age(report['created_at'], now) or not now <= expires or not 0 <= (expires - created).total_seconds() <= AGE_SECONDS:
             return BundleDecision(False, ('report-freshness',))
-        if (type(facts.required) is not tuple or not 1 <= len(facts.required) <= MAX_CHECKS or
-                any(type(row) is not Requirement or type(row.source_ids) is not tuple for row in facts.required) or
-                type(facts.sources) is not tuple or any(type(row) is not ValidatedSource for row in facts.sources)):
-            return BundleDecision(False, ('coverage-unavailable',))
-        names([row.name for row in facts.required], MAX_CHECKS)
-        supplied = {row['name']: row for row in report['checks']}
-        if set(supplied) != {row.name for row in facts.required}:
-            return BundleDecision(False, ('check-coverage',))
-        names([row.source_id for row in facts.sources], MAX_SOURCES)
-        for row in facts.sources:
-            exact_digest(row.content_digest)
-            if row.validated is not True or not _age(row.acquired_at, now):
-                return BundleDecision(False, ('source-freshness-or-validation',))
-        available = {row.source_id for row in facts.sources}
-        for row in facts.required:
-            names(row.source_ids, MAX_SOURCES)
-            check = supplied[row.name]
-            expected = ('pass', 'pass') if row.required is True else ('skip', 'not_applicable')
-            if (type(row.required) is not bool or (check['status'], check['outcome']) != expected or
-                    check['finding_count'] != 0 or check['gap_count'] != 0 or
-                    set(check['source_ids']) != set(row.source_ids) or not set(row.source_ids) <= available or
-                    check['coverage_sha256'] != row.coverage_digest or row.coverage_digest != facts.inventory_digest):
-                return BundleDecision(False, ('check-outcome-or-coverage',))
+        reason = coverage_refusal(facts, report['checks'], now=now)
+        if reason is not None:
+            return BundleDecision(False, (reason,))
         if observed.source_digest != facts.source_digest or observed.mode != source.mode or observed.blockers:
             return BundleDecision(False, ('observation-mismatch',))
         if value['integration'] is not None and (facts.integration_validated is not True or facts.integration_digest != digest(value['integration'])):

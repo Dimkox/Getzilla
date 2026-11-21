@@ -181,6 +181,7 @@ jobs:
         if: always()
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Python 3.13
@@ -239,6 +240,7 @@ jobs:
           if [ -f .getzilla/config/python-test-requirements.txt ]; then
             python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
           fi
+          python -m pip install --disable-pip-version-check --require-hashes -r trust-ci/requirements-build.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
           python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
       - name: Require the real Linux CJS ESM and read-only sandbox profile
@@ -286,8 +288,27 @@ jobs:
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
         run: |
-          set -o pipefail
-          python -m unittest discover -s trust-ci/tests 2>&1 | tee "$RUNNER_TEMP/trust-ci-tests.log"
+          set -euo pipefail
+          exec > >(tee "$RUNNER_TEMP/trust-ci-tests.log") 2>&1
+          # These two integration suites consume the operator Core and its image fixtures.
+          checker=4f3bf76ceee183430b5cad5ad5419f6e6a919b5c
+          fixture=$(mktemp -d "$RUNNER_TEMP/trust-ci-core.XXXXXXXX")
+          git archive "$checker" .getzilla scripts | tar -x -C "$fixture"
+          git archive HEAD trust-ci .github architecture | tar -x -C "$fixture"
+          shopt -s globstar nullglob
+          native=()
+          for path in trust-ci/tests/**/test*.py; do
+            name=${path#trust-ci/tests/}
+            case "$name" in test_ops.py|test_public_admission.py) continue ;; esac
+            name=${name%.py}
+            native+=("${name//\//.}")
+          done
+          test "${#native[@]}" -gt 0
+          native_exit=0
+          PYTHONPATH="$PWD/trust-ci/tests:$PWD/trust-ci/src:$PWD/.getzilla" python -m unittest "${native[@]}" || native_exit=$?
+          cd "$fixture"
+          PYTHONPATH="$PWD/trust-ci/tests:$PWD/trust-ci/src:$PWD/.getzilla" python -m unittest test_ops test_public_admission
+          exit "$native_exit"
       - name: Annotate failing tests
         if: failure() && steps.source_checkout.outcome == 'success'
         shell: python
@@ -464,6 +485,7 @@ jobs:
         if: success() || failure()
         run: |
           python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
+          python -m pip install --disable-pip-version-check --require-hashes -r trust-ci/requirements-build.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
           python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
       - name: Core tests on macOS
