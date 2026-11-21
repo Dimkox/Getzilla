@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -95,7 +96,6 @@ def _selection_authority(root, env):
     from .security_cli import source_binding, ci_run_context
     from .security_tools import TRUSTED_ROOT
     from .public_security_context import current_context, validate_context
-    import tempfile
     with tempfile.TemporaryDirectory(prefix='selection-binding-', dir=Path(root).parent) as directory:
         source = source_binding(root, TRUSTED_ROOT, Path(directory))
     context = current_context()
@@ -114,6 +114,9 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
     declaration = env.get('GETZILLA_SECURITY_IMAGE_SELECTION')
     if not selected and not declaration:
         return collect_inventory(root)
+    if declaration and not selected and 'GETZILLA_SECURITY_INPUT_PROFILE' not in env:
+        # Preserve393's declaration-only API; it never grants scanner credit.
+        return current_inventory(root, environ=env, now=now)
     selection = read_image_selection(Path(declaration)) if declaration else None
     catalog = None
     if selected:
@@ -141,6 +144,24 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
     if selected and _json(read_file(path.parent, path.name, MAX_INDEX_BYTES)) != catalog:
         raise SecurityDataError('selected image catalog changed during native consumption')
     return inventory
+
+
+def current_inventory(root: Path, *, environ=None, now=None) -> dict[str, Any]:
+    """Revalidate native selection against current source/checker/run and age."""
+    env = os.environ if environ is None else environ
+    path = env.get('GETZILLA_SECURITY_IMAGE_SELECTION')
+    selection = read_image_selection(Path(path)) if path else None
+    if selection is None:
+        return collect_inventory(root)
+    from .security_cli import validate_selection_authority
+    before, run = _selection_authority(root, env)
+    validate_selection_authority(before, run, selection, now=_clock(now))
+    result = declared_inventory(root, selection)
+    after, after_run = _selection_authority(root, env)
+    validate_selection_authority(after, after_run, selection, now=_clock(now))
+    if after != before or after_run != run or read_image_selection(Path(path)) != selection:
+        raise SecurityDataError('image selection authority changed during native consumption')
+    return result
 
 
 def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime | None = None,

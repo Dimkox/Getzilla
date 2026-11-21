@@ -427,6 +427,9 @@ def qualify_image_use(reference: str, path: str, line: int, source_sha256: str, 
             'source_sha256': source_sha256}
     if used is not None:
         item['source_selection_sha256'] = used
+        # Preserve393's declaration fields alongside the OCI source-use key.
+        item['selection_sha256'] = used
+        item['selection_assurance'] = 'declaration-only-unverified'
     return item, gaps, used
 
 
