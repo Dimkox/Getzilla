@@ -111,6 +111,7 @@ def _directory_identity(info):
 class Binary:
     """A checked open ELF descriptor. Never execute a re-resolved command path."""
     def __init__(self, root, path, expected=None):
+        self.path = path
         self.stack = ExitStack()
         try:
             owner = root.lstat().st_uid
@@ -194,7 +195,7 @@ def _start_identity(process, pidfd):
 
 def _spawn(root, binary, bootstrap, tool):
     return fsx.owned_popen(
-        [str(Path(sys.executable).resolve()), '-I', '-S', '-c', _LAUNCHER, str(bootstrap.fd),
+        [bootstrap.path, '-I', '-S', '-c', _LAUNCHER, str(bootstrap.fd),
          str(binary.fd), tool.executable, *tool.arguments],
         executable=f'/proc/self/fd/{bootstrap.fd}', pass_fds=(bootstrap.fd, binary.fd),
         cwd=root, env=_ENVIRONMENT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -281,7 +282,7 @@ class Backend:
                 raise execution.ExecutionError('managed_config_changed')
             _policy(root, self.tool)
             for old, path, expected in ((self.binary, self.tool.executable, self.tool.digest),
-                                        (self.bootstrap, str(Path(sys.executable).resolve()), self.bootstrap.digest)):
+                                        (self.bootstrap, self.bootstrap.path, self.bootstrap.digest)):
                 candidate = Binary(root, path, expected)
                 try:
                     if candidate.identity != old.identity or _identity(os.fstat(old.fd)) != old.identity:
@@ -364,7 +365,16 @@ def run(root, caller, *, tool_id, intent_key, hard_timeout_seconds):
     with ExitStack() as stack:
         binary = Binary(root, tool.executable, tool.digest)
         stack.callback(binary.close)
-        bootstrap = Binary(root, str(Path(sys.executable).resolve()))
+        # The gate uses only the standard library. Hosted toolcache interpreters
+        # can have writable ancestors, so qualify the distribution Python too.
+        host_python = str(Path(sys.executable).resolve())
+        try:
+            bootstrap = Binary(root, host_python)
+        except execution.ExecutionError:
+            system_python = str(Path('/usr/bin/python3').resolve())
+            if system_python == host_python:
+                raise
+            bootstrap = Binary(root, system_python)
         stack.callback(bootstrap.close)
         return execution.submit(root, caller, execution.SubmitRequest(
             intent_key, {'tool_id': tool.id}, hard_timeout_seconds, label='managed-local'),

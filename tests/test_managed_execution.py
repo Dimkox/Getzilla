@@ -172,6 +172,18 @@ class ManagedExecutionTests(unittest.TestCase):
         self.assertEqual(result['launch']['phase'], 'finished')
         self.assertEqual(len(store.load_registry(self.root)['records']), 1)
 
+    @unittest.skipUnless(Path('/usr/bin/python3').is_file(), 'requires distribution Python')
+    def test_launcher_with_unqualified_host_python(self):
+        self.configure('/usr/bin/true', [])
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        host = Path(temporary.name) / 'host-python'
+        shutil.copyfile(sys.executable, host)
+        host.chmod(0o775)
+        with patch.object(sys, 'executable', str(host)):
+            result = self.run_tool()
+        self.assertEqual(result['execution_status'], 'succeeded')
+
     def test_changed_executable_refuses_before_attempt_or_effect(self):
         binary = self.configure('/usr/bin/true', [])
         binary.write_bytes(b'compromised fixture, never executable')
