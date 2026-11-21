@@ -46,6 +46,22 @@ class LatestReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'digest'):
             releases.github_asset(release, 'tool.zip')
 
+    def test_node_macos_index_and_checksum_names(self):
+        for architecture in ('arm64', 'x64'):
+            with self.subTest(architecture=architecture):
+                variant = f'osx-{architecture}-tar'
+                filename = f'node-v26.13.1-darwin-{architecture}.tar.gz'
+                index = [{'version': 'v26.13.1', 'files': [variant]}]
+                checksums = ('a' * 64 + '  ' + filename + '\n').encode()
+                def fetch(url):
+                    return encoded(index) if url.endswith('/index.json') else checksums
+                target = releases.node_release(fetch, 'darwin', architecture)
+                self.assertEqual(target.filename, filename)
+                self.assertEqual(target.sha256, 'a' * 64)
+                index[0]['files'] = [f'osx-{architecture}-pkg']
+                with self.assertRaisesRegex(ValueError, 'no .* asset'):
+                    releases.node_release(fetch, 'darwin', architecture)
+
     def test_npm_independent_latest_integrity_and_identity(self):
         data = dict(name='npm', version='12.0.0', engines={'node': '>=26'},
                     dist=dict(tarball='https://registry.npmjs.org/npm/-/npm-12.0.0.tgz',
