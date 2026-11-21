@@ -3,14 +3,13 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-import ast
 import base64
 import copy
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -98,14 +97,15 @@ class CanonicalProducerFixture(unittest.TestCase):
         self.signer = Signer(key)
         pem = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         source = Path(__file__).resolve().parents[2] / '.getzilla/getzilla/security_cli.py'
-        parsed = ast.parse(source.read_text())
-        names = {'_clock', '_digest', '_findings_consistent', '_detail_consistent', 'finalize_report'}
-        functions = [node for node in parsed.body if isinstance(node, ast.FunctionDef) and node.name in names]
-        required = next(ast.literal_eval(node.value) for node in parsed.body if isinstance(node, ast.Assign)
-                        and any(isinstance(t, ast.Name) and t.id == 'REQUIRED_CHECKS' for t in node.targets))
-        namespace = {'datetime': datetime, 'timezone': timezone, 'timedelta': timedelta, 're': re,
-                     'CHECK_FAMILIES': {}, 'REQUIRED_CHECKS': required, 'MAX_AGE_SECONDS': 259200}
-        exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), 'exec'), namespace)
+        engine = str(source.parents[1])
+        if engine not in sys.path:
+            sys.path.insert(0, engine)
+            self.addCleanup(lambda: sys.path.remove(engine))
+        # Import through the real package so report helpers retain their
+        # accepted dependencies when Core moves them to another module.
+        from getzilla import security_cli
+        namespace = dict(vars(security_cli))
+        required = security_cli.REQUIRED_CHECKS
         self.pure_report = namespace
         manifest = admission.content_manifest(self.candidate_root)
         inventory = {'complete': True, 'digest': bundle.digest(manifest), 'files': [row['path'] for row in manifest]}

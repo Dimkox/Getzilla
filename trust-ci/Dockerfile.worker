@@ -14,10 +14,26 @@ RUN apt-get update \
     && chown -R 10001:10001 /var/lib/adaptive-trust-ci /run/adaptive-trust-ci
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md requirements.txt ./
+COPY pyproject.toml README.md uv.lock lock_profiles.py lock_profile_validation.py lock-profiles.json requirements-*.txt ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir --require-hashes -r requirements.txt \
-    && python -m pip install --no-cache-dir --no-deps .
+RUN python lock_profiles.py --check \
+    && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes --no-deps -r requirements-runtime.txt \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation .
+
+# Optional public-mode checker distribution. All three operator pins are
+# required together; unset keeps the original private image. The checker source
+# is fetched independently of this candidate build context and retains genuine
+# Git identity/configuration. This does not approve the initial accepted pin.
+ARG PUBLIC_CHECKER_REPOSITORY
+ARG PUBLIC_CHECKER_COMMIT
+ARG PUBLIC_CHECKER_TREE
+ARG PUBLIC_CHECKER_INPUTS=public-checker-inputs
+COPY ${PUBLIC_CHECKER_INPUTS}/ /opt/public-checker-inputs/
+COPY scripts/install_public_checker.py /usr/local/lib/install_public_checker.py
+RUN python -I -B /usr/local/lib/install_public_checker.py \
+    --repository "$PUBLIC_CHECKER_REPOSITORY" \
+    --commit "$PUBLIC_CHECKER_COMMIT" \
+    --tree "$PUBLIC_CHECKER_TREE"
 
 # Optional public-mode checker distribution. All three operator pins are
 # required together; unset keeps the original private image. The checker source
