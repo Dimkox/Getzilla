@@ -954,7 +954,7 @@ class ContourTests(unittest.TestCase):
             self.assertIsNotNone(active)
             change = root / str(active['path'])
             tests_dir = root / 'tests'
-            tests_dir.mkdir()
+            tests_dir.mkdir(exist_ok=True)
             (tests_dir / 'test_ok.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             evidence = change / 'evidence'
             evidence.mkdir(parents=True, exist_ok=True)

@@ -201,7 +201,7 @@ def stack_checks(root: Path, mode: str, changed: list[str], *, make: Callable[..
             continue
         if stack.id not in runners:
             metadata['not_verified'].append(stack.id)
-            refused = mode in {'pr', 'release'}
+            refused = required_plan is not None or mode in {'pr', 'release'}
             results.append(make(f'stack:{stack.id}', 'fail' if refused else 'skip', f'{NOT_VERIFIED}:{stack.id}', details=[{
                 'severity': 'error' if refused else 'warning', 'code': f'{NOT_VERIFIED}:{stack.id}', 'path': touched[0],
                 'message': f'Getzilla has no checks for {stack.id} yet; {len(touched)} changed file(s) are not verified',
