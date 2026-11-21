@@ -18,6 +18,8 @@ import tempfile
 import time
 import tracemalloc
 
+sys.dont_write_bytecode = True
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / '.getzilla'))

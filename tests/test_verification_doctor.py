@@ -3165,7 +3165,8 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
 
     def test_default_scan_cannot_borrow_ambient_but_inner_owned_sources_work(self):
         import zipfile
-        from getzilla import known_vulns
+        from getzilla import known_vulns, security_acquisition, security_osv_query
+        from tests.test_known_vulns import _mirror
 
         for minimal in (False, True):
             with self.subTest(minimal=minimal), tempfile.TemporaryDirectory() as directory:
@@ -3175,10 +3176,9 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
                     pass
                 ambient = {'GETZILLA_OSV_DB': str(ambient_mirror), 'GETZILLA_OSV_ONLINE': '1'}
                 with patch.dict(os.environ, ambient):
-                    with full_project_copy(minimal_runtime=minimal) as root:
+                    with full_project_copy(git=True, minimal_runtime=minimal, source_only_runtime=True) as root:
                         (root / 'requirements.txt').write_text('owned-fixture==1.0\n', encoding='utf-8')
-                        with patch.object(known_vulns, '_tracked_files', return_value=['requirements.txt']), \
-                                patch.object(known_vulns, 'query_offline', wraps=known_vulns.query_offline) as offline, \
+                        with patch.object(known_vulns, 'query_offline', wraps=known_vulns.query_offline) as offline, \
                                 patch.object(known_vulns, 'query_online', wraps=known_vulns.query_online) as online:
                             def forbidden_fetch(_url, _body):
                                 self.fail('default synthetic scan attempted online access')
@@ -3187,12 +3187,10 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
                             self.assertEqual((report['status'], report['dependencies']), ('skip', 1))
                             offline.assert_not_called()
                             online.assert_not_called()
-                            owned_mirror = root / 'owned-mirror'
-                            (owned_mirror / 'PyPI').mkdir(parents=True)
+                            owned_mirror = Path(directory) / 'owned-mirror'
                             record = {'id': 'OWNED-2026-1', 'aliases': [], 'affected': [{
                                 'package': {'ecosystem': 'PyPI', 'name': 'owned-fixture'}, 'versions': ['1.0']}]}
-                            with zipfile.ZipFile(owned_mirror / 'PyPI/all.zip', 'w') as archive:
-                                archive.writestr('OWNED-2026-1.json', json.dumps(record))
+                            _mirror(owned_mirror, 'PyPI', [record])
                             os.environ['GETZILLA_OSV_DB'] = str(owned_mirror)
                             report = known_vulns.scan(root, fetch=forbidden_fetch)
                             self.assertEqual(report['status'], 'fail')
@@ -3200,16 +3198,18 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
                             offline.assert_called_once()
                             self.assertEqual(offline.call_args.args[1], owned_mirror)
                             online.assert_not_called()
-                            os.environ.pop('GETZILLA_OSV_DB')
                             os.environ['GETZILLA_OSV_ONLINE'] = '1'
                             requests = []
 
-                            def fetch(_url, body):
+                            def transport(method, url, body, deadline, maximum):
                                 requests.append(json.loads(body))
-                                return json.dumps({'results': [{}]}).encode('utf-8')
+                                response = json.dumps({'results': [{}]}).encode()
+                                return security_osv_query.QueryResponse(method, url, body, response, 200, url)
 
-                            self.assertEqual(known_vulns.scan(root, fetch=fetch)['status'], 'pass')
-                            online.assert_called_once()
+                            refreshed = security_acquisition.refresh_query(root, owned_mirror, transport=transport)
+                            self.assertEqual(refreshed['status'], 'pass', refreshed)
+                            self.assertEqual(known_vulns.scan(root, fetch=forbidden_fetch)['status'], 'pass')
+                            online.assert_not_called()
                             self.assertEqual(len(requests), 1)
                             self.assertEqual(requests[0]['queries'][0]['package']['name'], 'owned-fixture')
                     self.assertEqual({key: os.environ.get(key) for key in ambient}, ambient)

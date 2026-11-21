@@ -157,7 +157,7 @@
         },
         ".claude/skills/getzilla-delivery/SKILL.md": {
           "mode": 420,
-          "sha256": "a2425d33986820af46f6c9ba1f0e0911e38260d59d76d0931ac68fe2fa633b69"
+          "sha256": "53f556b0089e5bcb2871aacea607ffcc5324db1fb8e9e835a26fecc61bedbe34"
         },
         ".claude/skills/incident-response/SKILL.md": {
           "mode": 420,
@@ -181,7 +181,7 @@
         },
         ".claude/skills/verification-evidence/SKILL.md": {
           "mode": 420,
-          "sha256": "f744675931a834d84ba09dffceb95e6a35fa0bee6a09a857876623ca7ee30708"
+          "sha256": "b947bcf0e4990f2feb784f76949617b798efc3871e616cdaec2d5607fd0c1fb9"
         }
       }
     },
@@ -287,7 +287,7 @@
         },
         ".codex/hooks.json": {
           "mode": 420,
-          "sha256": "c3291387d866acb6bd24d6258dda0fb79433ae9d7db59682e0c7fae8ac931ab3"
+          "sha256": "6faa9119532d2ff6744bad478fe92e98b25133db463eca85d939a33ba9b82997"
         }
       }
     },
@@ -388,12 +388,20 @@
         },
         ".github/hooks/getzilla.json": {
           "mode": 420,
-          "sha256": "ce5613346d138ac5869862cd769df1fb7d554c80b5bc7248a594e9f35937d4ce"
+          "sha256": "5de56d5ffec848c65f61ab5c477417ff0899e61fca600045755759e3d9101f69"
         }
       }
     },
     "agent:cursor": {
       "files": [
+        ".cursor/rules/getzilla/00-core.mdc",
+        ".cursor/rules/getzilla/10-security.mdc",
+        ".cursor/rules/getzilla/20-python.mdc",
+        ".cursor/rules/getzilla/30-contracts-data.mdc",
+        ".cursor/rules/getzilla/40-tests.mdc",
+        ".cursor/rules/getzilla/50-agent-runtime.mdc",
+        ".cursor/rules/getzilla/60-frontend.mdc",
+        ".cursor/rules/getzilla/70-delivery.mdc",
         ".getzilla/cursor-rules/00-core.toml",
         ".getzilla/cursor-rules/10-security.toml",
         ".getzilla/cursor-rules/20-python.toml",
@@ -404,6 +412,38 @@
         ".getzilla/cursor-rules/70-delivery.toml"
       ],
       "owned": {
+        ".cursor/rules/getzilla/00-core.mdc": {
+          "mode": 420,
+          "sha256": "882cfc515161119cb58b94abcd6967270aa56ad4c2d016a51b03f2fd8c8c19e3"
+        },
+        ".cursor/rules/getzilla/10-security.mdc": {
+          "mode": 420,
+          "sha256": "2dd71440207a631b62aa62b446929665ca85cf9963d8eefac17467c42349ccf0"
+        },
+        ".cursor/rules/getzilla/20-python.mdc": {
+          "mode": 420,
+          "sha256": "1bc5e718809c3a54eab53490f908da8454f9c9c69cf50baaad17d1fc8c6dcfb4"
+        },
+        ".cursor/rules/getzilla/30-contracts-data.mdc": {
+          "mode": 420,
+          "sha256": "2403f986efb662d479be91d986542e0813b5e3069f74849aebd7c814f40cc8d4"
+        },
+        ".cursor/rules/getzilla/40-tests.mdc": {
+          "mode": 420,
+          "sha256": "acad161aa37d008cb57746c2fd761c2672146a9a21a22d54e09ec46f0984b265"
+        },
+        ".cursor/rules/getzilla/50-agent-runtime.mdc": {
+          "mode": 420,
+          "sha256": "86650ff72d945b377ba0e8e81db7a03109e28d314ce0d2e0113972c4aea1a139"
+        },
+        ".cursor/rules/getzilla/60-frontend.mdc": {
+          "mode": 420,
+          "sha256": "5fedea0e6ac3a4a5dcd73761dad0f1cfe94f950db3a44765d33a8a6688c8090d"
+        },
+        ".cursor/rules/getzilla/70-delivery.mdc": {
+          "mode": 420,
+          "sha256": "0082f1bc91b128197164dc2c88886e25986c6bd365160776778d27a56280f2a5"
+        },
         ".getzilla/cursor-rules/00-core.toml": {
           "mode": 420,
           "sha256": "24e195cfebbea5ce0ad21dae3b1d61e735844845745a70b3f20872c2aa5736d9"
@@ -581,7 +621,7 @@
         },
         ".gemini/skills/getzilla-delivery/SKILL.md": {
           "mode": 420,
-          "sha256": "a2425d33986820af46f6c9ba1f0e0911e38260d59d76d0931ac68fe2fa633b69"
+          "sha256": "53f556b0089e5bcb2871aacea607ffcc5324db1fb8e9e835a26fecc61bedbe34"
         },
         ".gemini/skills/incident-response/SKILL.md": {
           "mode": 420,
@@ -605,7 +645,7 @@
         },
         ".gemini/skills/verification-evidence/SKILL.md": {
           "mode": 420,
-          "sha256": "f744675931a834d84ba09dffceb95e6a35fa0bee6a09a857876623ca7ee30708"
+          "sha256": "b947bcf0e4990f2feb784f76949617b798efc3871e616cdaec2d5607fd0c1fb9"
         }
       }
     },
@@ -757,7 +797,7 @@
         },
         ".grok/skills/getzilla-delivery/SKILL.md": {
           "mode": 420,
-          "sha256": "a2425d33986820af46f6c9ba1f0e0911e38260d59d76d0931ac68fe2fa633b69"
+          "sha256": "53f556b0089e5bcb2871aacea607ffcc5324db1fb8e9e835a26fecc61bedbe34"
         },
         ".grok/skills/incident-response/SKILL.md": {
           "mode": 420,
@@ -781,7 +821,7 @@
         },
         ".grok/skills/verification-evidence/SKILL.md": {
           "mode": 420,
-          "sha256": "f744675931a834d84ba09dffceb95e6a35fa0bee6a09a857876623ca7ee30708"
+          "sha256": "b947bcf0e4990f2feb784f76949617b798efc3871e616cdaec2d5607fd0c1fb9"
         }
       }
     },
@@ -928,7 +968,7 @@
         },
         ".qwen/skills/getzilla-delivery/SKILL.md": {
           "mode": 420,
-          "sha256": "a2425d33986820af46f6c9ba1f0e0911e38260d59d76d0931ac68fe2fa633b69"
+          "sha256": "53f556b0089e5bcb2871aacea607ffcc5324db1fb8e9e835a26fecc61bedbe34"
         },
         ".qwen/skills/incident-response/SKILL.md": {
           "mode": 420,
@@ -952,7 +992,7 @@
         },
         ".qwen/skills/verification-evidence/SKILL.md": {
           "mode": 420,
-          "sha256": "f744675931a834d84ba09dffceb95e6a35fa0bee6a09a857876623ca7ee30708"
+          "sha256": "b947bcf0e4990f2feb784f76949617b798efc3871e616cdaec2d5607fd0c1fb9"
         }
       }
     },
@@ -6083,6 +6123,7 @@
         "factory/runtime/setup_manager_linux.py",
         "factory/src/getzilla_factory/__init__.py",
         "factory/src/getzilla_factory/_fpf_snapshot_data.py",
+        "factory/src/getzilla_factory/_payload_engine.py",
         "factory/src/getzilla_factory/adapters/__init__.py",
         "factory/src/getzilla_factory/adapters/base.py",
         "factory/src/getzilla_factory/adapters/codex.py",
@@ -6597,6 +6638,10 @@
         "factory/src/getzilla_factory/_fpf_snapshot_data.py": {
           "mode": 420,
           "sha256": "cc142635292c3179c15acd349c40eca03f1b9cd84cc32bc116be5e745eb5b5a1"
+        },
+        "factory/src/getzilla_factory/_payload_engine.py": {
+          "mode": 420,
+          "sha256": "c327645cff470f11e75f95b9671b95847ad4f00824a920ddcad96503e4ceba21"
         },
         "factory/src/getzilla_factory/adapters/__init__.py": {
           "mode": 420,

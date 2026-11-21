@@ -233,10 +233,8 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                     # quality tools and optional CI images stay outside its first commit.
                     omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json',
                                     'license-exception-inputs'})
-                if Path(directory) == PROJECT / '.getzilla/runtime':
-                    # Runtime can contain the fixture destination or a changing review snapshot.
-                    # Exclude it before descending; deleting copied state afterward is too late.
-                    omitted.update(name for name in names if name not in {'.gitkeep', '.gitignore'})
+                if Path(directory) == PROJECT / '.getzilla':
+                    omitted.add('runtime')
                 if (minimal_runtime and not verification_fixture and not source_only_runtime
                         and Path(directory) == PROJECT / '.getzilla/getzilla'):
                     omitted.update(name for name in names if name != '__init__.py')
@@ -251,14 +249,11 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore, copy_function=copy_file)
         runtime = root / '.getzilla/runtime'
-        if runtime.exists():
-            for child in runtime.iterdir():
-                if child.name in {'.gitkeep', '.gitignore'}:  # shipped files: runtime state stays out of Git
-                    continue
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
+        runtime.mkdir(parents=True)
+        (runtime / '.gitkeep').touch()
+        runtime_ignore = PROJECT / '.getzilla/runtime/.gitignore'
+        if runtime_ignore.is_file() and not runtime_ignore.is_symlink():
+            copy_file(runtime_ignore, runtime / '.gitignore')
         for rel in ('AGENTS.md', 'VERSION', 'ruff.toml', 'bandit.yaml', '.coveragerc'):
             src = PROJECT / rel
             if src.is_file():

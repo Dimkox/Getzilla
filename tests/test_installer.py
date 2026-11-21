@@ -435,8 +435,14 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                         self.assertEqual(json.loads(result.stdout), {'name': name, 'payload': {'sentinel': 1}})
                         canonical.unlink()
                         fallback = subprocess.run([sys.executable, name], cwd=root, input='{}', text=True, capture_output=True, timeout=10)
-                        self.assertEqual(fallback.returncode, 0, fallback.stderr)
-                        self.assertEqual(json.loads(fallback.stdout), {'decision': 'deny', 'reason': 'Getzilla canonical policy hook is missing'} if name == 'pre_tool_use.py' else {})
+                        if name == 'pre_tool_use.py':
+                            self.assertEqual(fallback.returncode, 2, fallback.stderr)
+                            refusal = json.loads(fallback.stdout)
+                            self.assertEqual(refusal['decision'], 'deny')
+                            self.assertEqual(refusal['hookSpecificOutput']['permissionDecision'], 'deny')
+                        else:
+                            self.assertEqual(fallback.returncode, 0, fallback.stderr)
+                            self.assertEqual(json.loads(fallback.stdout), {})
 
     def test_hook_aliases_use_the_inventoried_template_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -115,7 +115,7 @@ def render_codex_hooks(canonical_hooks: bytes, overlay: bytes | None) -> bytes:
     return _codex_hooks(_events_from_bytes(canonical_hooks), overlay)
 
 
-def _command(script: str, harness: str, *, windows: bool = False) -> str:
+def _command(script: str, harness: str, *, windows: bool = False, legacy: bool = False) -> str:
     """A launcher that runs the project's own hook wherever the agent was started.
 
     The project directory the agent reports (CLAUDE_PROJECT_DIR, QWEN_PROJECT_DIR or
@@ -138,6 +138,28 @@ def _command(script: str, harness: str, *, windows: bool = False) -> str:
         f"sys.argv=[str(f),'--harness','{harness}'];"
         "runpy.run_path(str(f),run_name='__main__')"
     )
+    if script == 'pre_tool_use.py' and not legacy:
+        reason = 'Mandatory Getzilla hook unavailable or failed.'
+        specific = {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', 'permissionDecisionReason': reason}
+        if harness == 'copilot':
+            refusal = {'permissionDecision': 'deny', 'permissionDecisionReason': reason}
+        elif harness in {'claude', 'codex', 'qwen'}:
+            refusal = {'hookSpecificOutput': specific}
+        else:
+            refusal = {'decision': 'deny', 'reason': reason, 'hookSpecificOutput': specific}
+        code = (
+            "import contextlib,io,json,sys\n"
+            "out=io.StringIO()\n"
+            "try:\n"
+            "    with contextlib.redirect_stdout(out):\n"
+            f"        {code}\n"
+            "except SystemExit as error:\n"
+            "    if error.code not in (0,None):\n"
+            f"        print(json.dumps({refusal!r}));sys.exit(2)\n"
+            "except BaseException:\n"
+            f"    print(json.dumps({refusal!r}));sys.exit(2)\n"
+            "sys.stdout.write(out.getvalue())"
+        )
     probe = 'import sys;sys.exit(0 if sys.version_info >= (3,11) else 1)'
     if not windows:
         return (f'for p in python3 python; do if command -v "$p" >/dev/null 2>&1 && '
@@ -260,6 +282,8 @@ def platform_hook_payload(path: str, content: bytes, *, windows: bool | None = N
                         pass
                 if script and command in (_command(script.group(1), harness),
                                            _command(script.group(1), harness, windows=True),
+                                           _command(script.group(1), harness, legacy=True),
+                                           _command(script.group(1), harness, windows=True, legacy=True),
                                            _source_hook_command(script.group(1), harness)):
                     desired = (_source_hook_command(script.group(1), harness) if source_launcher else
                                _command(script.group(1), harness, windows=windows))

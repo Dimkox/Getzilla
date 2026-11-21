@@ -499,8 +499,9 @@ class HarnessTests(unittest.TestCase):
             for fault in ('missing', 'exit', 'import', 'partial'):
                 with self.subTest(agent=agent, fault=fault), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
-                    (root / '.getzilla').mkdir()
-                    hooks = root / '.grok/hooks'
+                    (root / '.getzilla/getzilla').mkdir(parents=True)
+                    (root / '.getzilla/getzilla/__init__.py').touch()
+                    hooks = root / '.getzilla/hooks'
                     hooks.mkdir(parents=True)
                     count = root / 'count'
                     if fault != 'missing':
@@ -515,7 +516,7 @@ class HarnessTests(unittest.TestCase):
                                             shell=True, cwd=root, text=True, capture_output=True,
                                             env={k: v for k, v in os.environ.items()
                                                  if k not in ('CLAUDE_PROJECT_DIR', 'QWEN_PROJECT_DIR', 'GEMINI_PROJECT_DIR')})
-                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.returncode, 2, result.stderr)
                     data = json.loads(result.stdout)
                     if agent == 'gemini':
                         self.assertEqual(data['decision'], 'deny')

@@ -1,6 +1,9 @@
 """Regenerate/check the exact Core copy of the canonical standalone pure leaf."""
 from pathlib import Path
 import argparse
+import sys
+
+sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 CANONICAL = ROOT / 'trust-ci/lock_profile_validation.py'
