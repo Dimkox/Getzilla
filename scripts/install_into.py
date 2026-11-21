@@ -727,9 +727,12 @@ class _SourceTree:
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
                 if name in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}:
                     continue
-                if name.endswith(".egg-info") and not prefix.startswith("factory/src/"):
-                    # Editable metadata sits beside the package. Nested package
-                    # assets can legitimately use the same directory suffix.
+                if name.endswith(".egg-info") and not prefix.startswith((
+                    "factory/src/",
+                    ".getzilla/config/license-exception-inputs/factory-source-delivery-v1/vendor/",
+                )):
+                    # Editable metadata is generated beside the package. Nested
+                    # package assets and retained upstream source ship verbatim.
                     continue
                 if any(f"{relative}/".startswith(skip) and f"{relative}/" != skip for skip in SKIP_PREFIXES):
                     # Runtime state (worktrees, receipts, caches) is never payload: do not walk or count it.

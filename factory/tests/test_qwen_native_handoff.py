@@ -173,14 +173,7 @@ class InertSocketTests(CanonicalClaimTests):
                     peer.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: '+str(len(response)).encode()+b'\r\n\r\n'+response)
             except BaseException as error:
                 errors.append(type(error).__name__)
-        import subprocess
-        repository=Path(__file__).resolve().parents[2]
-        common=Path(subprocess.check_output(['git','rev-parse','--git-common-dir'],cwd=repository,text=True).strip())
-        if not common.is_absolute():
-            common=(repository/common).resolve()
-        runtime=common.parent/'.getzilla/runtime'
-        runtime.mkdir(parents=True,exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=runtime) as tmp:
+        with tempfile.TemporaryDirectory(prefix='gz-', dir=Path.home()) as tmp:
             path=Path(tmp)/'handoff.sock'
             token = secrets.token_hex(24)
             self.sink._send=QwenNativeHandoff._send.__get__(self.sink)
@@ -237,22 +230,16 @@ class NegativeTransportTests(unittest.TestCase):
             self.assertEqual(connect.call_args.args[0],('127.0.0.1',11434))
     def test_real_uds_bad_token_does_not_forward_and_cleans_socket(self):
         import socket
-        import subprocess
         import tempfile
         import threading
         import time
         from pathlib import Path
         from types import SimpleNamespace
-        repository=Path(__file__).resolve().parents[2]
-        common=Path(subprocess.check_output(['git','rev-parse','--git-common-dir'],cwd=repository,text=True).strip())
-        if not common.is_absolute():
-            common=(repository/common).resolve()
-        runtime=common.parent/'.getzilla/runtime'
         sink=object.__new__(QwenNativeHandoff)
         sink._prepared=SimpleNamespace(deadline=time.monotonic()+3)
         sink.forward=lambda *a,**k:self.fail('bad token must not reach native forwarding')
         errors=[]
-        with tempfile.TemporaryDirectory(dir=runtime) as tmp:
+        with tempfile.TemporaryDirectory(prefix='gz-', dir=Path.home()) as tmp:
             path=Path(tmp)/'auth.sock'
             def receive():
                 try:

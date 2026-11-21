@@ -216,6 +216,13 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
             MODULE.materialize_new(source, target, selection=selection)
             self.assertTrue((target / MODULE.ENGINE_ARCHIVE).is_file())
+            vendor = Path('.getzilla/config/license-exception-inputs/factory-source-delivery-v1/vendor')
+            retained = {p.relative_to(source) for p in (source / vendor).rglob('*') if p.is_file()}
+            installed = {p.relative_to(target) for p in (target / vendor).rglob('*') if p.is_file()}
+            self.assertTrue(retained)
+            self.assertEqual(installed, retained)
+            for relative in sorted(retained):
+                self.assertEqual((target / relative).read_bytes(), (source / relative).read_bytes(), relative)
             environment = dict(os.environ, TMPDIR=child_temp, TEMP=child_temp, TMP=child_temp)
             result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
                                     env=environment, text=True, capture_output=True, timeout=180)

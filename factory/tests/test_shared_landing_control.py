@@ -265,7 +265,6 @@ class SharedCredentialPinTests(unittest.TestCase):
 
 class SharedUnknownTransportTests(unittest.TestCase):
     def test_lost_before_accept_is_unknown_get_only_and_never_falls_back(self):
-        import subprocess
         import tempfile
         from pathlib import Path
         from factory.tests.test_landing_failover import configuration
@@ -275,10 +274,7 @@ class SharedUnknownTransportTests(unittest.TestCase):
         from getzilla_factory.landing_failover_contracts import backend_capability
         from getzilla_factory.landing_failover_journal import CallerJournal
         from getzilla_factory.landing_http import HttpLandingProfile
-        common=Path(subprocess.check_output(['git','rev-parse','--git-common-dir'],text=True).strip()).resolve()
-        runtime=common.parent/'.getzilla/runtime/tests'
-        runtime.mkdir(mode=0o700,parents=True,exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix='ua-',dir=runtime) as temporary:
+        with tempfile.TemporaryDirectory(prefix='ua-', dir=Path.home()) as temporary:
             document=configuration(Path(temporary),count=2)
             document.update(schema_version=2,shared_task_id='finite-task')
             token=Path(document['backends'][0]['token_file'])

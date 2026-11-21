@@ -91,7 +91,7 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         package.mkdir(parents=True)
         (package / "__init__.py").write_text("__version__='1.2.3'\n")
         (package / "server.py").write_text("raise SystemExit(0)\n")
-        (self.repo / "LICENSE").write_bytes((RUNTIME.parents[1] / "LICENSE").read_bytes())
+        (self.repo / "LICENSE").write_bytes((Path(__file__).parent / "fixtures/project-license.txt").read_bytes())
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.name", "test"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.repo, check=True)

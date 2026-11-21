@@ -91,18 +91,16 @@ class NativeBoundaryTests(unittest.TestCase):
         from getzilla_factory.workflow import NativeWorkflowBoundary
         from getzilla_factory.contracts import TaskIntakeV1
         from factory.tests.test_contracts import valid_intake
-        from tests.test_workflow_artifacts import WorkflowCompileTests
+        from factory.tests.workflow_fixture import workflow_root
 
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        compiler = WorkflowCompileTests()
-        compiler.artifacts = artifacts
         tasks = [dict(key=key, title='Observable ' + key, depends_on=deps,
                       covers=['AC-001', 'INV-001', 'FORBID-001'], files=[key + '.py'],
                       interfaces=['api'], red=['python3', '-m', 'unittest'],
                       green=['python3', '-m', 'unittest'], status='complete')
                  for key, deps in [('a', []), ('b', ['a']), ('c', [])]]
-        self.root, bundle = compiler._root(self.temp.name, [('spec-kit', 'tasks', '.specify/specs/tasks.md',
+        self.root, bundle = workflow_root(artifacts, self.temp.name, [('spec-kit', 'tasks', '.specify/specs/tasks.md',
             ''.join('<!-- AGB-TASK ' + json.dumps(task) + ' -->\n' for task in tasks))])
         self.route = dict(route_id='route', session_id='worker-01', write_agent='writer',
                           review_agents=['reviewer'], required_evidence=['verification'])

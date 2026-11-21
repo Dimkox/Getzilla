@@ -11,6 +11,7 @@ from unittest.mock import patch
 W = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(W / '.getzilla'))
 from getzilla import expanded_security as security
+from getzilla import security_corresponding_source  # noqa: F401 preload before the I/O guard
 from getzilla import security_inventory as inventory
 from getzilla import security_licenses  # preload before the closed fixture boundary
 from getzilla import security_tools
@@ -182,7 +183,7 @@ class NativeOCIConsumersTests(unittest.TestCase):
         missing = dict(env)
         missing.pop('GETZILLA_SECURITY_INPUT_PROFILE')
         with patch.object(inventory, '_tracked_files', return_value=['Dockerfile']):
-            with self.assertRaises(json.JSONDecodeError):
+            with self.assertRaisesRegex(SecurityDataError, 'current input profile absent'):
                 self.run_owned(lambda: security.selected_inventory(self.root, environ=missing))
 
 

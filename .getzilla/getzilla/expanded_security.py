@@ -141,7 +141,7 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
     inventory = (declared_inventory(root, selection) if selection is not None else
                  collect_inventory(root, image_bindings=source_bindings(catalog)))
     raw = env.get('GETZILLA_SECURITY_INPUT_PROFILE', '')
-    if not isinstance(raw, str) or len(raw.encode()) > MAX_INDEX_BYTES:
+    if not isinstance(raw, str) or not raw or len(raw.encode()) > MAX_INDEX_BYTES:
         raise SecurityDataError('selected image current input profile absent or excessive')
     profile = _json(raw.encode())
     roots = {'database': str(_database(root, env)),

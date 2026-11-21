@@ -1,10 +1,8 @@
 """Separate, hash-bound SQLite history and PostgreSQL runtime catalogs."""
-import json
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from getzilla_factory.landing_sqlite.migrations import discover_migrations
@@ -12,8 +10,6 @@ from getzilla_factory.landing_sqlite_store import APPLICATION_ID, SCHEMA_VERSION
 from getzilla_factory.migrations import discover_migrations as postgres_migrations
 
 ROOT = Path(__file__).resolve().parents[2]
-HISTORY = 'factory/sqlite'
-RUNTIME = 'factory/src/getzilla_factory/landing_sqlite/migrations'
 
 
 class LandingSQLiteMigrationTests(unittest.TestCase):
@@ -41,13 +37,10 @@ class LandingSQLiteMigrationTests(unittest.TestCase):
                 with self.assertRaises(catalog.SQLiteMigrationError):
                     catalog.discover_migrations()
 
-    def test_separate_contiguous_catalog_and_exact_history_mirrors(self):
+    def test_separate_contiguous_sqlite_and_postgres_catalogs(self):
         migrations = discover_migrations()
         self.assertEqual([item.version for item in migrations], [1, 2, 3, 4])
         self.assertEqual(SCHEMA_VERSION, migrations[-1].version)
-        for item in migrations:
-            with self.subTest(version=item.version):
-                self.assertEqual((ROOT / HISTORY / item.name).read_bytes(), (ROOT / RUNTIME / item.name).read_bytes())
         postgres = postgres_migrations()
         self.assertEqual([item.version for item in postgres], list(range(1, 31)))
         self.assertEqual(sorted(p.name for p in (ROOT / 'factory/src/getzilla_factory/resources').glob('*.sql')),
@@ -73,33 +66,3 @@ class LandingSQLiteMigrationTests(unittest.TestCase):
                     self.assertEqual(store._connection.execute('PRAGMA foreign_key_check').fetchall(), [])
                 finally:
                     store.close()
-
-    def test_declared_sqlite_policy_retains_history_mirror_and_sql_safety(self):
-        from getzilla.architecture_fitness import _MigrationAnalysis, _MigrationPlan, _migration_roots
-        system = json.loads((ROOT / 'architecture/system.yaml').read_bytes())
-        rules = json.loads((ROOT / 'architecture/rules.yaml').read_bytes())
-        policy = next(rule for rule in rules['migration_policies'] if rule['id'] == 'FIT-FACTORY-SQLITE-HISTORY')
-        self.assertTrue(policy['immutable_history'])
-        self.assertEqual(policy['path_prefixes'], [HISTORY])
-        roots = _migration_roots(SimpleNamespace(system=system), (HISTORY,))
-        self.assertEqual(set(roots), {HISTORY, RUNTIME})
-        self.assertEqual(_migration_roots(SimpleNamespace(system=system),
-                         ('factory/src/getzilla_factory/resources',)), ('factory/src/getzilla_factory/resources',))
-        migrations = discover_migrations()
-        primary = tuple(SimpleNamespace(path=HISTORY + '/' + item.name, status='added') for item in migrations)
-        paths = tuple(item.path for item in primary)
-        copies = {item.path: (RUNTIME + '/' + item.path.rsplit('/', 1)[-1],) for item in primary}
-        blobs = {path: (ROOT / path).read_bytes() for path in (*paths, *(p[0] for p in copies.values()))}
-        plan = _MigrationPlan(policy, roots, primary, primary, paths, copies)
-        analysis = _MigrationAnalysis()
-        analysis.check(plan, blobs)
-        self.assertEqual(analysis.issues, [])
-        for label, candidate, data in (
-            ('mirror drift', plan, blobs | {copies[paths[2]][0]: b'changed'}),
-            ('history gap', plan._replace(head_paths=paths[:2] + paths[3:]), blobs),
-            ('destructive SQL', plan, blobs | {paths[2]: b'DROP TABLE paid_accounts;'}),
-        ):
-            with self.subTest(case=label):
-                rejected = _MigrationAnalysis()
-                rejected.check(candidate, data)
-                self.assertTrue(rejected.issues)

@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 import unittest
 
@@ -9,6 +10,11 @@ from factory.tests._showcase_custody import validate_showcase
 
 
 class FactorySourceHistoryTests(unittest.TestCase):
+    def test_release_archive_fixture_uses_current_project_license(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual((root / 'factory/tests/fixtures/project-license.txt').read_bytes(),
+                         (root / 'LICENSE').read_bytes())
+
     def test_predecessor_contract_migration_showcase_and_published_release_record_are_frozen(self):
         def aggregate(paths):
             digest = hashlib.sha256()
@@ -85,3 +91,40 @@ class FactorySourceHistoryTests(unittest.TestCase):
         self.assertEqual(published['artifact']['binding'], 'immutable_release_tag')
         self.assertEqual(published['merge_commit'], '8599d45f4f28285381b05a53feb3059de92eb2a8')
         self.assertEqual(published['tree'], '03e122a30fb2dbb59907f4c4c28e17f93cbf0751')
+
+    def test_declared_sqlite_policy_retains_history_mirror_and_sql_safety(self):
+        from getzilla.architecture_fitness import _MigrationAnalysis, _MigrationPlan, _migration_roots
+        from getzilla_factory.landing_sqlite.migrations import discover_migrations
+        root = Path(__file__).resolve().parents[1]
+        history = 'factory/sqlite'
+        runtime = 'factory/src/getzilla_factory/landing_sqlite/migrations'
+        system = json.loads((root / 'architecture/system.yaml').read_bytes())
+        rules = json.loads((root / 'architecture/rules.yaml').read_bytes())
+        policy = next(rule for rule in rules['migration_policies'] if rule['id'] == 'FIT-FACTORY-SQLITE-HISTORY')
+        self.assertTrue(policy['immutable_history'])
+        self.assertEqual(policy['path_prefixes'], [history])
+        roots = _migration_roots(SimpleNamespace(system=system), (history,))
+        self.assertEqual(set(roots), {history, runtime})
+        self.assertEqual(_migration_roots(SimpleNamespace(system=system),
+                         ('factory/src/getzilla_factory/resources',)), ('factory/src/getzilla_factory/resources',))
+        migrations = discover_migrations()
+        for item in migrations:
+            with self.subTest(version=item.version):
+                self.assertEqual((root / history / item.name).read_bytes(), (root / runtime / item.name).read_bytes())
+        primary = tuple(SimpleNamespace(path=history + '/' + item.name, status='added') for item in migrations)
+        paths = tuple(item.path for item in primary)
+        copies = {item.path: (runtime + '/' + item.path.rsplit('/', 1)[-1],) for item in primary}
+        blobs = {path: (root / path).read_bytes() for path in (*paths, *(p[0] for p in copies.values()))}
+        plan = _MigrationPlan(policy, roots, primary, primary, paths, copies)
+        analysis = _MigrationAnalysis()
+        analysis.check(plan, blobs)
+        self.assertEqual(analysis.issues, [])
+        for label, candidate, data in (
+            ('mirror drift', plan, blobs | {copies[paths[2]][0]: b'changed'}),
+            ('history gap', plan._replace(head_paths=paths[:2] + paths[3:]), blobs),
+            ('destructive SQL', plan, blobs | {paths[2]: b'DROP TABLE paid_accounts;'}),
+        ):
+            with self.subTest(case=label):
+                rejected = _MigrationAnalysis()
+                rejected.check(candidate, data)
+                self.assertTrue(rejected.issues)
