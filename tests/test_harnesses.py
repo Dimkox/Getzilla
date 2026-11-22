@@ -779,10 +779,7 @@ class CursorRuleTests(unittest.TestCase):
                 binding.write('.qwen/settings.json', b'new', 0o600, expected=expected, before_publish=binding.check)
         self.assertEqual((moved / 'settings.json').read_bytes(), b'old')
         self.assertEqual(list(parent.iterdir()), [])
-        # A detached owned temp is retained; do not mutate the moved contour.
-        temps = list(moved.glob('.*.tmp'))
-        self.assertEqual(len(temps), 1)
-        self.assertEqual(temps[0].read_bytes(), b'new')
+        self.assertEqual(list(moved.glob('.*.tmp')), [])
 
     @unittest.skipIf(os.name == 'nt', 'symlink creation needs privileges on Windows')
     def test_parent_replaced_by_link_before_publication_fails_closed(self) -> None:

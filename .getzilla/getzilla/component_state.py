@@ -501,7 +501,7 @@ class BoundRoot(fsx.ReadOnlyBoundRoot):
                     os.close(descriptor)
                 if temporary_identity is not None:
                     try:
-                        check()
+                        # The retained directory and inode identify our private staging file.
                         info = fsx.lstat_at(parent, temporary)
                         if _identity(info) == temporary_identity and not fsx.is_link(info):
                             fsx.unlink_at(parent, temporary)
