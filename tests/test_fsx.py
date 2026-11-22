@@ -31,6 +31,23 @@ def _read(parent: fsx.DirHandle, name: str) -> bytes:
 
 @unittest.skipIf(fsx.WINDOWS, 'POSIX process groups')
 class KillProcessTreeTests(unittest.TestCase):
+    def test_darwin_group_permission_error_requires_confirmed_absence(self):
+        from unittest import mock
+
+        process = mock.Mock(pid=12345)
+        for exit_code, groups, expected in (
+            (None, b'1', PermissionError), (0, b'12345', PermissionError),
+            (0, b'', PermissionError), (0, b'unavailable', PermissionError),
+            (0, b'1\n54321\n', ProcessLookupError),
+        ):
+            with self.subTest(exit_code=exit_code, groups=groups), mock.patch.object(sys, 'platform', 'darwin'), \
+                    mock.patch.object(os, 'killpg', side_effect=PermissionError), \
+                    mock.patch('subprocess.run', return_value=mock.Mock(stdout=groups)) as census:
+                process.poll.return_value = exit_code
+                with self.assertRaises(expected):
+                    fsx.signal_owned_group(process, 0)
+                self.assertEqual(census.call_count, int(exit_code is not None))
+
     def test_a_group_that_already_exited_is_not_an_error(self) -> None:
         from unittest import mock
         with mock.patch.object(fsx.os, 'killpg', side_effect=ProcessLookupError), \
