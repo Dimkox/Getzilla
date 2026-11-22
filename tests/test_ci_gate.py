@@ -664,7 +664,7 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         import yaml
 
         workflow = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text(encoding='utf-8'))
-        for job_name in ('windows', 'macos'):
+        for job_name in ('windows', 'macos-core'):
             job = workflow['jobs'][job_name]
             step = next(item for item in job['steps'] if item['name'].startswith('Hooks and CLI smoke'))
             with self.subTest(job=job_name), project_copy(git=True) as root:
