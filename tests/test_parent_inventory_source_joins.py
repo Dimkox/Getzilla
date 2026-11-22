@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import yaml
 from getzilla import security_inventory as inventory
+from getzilla import security_corresponding_source  # noqa: F401 load trusted code before restricting fixture reads
 
 _OWNED = ContextVar('parent_inventory_source_fixture', default=None)
 ARCHIVE = 'engineering/changes/20260824-the-user-sent-a-message-while-you-were-working-u-3e6166/evidence/compose.host-socket.yaml'

@@ -151,7 +151,7 @@ class StudySupervisorTests(unittest.TestCase):
                 patch.object(owner, '_start_ticks', return_value='77'), \
                 patch('builtins.open', return_value=io.BytesIO(b'python\0worker\0')), \
                 patch.object(owner.select, 'select', return_value=([], [], [])), \
-                patch('os.pidfd_open', return_value=42) as pidfd:
+                patch('os.pidfd_open', return_value=42, create=True) as pidfd:
             resource._bind_direct_host_pid({'namespace_ids': {'pid': 'pid:[owned]'}})
         pidfd.assert_not_called()
         self.assertIsNone(resource.pidfd)

@@ -34,7 +34,8 @@ class StudyOwnedProcessTests(unittest.TestCase):
             process.returncode = 0
             return True
         stack.enter_context(patch.object(owner, '_spawn', return_value=process))
-        stack.enter_context(patch('os.pidfd_open', side_effect=lambda pid: os.dup(input_r)))
+        stack.enter_context(patch('os.pidfd_open', side_effect=lambda pid: os.dup(input_r), create=True))
+        stack.enter_context(patch('os.P_PIDFD', 3, create=True))
         stack.enter_context(patch('os.waitid', return_value=SimpleNamespace(si_pid=process.pid)))
         stack.enter_context(patch('getzilla.managed_execution._cleanup', side_effect=cleanup))
         return process

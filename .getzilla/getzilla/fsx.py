@@ -13,7 +13,7 @@ path that was swapped between the ``lstat`` and the ``open``.
 from __future__ import annotations
 
 import hashlib
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -332,7 +332,7 @@ def rmdir_owned_at(parent: DirHandle, name: str, held: int) -> bool:
 
     # APFS directory link counts need not drop to zero on the retained handle.
     # Subscribe before rmdir so a rename alone can never confirm removal.
-    with select.kqueue() as queue:
+    with closing(select.kqueue()) as queue:
         watch = select.kevent(held, filter=select.KQ_FILTER_VNODE,
                               flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
                               fflags=select.KQ_NOTE_DELETE)

@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
+from tests._support import fixture_descriptor_path
+from getzilla import security_family_inputs  # noqa: F401 preload before fixture I/O isolation
 from getzilla import security_artifacts as artifacts
 from getzilla import security_license_acquisition as acquisition
 from getzilla import security_licenses as licenses
@@ -56,7 +58,7 @@ def audit(event, args):
     if event == 'open':
         value = args[0]
         if isinstance(value, int):
-            value = os.readlink('/proc/self/fd/' + str(value))
+            value = fixture_descriptor_path(value)
         p = Path(os.fsdecode(value))
         if p.is_absolute() and not p.is_relative_to(_ACTIVE):
             flags = args[2] if isinstance(args[2], int) else 0
@@ -66,7 +68,7 @@ def audit(event, args):
             raise AssertionError('relative stream I/O denied')
     if event in ('os.listdir', 'os.scandir'):
         value = args[0]
-        p = Path(os.readlink('/proc/self/fd/' + str(value))) if isinstance(value, int) else Path(value)
+        p = Path(fixture_descriptor_path(value)) if isinstance(value, int) else Path(value)
         if not p.is_absolute() or not p.is_relative_to(_ACTIVE):
             raise AssertionError('outside owned listing denied')
     if event.startswith(('subprocess.', 'socket.', 'ctypes.')) or event in ('os.system', 'os.fork', 'os.posix_spawn'):
@@ -80,7 +82,7 @@ def guarded(root):
     def checked(path, flags, *a, **kw):
         p = Path(os.fsdecode(path))
         if not p.is_absolute():
-            p = Path(os.readlink('/proc/self/fd/' + str(kw['dir_fd']))) / p
+            p = Path(fixture_descriptor_path(kw['dir_fd'])) / p
         if not p.is_relative_to(root) and not (flags & os.O_DIRECTORY and root.is_relative_to(p)):
             raise AssertionError('outside owned native I/O denied')
         return opener(path, flags, *a, **kw)

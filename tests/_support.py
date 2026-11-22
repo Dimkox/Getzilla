@@ -15,6 +15,20 @@ import zipfile
 from pathlib import Path
 from typing import Iterator
 
+if sys.platform == 'darwin':
+    import fcntl
+
+
+def fixture_descriptor_path(descriptor: int) -> str:
+    if sys.platform == 'darwin':
+        raw = fcntl.fcntl(descriptor, fcntl.F_GETPATH, bytes(1024))
+        path = os.fsdecode(raw.split(b'\0', 1)[0])
+        if not os.path.isabs(path) or not os.path.samestat(os.fstat(descriptor), os.stat(path)):
+            raise AssertionError('fixture descriptor path changed')
+        return path
+    return os.readlink(f'/proc/self/fd/{descriptor}')
+
+
 PROJECT = Path(__file__).resolve().parents[1]
 CLEANUP_ATTEMPTS = 4
 

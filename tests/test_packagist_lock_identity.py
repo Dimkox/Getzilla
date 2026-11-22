@@ -14,6 +14,8 @@ import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import patch
+from tests._support import fixture_descriptor_path
+from getzilla import security_family_inputs  # noqa: F401 preload before fixture I/O isolation
 from getzilla import security_license_acquisition, security_licenses
 # Preload the complete production closure before closing fixture I/O.
 from getzilla import security_packagist as _packagist  # noqa: F401
@@ -50,7 +52,7 @@ def _audit(event, args):
         return
     if event == 'open':
         value = args[0]
-        p = Path(os.readlink('/proc/self/fd/' + str(value))) if isinstance(value, int) else Path(os.fsdecode(value))
+        p = Path(fixture_descriptor_path(value)) if isinstance(value, int) else Path(os.fsdecode(value))
         flags = args[2] if isinstance(args[2], int) else 0
         if p.is_absolute():
             if not p.is_relative_to(_BOUND) and not (flags & os.O_DIRECTORY and _BOUND.is_relative_to(p)):
@@ -59,7 +61,7 @@ def _audit(event, args):
             raise AssertionError('relative stream denied')
     if event in ('os.listdir', 'os.scandir'):
         value = args[0]
-        p = Path(os.readlink('/proc/self/fd/' + str(value))) if isinstance(value, int) else Path(value)
+        p = Path(fixture_descriptor_path(value)) if isinstance(value, int) else Path(value)
         if not p.is_absolute() or not p.is_relative_to(_BOUND):
             raise AssertionError('foreign fixture listing denied')
     if event.startswith(('socket.', 'subprocess.', 'ctypes.')) or event in ('os.system', 'os.fork', 'os.posix_spawn'):
@@ -73,7 +75,7 @@ def _guard(root):
     def opened(path, flags, *args, **kwargs):
         p = Path(os.fsdecode(path))
         if not p.is_absolute():
-            p = Path(os.readlink('/proc/self/fd/' + str(kwargs['dir_fd']))) / p
+            p = Path(fixture_descriptor_path(kwargs['dir_fd'])) / p
         if not p.is_relative_to(root) and not (flags & os.O_DIRECTORY and root.is_relative_to(p)):
             raise AssertionError('foreign descriptor open denied')
         return original(path, flags, *args, **kwargs)
