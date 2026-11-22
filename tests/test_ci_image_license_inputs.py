@@ -34,7 +34,7 @@ class RequestedImageMembersTests(unittest.TestCase):
                         info.size = len(body)
                         stream.addfile(info, io.BytesIO(body))
             data = raw.getvalue()
-            descriptors.append(self.blob(gzip.compress(data), LAYER))
+            descriptors.append(self.blob(gzip.compress(data, mtime=0), LAYER))
             diffids.append("sha256:" + hashlib.sha256(data).hexdigest())
         config = self.blob(dict(os="linux", architecture="amd64", rootfs=dict(type="layers", diff_ids=diffids)), CONFIG)
         manifest = self.blob(dict(schemaVersion=2, mediaType=MANIFEST, config=config, layers=descriptors), MANIFEST)

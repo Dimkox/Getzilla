@@ -21,6 +21,8 @@ import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
+
+from tests._support import fixture_descriptor_path
 from unittest.mock import patch
 
 import yaml  # Load the qualified syntax reader before closing fixture I/O.
@@ -67,10 +69,10 @@ def fixture_guard(base):
 
     def target(path, dir_fd=None):
         if isinstance(path, int):
-            return Path(os.readlink('/proc/self/fd/' + str(path))).resolve()
+            return Path(fixture_descriptor_path(path)).resolve()
         value = Path(os.fsdecode(path))
         if not value.is_absolute() and dir_fd is not None:
-            value = Path(os.readlink('/proc/self/fd/' + str(dir_fd))) / value
+            value = Path(fixture_descriptor_path(dir_fd)) / value
         return value.resolve()
 
     def check(path, *, directory=False, dir_fd=None):

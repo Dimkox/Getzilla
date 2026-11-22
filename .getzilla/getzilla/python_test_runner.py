@@ -37,7 +37,7 @@ import time
 import uuid
 
 from . import STACK_DIR, fsx
-from .fsx import owned_job, owned_popen, WINDOWS, kill_process_tree, signal_owned_group
+from .fsx import owned_job, owned_popen, WINDOWS, kill_process_tree
 from .cpu_budget import cpu_budget
 from .verification_scope import FORCE_FULL_VARIABLE
 
@@ -329,7 +329,7 @@ def _stop(process: subprocess.Popen, *, grace_seconds: float | None = None) -> N
     if os.name == 'posix':
         _action_ownership_mark('term')
         try:
-            signal_owned_group(process, signal.SIGTERM)
+            os.killpg(process.pid, signal.SIGTERM)
             _action_ownership_mark('term', status='returned')
         except ProcessLookupError:
             pass
@@ -340,14 +340,14 @@ def _stop(process: subprocess.Popen, *, grace_seconds: float | None = None) -> N
             while time.monotonic() < deadline:
                 process.poll()
                 try:
-                    signal_owned_group(process, 0)
+                    os.killpg(process.pid, 0)
                 except ProcessLookupError:
                     break
                 time.sleep(0.01)
             _action_ownership_mark('grace', status='returned')
             _action_ownership_mark('kill')
             try:
-                signal_owned_group(process, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGKILL)
                 _action_ownership_mark('kill', status='returned')
             except ProcessLookupError:
                 pass

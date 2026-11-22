@@ -57,7 +57,7 @@ class PublicReviewWitnessTests(unittest.TestCase):
         import json
         import hashlib
         import tempfile
-        temporary = tempfile.TemporaryDirectory(prefix='public-review-owned-', dir=ROOT / '.getzilla/runtime')
+        temporary = tempfile.TemporaryDirectory(prefix='public-review-owned-')
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         root.chmod(0o700)
@@ -166,16 +166,21 @@ class PublicReviewWitnessTests(unittest.TestCase):
                 self.assertEqual(witness._consume(reference, tiny)['facts']['cells'], 40)
             elif mutation == 'source_cut':
                 from getzilla.retrieval.public_review_witness import _reviewed_source_cut
-                with _reviewed_source_cut(reference, batch=0, composition=tiny) as (broker, handle, cut):
+                def fresh_cut():
+                    return _reviewed_source_cut(reference, batch=0, composition=tiny)
+
+                with fresh_cut() as (broker, handle, cut):
                     self.assertEqual(len(cut.documents), 4)
-                    broker.check_current(handle)
                     observation = witness._check_reviewed_source_batch(reference, broker, handle, tiny)
                     self.assertEqual(observation['documents'], 4)
+                with fresh_cut() as (broker, handle, _):
                     self.assertEqual(witness._check_reviewed_source_dataset(reference, ((broker, handle),), tiny)['documents'], 4)
-                    with self.assertRaises(ValueError):
-                        witness._check_reviewed_source_dataset(reference, ((broker, handle), (broker, handle)), tiny)
-                    with self.assertRaises(ValueError):
-                        witness.check_reviewed_public_source_batch(reference, broker, handle)
+                with fresh_cut() as (broker, handle, _), self.assertRaises(ValueError):
+                    witness._check_reviewed_source_dataset(reference, ((broker, handle), (broker, handle)), tiny)
+                with fresh_cut() as (broker, handle, _), self.assertRaises(ValueError):
+                    witness.check_reviewed_public_source_batch(reference, broker, handle)
+                with fresh_cut() as (broker, handle, _):
+                    broker.check_current(handle)
                     (root / groups[0]['reports'][0]['path']).write_bytes(b'Changed actual review custody.')
                     with self.assertRaises(ValueError):
                         broker.check_current(handle)

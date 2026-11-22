@@ -97,6 +97,9 @@ class GitReader:
             # Shared owned-tree cleanup also runs for KeyboardInterrupt/SystemExit.
             try:
                 _stop(process)
+            except PermissionError:
+                if not fsx.darwin_owned_group_absent(process):
+                    raise
             finally:
                 for reader in readers:
                     if reader.ident is not None:

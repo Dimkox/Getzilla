@@ -424,22 +424,25 @@ def process_group_kwargs() -> dict[str, object]:
     return {'start_new_session': True}
 
 
-def signal_owned_group(process, signum: int) -> None:
-    """Signal a POSIX session created for this child, or report its confirmed absence."""
+def darwin_owned_group_absent(process) -> bool:
+    """Confirm that an exited Darwin child's group has no remaining members."""
+    import subprocess
     import sys
 
+    if sys.platform != 'darwin' or process.poll() is None:
+        return False
+    census = subprocess.run(['/bin/ps', '-A', '-o', 'pgid='], capture_output=True,
+                            timeout=2, check=True, env={'LC_ALL': 'C'})
+    groups = census.stdout.split()
+    return bool(groups) and all(group.isdigit() for group in groups) and str(process.pid).encode() not in groups
+
+
+def signal_owned_group(process, signum: int) -> None:
+    """Signal a POSIX session created for this child, or report its confirmed absence."""
     try:
         os.killpg(process.pid, signum)
     except PermissionError:
-        if sys.platform != 'darwin' or process.poll() is None:
-            raise
-        # Darwin can return EPERM after the leader exits. Descendants may still
-        # own its group, so reaping the leader alone cannot establish absence.
-        import subprocess
-        census = subprocess.run(['/bin/ps', '-A', '-o', 'pgid='], capture_output=True,
-                                timeout=2, check=True, env={'LC_ALL': 'C'})
-        groups = census.stdout.split()
-        if not groups or not all(group.isdigit() for group in groups) or str(process.pid).encode() in groups:
+        if not darwin_owned_group_absent(process):
             raise
         raise ProcessLookupError(errno.ESRCH, 'owned process group has exited') from None
 
