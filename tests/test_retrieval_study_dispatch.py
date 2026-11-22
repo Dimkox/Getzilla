@@ -20,8 +20,12 @@ class StudyDispatchTests(unittest.TestCase):
         measured = result['operation_measurements']
         self.assertGreaterEqual(measured['wall_seconds'], 0)
         self.assertGreaterEqual(measured['cpu_seconds'], 0)
-        self.assertGreater(measured['peak_rss_bytes'], 0)
-        self.assertEqual(measured['scope'], 'native-child-process-lifetime-rusage-self-linux-kib-to-bytes')
+        if owner.sys.platform == 'linux':
+            self.assertGreater(measured['peak_rss_bytes'], 0)
+            self.assertEqual(measured['scope'], 'native-child-process-lifetime-rusage-self-linux-kib-to-bytes')
+        else:
+            self.assertIsNone(measured['peak_rss_bytes'])
+            self.assertEqual(measured['scope'], 'process-peak-rss-unavailable')
 
     def test_resource_import_is_lazy_linux_only_and_unknown_is_not_zero(self):
         owner = self.owner()
