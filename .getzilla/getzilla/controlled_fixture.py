@@ -78,8 +78,7 @@ def _empty_client_directory(handle, budget, depth=0):
                     _empty_client_directory(child, budget, depth+1)
                     if _directory_stat_identity(fsx.lstat_at(handle, entry.name)) != identity:
                         raise OSError('private child moved')
-                    fsx.rmdir_at(handle, entry.name)
-                    if fsx.fstat_dir(child).st_nlink != 0:
+                    if not fsx.rmdir_owned_at(handle, entry.name, child):
                         raise OSError('private child removal unconfirmed')
                 finally:
                     fsx.close_dir(child)
@@ -158,8 +157,7 @@ class _ClientContext:
             _empty_client_directory(directory, [4096])
             if _directory_stat_identity(fsx.lstat_at(parent, self.directory.name)) != self._identity:
                 return False
-            fsx.rmdir_at(parent, self.directory.name)
-            if (fsx.fstat_dir(directory).st_nlink != 0 or os.path.lexists(self.directory)
+            if (not fsx.rmdir_owned_at(parent, self.directory.name, directory) or os.path.lexists(self.directory)
                     or _directory_identity(self.directory.parent) != self._parent_identity):
                 return False
         except OSError:

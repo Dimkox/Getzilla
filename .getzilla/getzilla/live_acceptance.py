@@ -443,8 +443,7 @@ def _empty_factory_directory(descriptor):
                 _empty_factory_directory(child)
                 if _directory_birth(fsx.lstat_at(descriptor,name))!=_directory_birth(before):
                     raise ValueError('Factory cleanup child binding changed')
-                fsx.rmdir_at(descriptor,name)
-                if fsx.fstat_dir(child).st_nlink!=0:
+                if not fsx.rmdir_owned_at(descriptor,name,child):
                     raise ValueError('Factory cleanup child unlink unconfirmed')
             finally:
                 fsx.close_dir(child)
@@ -491,14 +490,12 @@ def _remove_factory_environment(owned):
         _empty_factory_directory(owned.directory.handle)
         if _directory_birth(fsx.lstat_at(anchor,'environment'))!=owned.birth:
             raise ValueError('Factory cleanup unlink binding changed')
-        fsx.rmdir_at(anchor,'environment')
-        owned.outcome['original_unlinked']=fsx.fstat_dir(owned.directory.handle).st_nlink==0
+        owned.outcome['original_unlinked']=fsx.rmdir_owned_at(anchor,'environment',owned.directory.handle)
         if not owned.outcome['original_unlinked']:
             raise ValueError('Factory original unlink unconfirmed')
         if _directory_birth(fsx.lstat_at(parent,anchor_name))!=anchor_birth:
             raise ValueError('Factory cleanup anchor binding changed')
-        fsx.rmdir_at(parent,anchor_name)
-        if fsx.fstat_dir(anchor).st_nlink!=0:
+        if not fsx.rmdir_owned_at(parent,anchor_name,anchor):
             raise ValueError('Factory cleanup anchor unlink unconfirmed')
     finally:
         fsx.close_dir(captured)

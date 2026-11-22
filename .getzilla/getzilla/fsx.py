@@ -321,6 +321,28 @@ def rmdir_at(parent: DirHandle, name: str) -> None:
     os.rmdir(name, dir_fd=parent)
 
 
+def rmdir_owned_at(parent: DirHandle, name: str, held: int) -> bool:
+    """Remove the name and confirm deletion of the already-open directory inode."""
+    import sys
+
+    if sys.platform != 'darwin':
+        rmdir_at(parent, name)
+        return fstat_dir(held).st_nlink == 0
+    import select
+
+    # APFS directory link counts need not drop to zero on the retained handle.
+    # Subscribe before rmdir so a rename alone can never confirm removal.
+    with select.kqueue() as queue:
+        watch = select.kevent(held, filter=select.KQ_FILTER_VNODE,
+                              flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                              fflags=select.KQ_NOTE_DELETE)
+        queue.control([watch], 0, 0)
+        rmdir_at(parent, name)
+        return any(event.ident == held and event.filter == select.KQ_FILTER_VNODE
+                   and not event.flags & select.KQ_EV_ERROR and event.fflags & select.KQ_NOTE_DELETE
+                   for event in queue.control(None, 1, 0))
+
+
 def replace_at(source_parent: DirHandle, source: str, target_parent: DirHandle, target: str) -> None:
     """Atomic rename that replaces an existing target file."""
     if isinstance(source_parent, WindowsDirectory) or isinstance(target_parent, WindowsDirectory):
