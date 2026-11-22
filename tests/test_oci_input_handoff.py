@@ -186,9 +186,13 @@ class OCIInputHandoffTests(unittest.TestCase):
 
     def test_owned_source_selection_and_fresh_preparation_stage_order(self):
         from getzilla import security_inventory as inv
+        from getzilla.security_corresponding_source import classify
+        from getzilla.security_python_target import binding as python_binding
+        from getzilla.security_license_scope import current
         from getzilla import security_cli as cli
         from getzilla import security_tools as tools
 
+        self.assertTrue(all(map(callable, (classify, python_binding, current))))
         source = "services:\n  api:\n    image: ${OWNED_IMAGE:?select}\n"
         (self.root / "compose.yaml").write_text(source)
         selected = "example.invalid/owned@sha256:" + "a" * 64

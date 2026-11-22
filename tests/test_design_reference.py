@@ -700,8 +700,8 @@ class PreviewDesignReferenceTests(unittest.TestCase):
                 fields = ['S','1'] + ['0'] * 17 + ['12345']
                 with patch.object(subprocess, 'Popen', return_value=process), \
                      patch('pathlib.Path') as paths, patch('threading.Thread'), \
-                     patch('os.pidfd_open', return_value=90), patch('os.close'), \
-                     patch('signal.pidfd_send_signal') as signal_mock:
+                     patch('sys.platform', 'linux'), patch('os.pidfd_open', return_value=90, create=True), patch('os.close'), \
+                     patch('signal.pidfd_send_signal', create=True) as signal_mock:
                     paths.return_value.iterdir.return_value = []
                     if case == 'initial-procstat-failure':
                         paths.return_value.read_text.side_effect = OSError('owned fixture procstat unavailable')

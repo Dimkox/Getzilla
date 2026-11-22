@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / '.getzilla/optional-modules/mcp-jira/0.1.0'
 PROBE = '''import json, os, resource, runpy, sys, types
 from pathlib import Path
-resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
+limits = resource.getrlimit(resource.RLIMIT_AS)
+cap = min([1024**3, *(value for value in limits if value != resource.RLIM_INFINITY)])
+resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
 if hasattr(os, 'sched_getaffinity'):
     os.sched_setaffinity(0, set(sorted(os.sched_getaffinity(0))[:2]))
 worker, stack, mode = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]

@@ -1160,8 +1160,9 @@ class CoverageLayout(unittest.TestCase):
                                  {f'{name}-{i}.pid' for name in ('alpha', 'beta') for i in range(3)})
                 for name in ('alpha', 'beta'):
                     self.assertEqual(len({p.read_text() for p in trust.glob(f'{name}-*.pid')}), 1)
-                effective, engine = python_test_runner.select_engine(workers, measured=False)
-                self.assertIn(f'requested_workers={workers}; workers={effective}; engine={engine}', result.stdout)
+                requested = selected_workers(root)
+                effective, engine = python_test_runner.select_engine(requested, measured=False)
+                self.assertIn(f'requested_workers={requested}; workers={effective}; engine={engine}', result.stdout)
                 self.assertFalse(list(root.glob('result-*')), 'Core tests must not be collected by Trust CI')
                 (trust / 'tests/test_alpha.py').write_text('raise RuntimeError("expected collection failure")\n')
                 failed = execute(command, root, environment)
@@ -1287,7 +1288,7 @@ class CoverageLayout(unittest.TestCase):
             self.assertEqual(len({p.read_text() for p in root.glob('result-*')}), 1)
             self.assertIn('unittest-degraded', result.details[0]['versions'])
             self.assertEqual(result.details[0]['backend'], 'unittest-degraded')
-            self.assertEqual(result.details[0]['requested_workers'], '2')
+            self.assertEqual(result.details[0]['requested_workers'], str(selected_workers(root)))
             self.assertEqual(result.details[0]['actual_workers'], '0')
 
     # Retained PR135 regressions originate at 7a7851af5d11e8ce5c3af23ab46214ae7ae4cdc8.
@@ -1340,7 +1341,8 @@ class CoverageLayout(unittest.TestCase):
         with patch.object(python_test_runner, '_parallel_process_cleanup_supported',
                           return_value=True, create=True), \
              patch.object(python_test_runner, 'parallel_engine_ready', return_value=True):
-            self.assertEqual(python_test_runner.select_engine(2, measured=True), (2, 'pytest-xdist'))
+            self.assertEqual(python_test_runner.select_engine(2, measured=True),
+                             (python_test_runner.cpu_budget(2).effective, 'pytest-xdist'))
         for distribution in ('worksteal', 'loadfile'):
             with self.subTest(distribution=distribution):
                 command = python_test_runner._pytest_command(2, distribution)
@@ -2059,7 +2061,7 @@ class CoverageLayout(unittest.TestCase):
             workers, engine = python_test_runner.select_engine(2, measured=False)
             self.assertEqual(json.loads(result.details[0]['versions'])['engine'], engine)
             if workers:
-                self.assertEqual(result.command[result.command.index('-n') + 1], '2')
+                self.assertEqual(result.command[result.command.index('-n') + 1], str(workers))
                 self.assertIn('--dist=worksteal', result.command)
             else:
                 self.assertEqual(len({p.read_text() for p in outputs}), 1)

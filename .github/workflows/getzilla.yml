@@ -782,9 +782,11 @@ jobs:
           if not selected:
               raise SystemExit("Empty macOS test shard")
           failed = []
+          # Isolate each module while making the checkout package available to the test loader.
+          launch = "import sys, unittest; sys.path.insert(0, '.getzilla'); unittest.main(module=None)"
           for path in selected:
               module = ".".join(path.with_suffix("").parts)
-              result = subprocess.run([sys.executable, "-m", "unittest", "-v", module])
+              result = subprocess.run([sys.executable, "-c", launch, "-v", module])
               if result.returncode:
                   failed.append(module)
           print(f"{len(selected)} modules executed. Failed modules: {failed}", flush=True)

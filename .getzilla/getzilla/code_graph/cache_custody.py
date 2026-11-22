@@ -5,6 +5,7 @@ import contextlib
 import errno
 import os
 import stat
+import sys
 import time
 from pathlib import Path
 
@@ -121,10 +122,13 @@ class CacheCustody:
     @contextlib.contextmanager
     def locked(self, *, exclusive=True):
         self.check()
+        # Darwin arbitrates flock against SQLite's byte-range locks on the same
+        # inode. Serialize cooperating caches on their retained parent there.
+        lock_descriptor = self.parent if sys.platform == 'darwin' else self.descriptor
         deadline = time.monotonic() + 30
         while True:
             try:
-                fsx.lock_file(self.descriptor, exclusive=exclusive, blocking=False)
+                fsx.lock_file(lock_descriptor, exclusive=exclusive, blocking=False)
                 break
             except OSError as error:
                 if error.errno not in (errno.EACCES, errno.EAGAIN):
@@ -136,7 +140,7 @@ class CacheCustody:
             self.check()
             yield
         finally:
-            fsx.unlock_file(self.descriptor)
+            fsx.unlock_file(lock_descriptor)
 
     def close(self):
         if self.descriptor is not None:

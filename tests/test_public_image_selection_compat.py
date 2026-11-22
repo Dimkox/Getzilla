@@ -73,7 +73,12 @@ class Reused393ImageContracts(unittest.TestCase):
 
 
     def test_new_owned_compose_profile_and_early_unqualified_transport_refusal(self):
-        self.assertTrue(callable(yaml.safe_load))  # preload parser before the I/O boundary
+        # Load the trusted helpers before limiting all file reads to the fixture.
+        from getzilla.security_corresponding_source import classify
+        from getzilla.security_license_scope import current
+        from getzilla.security_python_target import binding
+
+        self.assertTrue(all(map(callable, (classify, current, binding, yaml.safe_load))))
         parent = W / '.getzilla/runtime/scratch/new393-fixtures'
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as name:

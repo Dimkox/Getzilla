@@ -64,8 +64,10 @@ class ReproducibleFixtureTests(unittest.TestCase):
             self.assertTrue(all(value >= 0 for value in case['cold_samples_ms'] + case['warm_samples_ms']))
             self.assertGreaterEqual(case['traced_peak_bytes'], 0)
             self.assertEqual(len(case['fixture_digest']), 64)
-        self.assertEqual(report['concurrent_fixture']['workers'], 2)
-        self.assertEqual(report['concurrent_fixture']['fresh_executions'], 2)
+        workers = min(2, report['host']['cpu_allocation']['effective'])
+        self.assertGreaterEqual(workers, 1)
+        self.assertEqual(report['concurrent_fixture']['workers'], workers)
+        self.assertEqual(report['concurrent_fixture']['fresh_executions'], workers)
 
 
 if __name__ == '__main__':

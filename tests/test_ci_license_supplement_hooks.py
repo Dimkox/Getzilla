@@ -64,11 +64,15 @@ class SupplementHookTests(unittest.TestCase):
         consumer.update(dependencies=[dep], supported_tags=["py3-none-any"])
         consumer["target"].update(
             python_version="3.13.18",
+            platform="linux-x86_64",
             abi="cpython-313-x86_64-linux-gnu",
             tags_sha256=fixture.target.digest(["py3-none-any"]),
             tag_count=1,
         )
-        consumer["target"]["marker_environment"].update(python_version="3.13", python_full_version="3.13.18")
+        consumer["target"]["marker_environment"].update(
+            python_version="3.13", python_full_version="3.13.18", sys_platform="linux",
+            platform_system="Linux", platform_machine="x86_64", os_name="posix",
+        )
         consumer["source_pins"] = {
             fixture.target.digest(fixture.target._subject(dep)): dict(
                 context_sha256=fixture.target._context_key(dep),
