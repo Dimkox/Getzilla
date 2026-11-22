@@ -460,16 +460,20 @@ class BoundRoot(fsx.ReadOnlyBoundRoot):
             try:
                 if self.read(relative) != expected:
                     raise ComponentStateError(f'file changed before publication: {relative}')
+                check()
                 descriptor = fsx.open_at(parent, temporary,
                                          os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
                 temporary_identity = _identity(os.fstat(descriptor))
+                check()
+                fsx.fchmod(descriptor, mode)
                 data = memoryview(content)
                 while data:
+                    check()
                     written = os.write(descriptor, data)
                     if written <= 0:
                         raise ComponentStateError(f'incomplete temporary write: {relative}')
                     data = data[written:]
-                fsx.fchmod(descriptor, mode)
+                check()
                 os.fsync(descriptor)
                 os.close(descriptor)
                 descriptor = None
@@ -497,6 +501,7 @@ class BoundRoot(fsx.ReadOnlyBoundRoot):
                     os.close(descriptor)
                 if temporary_identity is not None:
                     try:
+                        check()
                         info = fsx.lstat_at(parent, temporary)
                         if _identity(info) == temporary_identity and not fsx.is_link(info):
                             fsx.unlink_at(parent, temporary)

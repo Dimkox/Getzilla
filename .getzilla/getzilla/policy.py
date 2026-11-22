@@ -183,6 +183,14 @@ def _evaluate_pre_tool(
     command = str(tool_input.get('command', '')) if isinstance(tool_input, dict) else str(tool_input)
     if len(command) > _LEGACY_COMMAND_LIMIT:
         return False, f'Blocked a Bash command longer than {_LEGACY_COMMAND_LIMIT} characters before parsing it.'
+    if route is None and ('protected_write.py' in command or 'protected-write' in command):
+        for argv in _legacy._simple_commands(command):
+            if not argv or not any(arg == '--manifest' or arg.startswith('--manifest=') for arg in argv):
+                continue
+            if (argv[0] == 'getzilla_protected_write.py' or argv[:2] == ['getzilla', 'protected-write']
+                    or (len(argv) > 1 and argv[0] in {'python', 'python3', 'py'}
+                        and Path(argv[1]).name == 'getzilla_protected_write.py')):
+                return False, 'Protected write requires a mandatory task route.'
     protected_targets, opaque = _shell_mutation(
         root, command, control_plane, execution_cwd=_execution_directory(root, execution_cwd),
     )

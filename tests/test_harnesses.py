@@ -26,6 +26,7 @@ from tests._support import public_source_copy
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla.component_state import BoundRoot, ComponentStateError
 from getzilla import harnesses
 from getzilla.harnesses import CODEX_HOOK_EVENTS, COPILOT_EVENTS, CURSOR_MARKER, CURSOR_OUTPUT, GEMINI_EVENTS, GENERATED_ROOTS, HARNESSES, drift, render, write
 
@@ -726,9 +727,11 @@ class CursorRuleTests(unittest.TestCase):
                 parent.rename(moved)
                 parent.mkdir()
             return opened
+        binding = self.enterContext(BoundRoot(root))
+        expected = binding.read('.qwen/settings.json')
         with mock.patch.object(harnesses.fsx, 'open_dir_at', side_effect=relocate):
-            with self.assertRaises(OSError):
-                harnesses._write_file(root, '.qwen/settings.json', b'new')
+            with self.assertRaises(ComponentStateError):
+                binding.write('.qwen/settings.json', b'new', 0o600, expected=expected, before_publish=binding.check)
         self.assertEqual(list(moved.iterdir()), [])
         self.assertEqual(list(parent.iterdir()), [])
 
@@ -749,9 +752,11 @@ class CursorRuleTests(unittest.TestCase):
                 root.mkdir()
                 (moved_root / '.qwen').rename(parent)
             return opened
+        binding = self.enterContext(BoundRoot(root))
+        expected = binding.read('.qwen/settings.json')
         with mock.patch.object(harnesses.fsx, 'open_dir_at', side_effect=relocate):
-            with self.assertRaises(OSError):
-                harnesses._write_file(root, '.qwen/settings.json', b'new')
+            with self.assertRaises(ComponentStateError):
+                binding.write('.qwen/settings.json', b'new', 0o600, expected=expected, before_publish=binding.check)
         self.assertEqual(list(parent.iterdir()), [])
 
     @unittest.skipIf(os.name == 'nt', 'open directory rename requires POSIX')
@@ -761,24 +766,17 @@ class CursorRuleTests(unittest.TestCase):
         parent.mkdir()
         (parent / 'settings.json').write_bytes(b'old')
         moved = root.parent / 'moved'
-        fdopen = os.fdopen
-        class MovingStream:
-            def __init__(self, descriptor, mode):
-                self.stream = fdopen(descriptor, mode)
-            def __enter__(self):
-                self.stream.__enter__()
-                return self
-            def __exit__(self, *args):
-                return self.stream.__exit__(*args)
-            def fileno(self):
-                return self.stream.fileno()
-            def write(self, content):
-                self.stream.write(content)
-                parent.rename(moved)
-                parent.mkdir()
-        with mock.patch.object(harnesses.os, 'fdopen', MovingStream):
-            with self.assertRaises(OSError):
-                harnesses._write_file(root, '.qwen/settings.json', b'new')
+        original_write = os.write
+        def move_after_write(descriptor, content):
+            written = original_write(descriptor, content)
+            parent.rename(moved)
+            parent.mkdir()
+            return written
+        binding = self.enterContext(BoundRoot(root))
+        expected = binding.read('.qwen/settings.json')
+        with mock.patch.object(harnesses.os, 'write', side_effect=move_after_write):
+            with self.assertRaises(ComponentStateError):
+                binding.write('.qwen/settings.json', b'new', 0o600, expected=expected, before_publish=binding.check)
         self.assertEqual((moved / 'settings.json').read_bytes(), b'old')
         self.assertEqual(list(parent.iterdir()), [])
         # A detached owned temp is retained; do not mutate the moved contour.
@@ -799,9 +797,11 @@ class CursorRuleTests(unittest.TestCase):
             original(descriptor, mode)
             parent.rename(moved)
             parent.symlink_to(outside, target_is_directory=True)
+        binding = self.enterContext(BoundRoot(root))
+        expected = binding.read('.qwen/settings.json')
         with mock.patch.object(harnesses.fsx, 'fchmod', side_effect=relocate):
-            with self.assertRaises(OSError):
-                harnesses._write_file(root, '.qwen/settings.json', b'new')
+            with self.assertRaises(ComponentStateError):
+                binding.write('.qwen/settings.json', b'new', 0o600, expected=expected, before_publish=binding.check)
         self.assertEqual(list(outside.iterdir()), [])
         self.assertFalse((moved / 'settings.json').exists())
         self.assertTrue(all(path.read_bytes() == b'' for path in moved.iterdir()))
@@ -818,9 +818,11 @@ class CursorRuleTests(unittest.TestCase):
             original(descriptor, mode)
             parent.rename(moved)
             parent.mkdir()
+        binding = self.enterContext(BoundRoot(root))
+        expected = binding.read('.qwen/settings.json')
         with mock.patch.object(harnesses.fsx, 'fchmod', side_effect=relocate):
-            with self.assertRaises(OSError):
-                harnesses._write_file(root, '.qwen/settings.json', b'new')
+            with self.assertRaises(ComponentStateError):
+                binding.write('.qwen/settings.json', b'new', 0o600, expected=expected, before_publish=binding.check)
         self.assertEqual((moved / 'settings.json').read_bytes(), b'old')
         self.assertEqual(list(parent.iterdir()), [])
 
