@@ -56,24 +56,34 @@ def loopback_http_exchange(address, body, headers):
               'Content-Length':str(len(body)), **headers}
     request = 'POST /search HTTP/1.0\r\n' + ''.join(name+': '+value+'\r\n' for name,value in fields.items()) + '\r\n'
     deadline = time.monotonic()+3
-    chunks, size = [], 0
+    received = bytearray()
+    expected = None
     with socket.create_connection(address, timeout=3) as connection:
         connection.settimeout(max(0.001, deadline-time.monotonic()))
         connection.sendall(request.encode('ascii')+body)
-        while True:
+        while expected is None or len(received) < expected:
             remaining = deadline-time.monotonic()
             if remaining <= 0:
                 raise TimeoutError('loopback_response_deadline')
             connection.settimeout(remaining)
-            chunk = connection.recv(min(65536, 1024*1024+1-size))
-            size += len(chunk)
-            if size > 1024*1024:
+            chunk = connection.recv(min(65536, 1024*1024+1-len(received)))
+            received.extend(chunk)
+            if len(received) > 1024*1024:
                 raise ValueError('loopback_response_too_large')
             if not chunk:
                 break
-            chunks.append(chunk)
-    header, separator, response = b''.join(chunks).partition(b'\r\n\r\n')
-    if not separator or len(header) > 16384:
+            if expected is None:
+                header, separator, _ = received.partition(b'\r\n\r\n')
+                if len(header) > 16384:
+                    raise ValueError('invalid_loopback_response')
+                if separator:
+                    lengths = [line.partition(b':')[2].strip() for line in header.split(b'\r\n')
+                               if line.partition(b':')[0].lower() == b'content-length']
+                    if len(lengths) != 1 or not lengths[0].isdigit():
+                        raise ValueError('invalid_loopback_content_length')
+                    expected = len(header) + len(separator) + int(lengths[0])
+    header, separator, response = bytes(received).partition(b'\r\n\r\n')
+    if not separator or len(received) != expected:
         raise ValueError('invalid_loopback_response')
     return int(header.split(b'\r\n',1)[0].split(b' ',2)[1]), response
 

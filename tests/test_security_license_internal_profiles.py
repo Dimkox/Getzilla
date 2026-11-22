@@ -13,6 +13,7 @@ from getzilla import security_image_authority as image_authority
 from getzilla import security_license_exceptions as ex
 from getzilla import security_license_supplements  # noqa: F401 preload before owned no-I/O control
 from getzilla import security_ci_inputs as ci
+from getzilla.retrieval import research_use_conditions  # noqa: F401 preload before owned no-I/O control
 
 
 _DENY_EFFECTS = False

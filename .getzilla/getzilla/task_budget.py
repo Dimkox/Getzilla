@@ -369,7 +369,8 @@ def _execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: f
         # Child PID is still owned (unreaped); never signal a reused PID.
         if proc is not None:
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                from .fsx import signal_owned_group
+                signal_owned_group(proc, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             proc.wait()

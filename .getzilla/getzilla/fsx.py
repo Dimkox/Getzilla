@@ -402,6 +402,26 @@ def process_group_kwargs() -> dict[str, object]:
     return {'start_new_session': True}
 
 
+def signal_owned_group(process, signum: int) -> None:
+    """Signal a POSIX session created for this child, or report its confirmed absence."""
+    import sys
+
+    try:
+        os.killpg(process.pid, signum)
+    except PermissionError:
+        if sys.platform != 'darwin' or process.poll() is None:
+            raise
+        # Darwin can return EPERM after the leader exits. Descendants may still
+        # own its group, so reaping the leader alone cannot establish absence.
+        import subprocess
+        census = subprocess.run(['/bin/ps', '-A', '-o', 'pgid='], capture_output=True,
+                                timeout=2, check=True, env={'LC_ALL': 'C'})
+        groups = census.stdout.split()
+        if not groups or not all(group.isdigit() for group in groups) or str(process.pid).encode() in groups:
+            raise
+        raise ProcessLookupError(errno.ESRCH, 'owned process group has exited') from None
+
+
 def kill_process_tree(pid: int) -> None:
     """Forcefully end a child and its descendants (``killpg`` / ``taskkill /T /F``)."""
     if WINDOWS:
