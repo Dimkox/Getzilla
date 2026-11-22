@@ -765,6 +765,7 @@ jobs:
       - name: Core tests on macOS
         if: success() || failure()
         env:
+          TMPDIR: ${{ runner.temp }}
           SHARD_INDEX: ${{ matrix.shard }}
           SHARD_COUNT: ${{ strategy.job-total }}
         run: |
