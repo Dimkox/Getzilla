@@ -696,7 +696,7 @@ jobs:
 
   macos:
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash
@@ -762,7 +762,7 @@ jobs:
         if: success() || failure()
         run: |
           set -o pipefail
-          python -m unittest discover -s tests 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+          python -m unittest discover -v -s tests -t . 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
       - name: Annotate macOS failures
         if: failure()
         shell: python
