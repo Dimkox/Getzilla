@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 import time
 
-from ..architecture_diff import run_git_read
+from ..architecture_diff import _git, git_binding_scope
 from .. import state
 from ..continuity import context_binding, scope_gaps
 from ..optional_modules import admit_module
@@ -88,20 +88,19 @@ def _identity(info):
 
 
 def _source_binding(root):
-    head = _exact_head(root)
-    # On a clean worktree the existing fingerprint is precisely SHA256(HEAD).
-    # Require Git to report that same commit and no index or worktree records.
-    if head is not None:
-        try:
-            code, raw, _ = run_git_read(root, ['status', '--porcelain=v2', '--branch',
-                '--untracked-files=all', '--no-renames', '-z'], stdout_limit=65536)
-        except (OSError, ValueError):
-            pass
-        else:
-            if code == 0 and re.fullmatch(rb'# branch.oid ' + head.encode('ascii') +
-                    rb'\x00# branch.head [^\x00]+\x00', raw):
-                return head, hashlib.sha256(head.encode('ascii')).hexdigest()
-    return head, tree_fingerprint(root)
+    # Porcelain v2 reports HEAD's commit and every index/worktree change.
+    # Only the exact two clean-branch headers qualify for the fast path.
+    try:
+        raw = _git(root, ['status', '--porcelain=v2', '--branch', '--untracked-files=all',
+                         '--no-renames', '-z'], limit=65536)
+    except (OSError, ValueError):
+        raw = None
+    clean = re.fullmatch(rb'# branch\.oid ([0-9a-f]{40})\x00# branch\.head [^\x00]+\x00', raw or b'')
+    if clean:
+        head = clean.group(1)
+        return head.decode('ascii'), hashlib.sha256(head).hexdigest()
+    return _exact_head(root), tree_fingerprint(root)
+
 
 
 class _Capture:
@@ -698,7 +697,7 @@ def _reviewed_source_cut(reference, *, batch, composition):
         object.__setattr__(fence, key, value)
     from .research import _public_source_cut
     try:
-        with _public_source_cut(capture.root, capture.root / checked_relative(registration['public_sources']),
+        with git_binding_scope(), _public_source_cut(capture.root, capture.root / checked_relative(registration['public_sources']),
                 batch=batch, review_fence=fence, catalogs=composition.catalogs) as result:
             yield result
     finally:
