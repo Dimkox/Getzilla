@@ -24,6 +24,14 @@ jobs:
           import traceback
           import unittest
           from tests.test_ci_evidence import CiEvidenceTests
+          from getzilla import architecture_diff as diff
+          original = diff.run_git_read
+          def logged(root, args, **kwargs):
+              result = original(root, args, **kwargs)
+              if '--show-toplevel' in args:
+                  print('probe', repr(result), 'expected', repr(root), flush=True)
+              return result
+          diff.run_git_read = logged
           class Details(unittest.TextTestResult):
               def addError(self, test, err):
                   exc = err[1]
