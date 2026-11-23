@@ -279,7 +279,7 @@ def produce(root, source, run, volume, builder):
     profile = dict(active_limits(), images=sorted(roots), platform='linux/amd64')
     # Validate the ORIGINAL catalog against independently recollected raw source
     # before any declaration projection. No producer success bypasses OCI checks.
-    with import_layouts(catalog, inventory, profile, volume):
+    with import_layouts(catalog, inventory, profile, volume, measure_entries=True):
         pass
     from .public_security_context import selection_document, project_catalog
     from .security_cli import _clock

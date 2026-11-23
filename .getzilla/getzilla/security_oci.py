@@ -40,6 +40,7 @@ LIMITS = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
 CI_BYTES = 8 * 1024 ** 3
 CI_MEMORY = 12 * 1024 ** 3
 _MAX_TAR_ENTRIES = 100000
+_MEASUREMENT_CEILING = 1_000_000
 
 
 def active_limits():
@@ -80,6 +81,24 @@ _BOUND_KEYS = {'dimension', 'oci_phase', 'limit_name', 'before', 'charge', 'atte
 
 def _bound_detail(value):
     """Validate refusal-only observations; these fields grant no profile authority."""
+    if type(value) is dict and set(value) == _BOUND_KEYS | {'entry_measurement'}:
+        base = _bound_detail({k: v for k, v in value.items() if k != 'entry_measurement'})
+        observation = value['entry_measurement']
+        if (base['dimension'] != 'entries' or type(observation) is not dict
+                or set(observation) != {'status', 'prior', 'images'}
+                or observation['status'] not in ('complete', 'partial')
+                or type(observation['prior']) is not int or not 0 <= observation['prior'] <= _MAX_TAR_ENTRIES):
+            raise OCIError('Invalid OCI entry measurement')
+        rows = observation['images']
+        if (type(rows) is not list or not 1 <= len(rows) <= 16
+                or any(type(row) is not list or len(row) != 3 or type(row[0]) is not str
+                       or not re.fullmatch(r'python|postgres|docker|other|build-[0-9a-f]{64}', row[0])
+                       or type(row[1]) is not str
+                       or not re.fullmatch(r'sha256:[0-9a-f]{64}', row[1])
+                       or type(row[2]) is not int or row[2] < 0 for row in rows)
+                or not _MAX_TAR_ENTRIES < observation['prior'] + sum(row[2] for row in rows) <= _MEASUREMENT_CEILING):
+            raise OCIError('Invalid OCI entry measurement')
+        return dict(base, entry_measurement=observation)
     if type(value) is not dict or set(value) != _BOUND_KEYS:
         raise OCIError('Invalid OCI bound diagnostic')
     dimension = value['dimension']
@@ -152,6 +171,8 @@ class _Budget:
         if any(profile[key] > LIMITS[key] for key in LIMITS):
             self._native = sys.modules[__package__ + '.security_image_backend']
             self._guard = self._native._GUARD
+        self.entry_measurement = None
+        self.entry_refusal = None
         self.image_ordinal = -1
         self._layer_facts = {}
         self.deadline = time.monotonic() + profile['deadline_seconds']
@@ -170,6 +191,11 @@ class _Budget:
         ceiling = self.profile[limit] if limit else _MAX_TAR_ENTRIES
         if type(size) is not int or size < 0:
             raise OCIError('Aggregate OCI resource bound exceeded')
+        measuring = self.entry_measurement is not None and key == 'entries' and phase == 'tar-entries' and size == 1
+        if measuring and self.entry_refusal is not None:
+            if self.totals[key] >= _MEASUREMENT_CEILING:
+                raise OCIError('OCI diagnostic entry ceiling reached')
+            ceiling = _MEASUREMENT_CEILING
         if self.totals[key] + size > ceiling:
             detail = dict(dimension=key, oci_phase=phase, limit_name=_BOUND_LIMITS[key],
                           before=self.totals[key], charge=size, attempted=self.totals[key] + size, limit=ceiling,
@@ -180,9 +206,39 @@ class _Budget:
                 detail = _bound_detail(detail)
             except OCIError:
                 raise OCIError('Aggregate OCI resource bound exceeded') from None
-            raise OCIError(f'Aggregate OCI resource bound exceeded: {key} {detail["attempted"]}>{ceiling} ({phase})',
+            refusal = OCIError(f'Aggregate OCI resource bound exceeded: {key} {detail["attempted"]}>{ceiling} ({phase})',
                            detail=detail)
+            if not measuring:
+                raise refusal
+            self.entry_refusal = refusal
+        if measuring:
+            self.entry_measurement['images'][self.image_ordinal][2] += 1
         self.totals[key] += size
+
+
+@contextmanager
+def _measure_import_entries(budget, records, enabled):
+    # Only the original producer catalog opts in. A crossed admission limit
+    # is latched and raised before the caller can receive any verified images.
+    if not enabled or len(records) > 16:
+        yield
+        return
+    rows = []
+    for record in records:
+        name, digest = record['reference'].rsplit('@', 1)
+        name = name.removeprefix('getzilla.local/').split(':', 1)[0]
+        label = name if re.fullmatch(r'python|postgres|docker|build-[0-9a-f]{64}', name) else 'other'
+        rows.append([label, digest, 0])
+    observation = dict(status='partial', prior=budget.totals['entries'], images=rows)
+    budget.entry_measurement = observation
+    try:
+        yield
+        observation['status'] = 'complete'
+    finally:
+        refusal = budget.entry_refusal
+        budget.entry_refusal = budget.entry_measurement = None
+        if refusal is not None:
+            raise OCIError(str(refusal), detail=dict(refusal.detail, entry_measurement=observation)) from refusal
 
 
 class _Root:
@@ -640,7 +696,7 @@ def validate_selection(catalog, inventory, profile):
 
 
 @contextmanager
-def import_layouts(catalog, inventory, profile, workspace):
+def import_layouts(catalog, inventory, profile, workspace, *, measure_entries=False):
     """Import every selected image under ONE shared aggregate ledger.
 
     All returned paths exist only during this context. Inputs are revalidated
@@ -655,15 +711,17 @@ def import_layouts(catalog, inventory, profile, workspace):
         records = validate_selection(catalog, inventory, profile)
         with tempfile.TemporaryDirectory(prefix='verified-oci-', dir=workspace) as owned:
             images = []
-            for index, record in enumerate(sorted(records, key=lambda r: r['reference'])):
-                budget.image_ordinal = index
-                stage = Path(owned) / str(index)
-                stage.mkdir(mode=0o700)
-                image = _import_one(record, profile, stage, budget)
-                wanted = {v.get('image_id') for v in inventory['images'] if v['reference'] == image.reference}
-                if any(value is not None and value != image.config_digest for value in wanted):
-                    raise OCIError('Selected source config pin differs from OCI graph')
-                images.append(image)
+            records = sorted(records, key=lambda r: r['reference'])
+            with _measure_import_entries(budget, records, measure_entries):
+                for index, record in enumerate(records):
+                    budget.image_ordinal = index
+                    stage = Path(owned) / str(index)
+                    stage.mkdir(mode=0o700)
+                    image = _import_one(record, profile, stage, budget)
+                    wanted = {v.get('image_id') for v in inventory['images'] if v['reference'] == image.reference}
+                    if any(value is not None and value != image.config_digest for value in wanted):
+                        raise OCIError('Selected source config pin differs from OCI graph')
+                    images.append(image)
             try:
                 yield images
                 budget.tick()
