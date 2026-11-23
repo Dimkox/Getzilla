@@ -186,19 +186,23 @@ class LinuxProcessAdapterTests(unittest.TestCase):
     @real_process
     def test_leaderless_group_blocks_status_restart_and_signal_until_manual_recovery(self):
         pid_file = self.runtime_directory / "leaderless-child.pid"
+        release_leader = self.runtime_directory / "release-leader"
         source = (
             "import os,subprocess,sys,socket,time\n"
             "child=subprocess.Popen([sys.executable,'-c','import signal,time; "
             "signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)'])\n"
             f"open({str(pid_file)!r},'w').write(str(child.pid))\n"
             "path=os.environ['FACTORY_SOCKET_PATH']; s=socket.socket(socket.AF_UNIX); "
-            "s.bind(path); s.listen(); time.sleep(.3)\n"
+            "s.bind(path); s.listen()\n"
+            "deadline=time.monotonic()+60\n"
+            f"while not os.path.exists({str(release_leader)!r}) and time.monotonic()<deadline: time.sleep(.02)\n"
         )
         (self.release / "app/getzilla_factory/server.py").write_text(source)
         self.adapter.start(self.release, timeout=3)
         record_path = self.root / "state/process" / (self.release.name + ".json")
         record = json.loads(record_path.read_text())
         child_pid = int(pid_file.read_text())
+        release_leader.touch()
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline and (Path("/proc") / str(record["pid"])).exists():
             self.adapter._children[record["pid"]].poll()
