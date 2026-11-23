@@ -83,9 +83,27 @@ class GetzillaCliTests(unittest.TestCase):
     def test_parallel_workers_use_measured_capacity_with_two_cpu_reserve(self) -> None:
         from unittest import mock
         from getzilla import startup_cpu
-        with mock.patch.object(startup_cpu, 'measure', return_value={'chosen_capacity': 2}) as measure:
+        environment = {key: value for key, value in os.environ.items() if key != 'GETZILLA_TEST_CPU_RESERVE'}
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(startup_cpu, 'measure', return_value={'chosen_capacity': 2}) as measure:
             self.assertEqual(cli.test_workers(), 2)
         measure.assert_called_once_with(reserve=2, probe=False)
+
+    def test_ci_runner_can_lower_the_test_cpu_reserve_with_a_bounded_value(self) -> None:
+        from unittest import mock
+        from getzilla import startup_cpu
+        cases = [('0', 0), ('1', 1), ('64', 64), ('', 2), ('65', 2), ('-1', 2), ('abc', 2), (' 0', 2),
+                 ('٠', 2), ('007', 2)]
+        for value, expected in cases:
+            with self.subTest(value=value), mock.patch.dict(os.environ, {'GETZILLA_TEST_CPU_RESERVE': value}), \
+                    mock.patch.object(startup_cpu, 'measure', return_value={'chosen_capacity': 4}) as measure:
+                self.assertEqual(cli.test_cpu_reserve(), expected)
+                self.assertEqual(cli.test_workers(), 4)
+                measure.assert_called_once_with(reserve=expected, probe=False)
+        with mock.patch.dict(os.environ, {'GETZILLA_TEST_CPU_RESERVE': '0'}), \
+                mock.patch.object(startup_cpu, 'measure', side_effect=RuntimeError('no topology')), \
+                mock.patch.object(cli.os, 'cpu_count', return_value=4):
+            self.assertEqual(cli.test_workers(), 4)
 
     def test_parallel_entrypoint_preserves_full_discovery_options_and_failure_status(self) -> None:
         from unittest import mock

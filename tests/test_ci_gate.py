@@ -605,6 +605,38 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         self.assertIn('python scripts/getzilla_cli.py test --require-parallel tests --max-worker-restart=0 --durations=20', script)
         self.assertNotIn('unittest discover', script)
         self.assertNotIn('continue-on-error', core)
+        self.assertEqual(core['env'], {'GETZILLA_TEST_CPU_RESERVE': '0'})
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_macos_installer_runs_once_and_gates_the_aggregate_with_every_shard(self) -> None:
+        import yaml
+        workflow = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text(encoding='utf-8'))
+        jobs = workflow['jobs']
+        install_steps = [step['name'] for step in jobs['macos-install']['steps']]
+        self.assertIn('Installer from this commit (non-interactive, no agent)', install_steps)
+        self.assertIn('Hooks and CLI smoke in the installed project', install_steps)
+        shard_steps = [step['name'] for step in jobs['macos-core']['steps']]
+        self.assertFalse([name for name in shard_steps if name.startswith(('Installer', 'Hooks and CLI smoke'))])
+        aggregate = jobs['macos']
+        self.assertEqual(aggregate['needs'], ['macos-install', 'macos-core'])
+        self.assertEqual(aggregate['if'], 'always()')
+        guard = aggregate['steps'][0]
+        for install, shards, expected in [('success', 'success', 0), ('failure', 'success', 1),
+                                          ('success', 'failure', 1), ('skipped', 'success', 1),
+                                          ('success', 'cancelled', 1), ('', '', 1)]:
+            with self.subTest(install=install, shards=shards):
+                process = subprocess.run(['bash', '-c', guard['run']], capture_output=True, timeout=5,
+                                         env={**os.environ, 'MACOS_INSTALL_RESULT': install, 'MACOS_RESULT': shards})
+                self.assertEqual(process.returncode, expected)
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_only_pull_request_runs_cancel_their_outdated_run(self) -> None:
+        import yaml
+        workflow = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text(encoding='utf-8'))
+        self.assertEqual(workflow['concurrency'], {
+            'group': '${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}',
+            'cancel-in-progress': "${{ github.event_name == 'pull_request' }}",
+        })
 
     @unittest.skipUnless(os.name == 'posix' and importlib.util.find_spec('yaml') and shutil.which('bash'),
                          'requires POSIX, YAML and bash')
@@ -664,7 +696,7 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         import yaml
 
         workflow = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text(encoding='utf-8'))
-        for job_name in ('windows', 'macos-core'):
+        for job_name in ('windows', 'macos-install'):
             job = workflow['jobs'][job_name]
             step = next(item for item in job['steps'] if item['name'].startswith('Hooks and CLI smoke'))
             with self.subTest(job=job_name), project_copy(git=True) as root:

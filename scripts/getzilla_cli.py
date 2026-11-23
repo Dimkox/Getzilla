@@ -94,14 +94,26 @@ def script_path(name: str, cwd: Path | None = None) -> Path:
     return HOME / 'scripts' / name
 
 
+def test_cpu_reserve() -> int:
+    """CPUs `getzilla test` leaves free: the owner's n-2 reserve unless GETZILLA_TEST_CPU_RESERVE names 0-64.
+
+    A dedicated CI runner sets 0 to use all measured CPUs. Any other value keeps the default reserve.
+    """
+    value = os.environ.get('GETZILLA_TEST_CPU_RESERVE', '')
+    if value.isascii() and value.isdecimal() and len(value) <= 2 and int(value) <= 64:
+        return int(value)
+    return 2
+
+
 def test_workers() -> int:
-    """Workers for `getzilla test`: measured capacity with the n-2 reserve, else a safe fallback."""
+    """Workers for `getzilla test`: measured capacity with the CPU reserve, else a safe fallback."""
+    reserve = test_cpu_reserve()
     try:
         from getzilla.startup_cpu import measure
 
-        return max(1, int(measure(reserve=2, probe=False)['chosen_capacity']))
+        return max(1, int(measure(reserve=reserve, probe=False)['chosen_capacity']))
     except Exception:  # unsupported platform or unreadable topology: never block the tests
-        return max(1, (os.cpu_count() or 1) - 2)
+        return max(1, (os.cpu_count() or 1) - reserve)
 
 
 def run_tests(args: list[str], *, require_parallel: bool = False) -> int:
