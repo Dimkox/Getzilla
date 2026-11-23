@@ -1,0 +1,37 @@
+name: Diagnose native Git evidence for 449
+on:
+  push:
+    branches: [diagnostics/449-native-source]
+permissions:
+  contents: read
+jobs:
+  trace:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - name: Show underlying native source error for a synthetic local repository
+        env:
+          TMPDIR: ${{ runner.temp }}
+          PYTHONPATH: .getzilla:.
+        run: |
+          python - <<'PY'
+          import traceback
+          import unittest
+          from tests.test_ci_evidence import CiEvidenceTests
+          class Details(unittest.TextTestResult):
+              def addError(self, test, err):
+                  exc = err[1]
+                  while exc is not None:
+                      traceback.print_exception(type(exc), exc, exc.__traceback__, chain=False)
+                      exc = exc.__context__
+                  super().addError(test, err)
+          test = CiEvidenceTests('test_legacy_bundle_does_not_export_new_or_unknown_route_fields')
+          result = unittest.TextTestRunner(resultclass=Details).run(test)
+          raise SystemExit(not result.wasSuccessful())
+          PY
