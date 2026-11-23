@@ -33,6 +33,19 @@ def _journal_binding(root, report, head):
         return invalid
 
 
+def _source_problem(head, dirty) -> str:
+    """Name the observed difference (bounded) so a CI failure is diagnosable."""
+    expected = os.environ.get('GETZILLA_EXPECTED_HEAD')
+    parts = []
+    if head != expected:
+        parts.append(f'head {head} differs from expected {expected}')
+    if dirty:
+        lines = dirty.splitlines()
+        shown = '; '.join(line[:200] for line in lines[:20])
+        parts.append(f'{len(lines)} changed path(s): {shown}')
+    return (': ' + ' | '.join(parts))[:4096] if parts else ''
+
+
 def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: str, run_id: str) -> None:
     output.mkdir(parents=True, exist_ok=False)
     if output.is_symlink():
@@ -41,8 +54,10 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
     if not head:
         raise ValueError('CI evidence requires an exact Git HEAD')
     if job == 'linux-core' and status == 'success':
-        if head != os.environ.get('GETZILLA_EXPECTED_HEAD') or git_output(root, 'status', '--porcelain'):
-            raise ValueError('successful core evidence requires a clean exact expected source')
+        dirty = git_output(root, 'status', '--porcelain', '--untracked-files=all')
+        if head != os.environ.get('GETZILLA_EXPECTED_HEAD') or dirty:
+            raise ValueError('successful core evidence requires a clean exact expected source'
+                             + _source_problem(head, dirty))
     inventory = []
     journal_report = None
     for name in _LOGS:
