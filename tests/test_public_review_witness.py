@@ -57,7 +57,7 @@ class PublicReviewWitnessTests(unittest.TestCase):
         import json
         import hashlib
         import tempfile
-        temporary = tempfile.TemporaryDirectory(prefix='public-review-owned-')
+        temporary = tempfile.TemporaryDirectory(prefix='public-review-owned-', dir=Path.home())
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         root.chmod(0o700)
