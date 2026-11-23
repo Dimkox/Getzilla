@@ -212,7 +212,7 @@ def _factory_unit_valid(unit, expected_source):
 def evaluate(needs, records, *, head, tree, run_id, attempt, now=None):
     now = now or datetime.now(timezone.utc)
     problems = []
-    for name in ("linux-core", "live-acceptance", "security-expanded"):
+    for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded"):
         if needs.get(name) != "success":
             problems.append(f"required job {name} did not succeed")
     for name in ("linux-core", *CELL_CHECKS, "security-expanded"):

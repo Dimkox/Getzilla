@@ -87,7 +87,7 @@ class CiAdmissionTests(unittest.TestCase):
         self.assertIn("linux-core", jobs)
         self.assertIn("live-acceptance", jobs)
         self.assertIn("security-expanded", jobs)
-        self.assertIn("needs: [linux-core, live-acceptance, security-expanded]", jobs["linux"])
+        self.assertIn("needs: [linux-core, linux-core-tests, live-acceptance, security-expanded]", jobs["linux"])
         self.assertIn("if: always()", jobs["linux"])
         self.assertIn("getzilla_ci_admission.py", jobs["linux"])
         self.assertIn("fail-fast: false", jobs["live-acceptance"])
@@ -130,7 +130,7 @@ class CiAdmissionTests(unittest.TestCase):
 
     def evaluate(self, records=None, needs=None, now=NOW):
         module = self.module()
-        return module.evaluate(needs or {name: "success" for name in ("linux-core", "live-acceptance", "security-expanded")},
+        return module.evaluate(needs or {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")},
             records or self.records(), head=HEAD, tree=TREE, run_id="123", attempt="2", now=now)
 
     def test_all_required_evidence_passes_on_the_exact_source(self):
@@ -143,9 +143,16 @@ class CiAdmissionTests(unittest.TestCase):
 
     def test_missing_skipped_cancelled_or_failed_job_cannot_admit(self):
         for state in ("skipped", "cancelled", "failure", None):
-            needs = {name: "success" for name in ("linux-core", "live-acceptance", "security-expanded")}
+            needs = {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")}
             needs["live-acceptance"] = state
             self.assertTrue(self.evaluate(needs=needs), state)
+
+    def test_missing_skipped_cancelled_or_failed_core_test_shards_cannot_admit(self):
+        self.assertFalse(self.evaluate())
+        for state in ("skipped", "cancelled", "failure", None):
+            needs = {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")}
+            needs["linux-core-tests"] = state
+            self.assertIn("required job linux-core-tests did not succeed", self.evaluate(needs=needs), state)
 
     def test_wrong_source_or_attempt_or_missing_cell_is_rejected(self):
         for key, value in (("source", {"head": "f" * 40, "tree": TREE}), ("attempt", "1")):
