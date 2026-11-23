@@ -951,6 +951,10 @@ def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
     binding = binding or _git_binding(root, _probe=False)
     native = isinstance(guard, NativeGitGraph)
     worktree = guard.address(binding.root) if native else binding.root
+    # Darwin accepts the held /.vol address for chdir, but Git traverses its
+    # virtual parent components when handed that spelling as --work-tree.
+    # Resolve "." inside the child already launched at the held directory.
+    git_worktree = Path('.') if native and sys.platform == 'darwin' else worktree
     worktree_fds = guard.pass_fds((binding.root,)) if native else ()
     def parse_config(raw):
         volume_root = Path(Path(root).anchor)
@@ -971,11 +975,11 @@ def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
         environment['GIT_OBJECT_DIRECTORY'] = str(view.path/'objects')
         descriptors = view.pass_fds + worktree_fds
         command = _git_command(arguments, safe_directory=binding.root,
-                               git_directory=view.path, work_tree=worktree)
+                               git_directory=view.path, work_tree=git_worktree)
         command[1:1] = ['--attr-source='+view.empty_tree, '-c', 'protocol.allow=never']
         if arguments[:1] in (['status'], ['diff']):
             inventory = _git_command(['ls-files', '--stage', '-z'], safe_directory=binding.root,
-                git_directory=view.path, work_tree=worktree)
+                git_directory=view.path, work_tree=git_worktree)
             code, entries, _ = _run_capped(inventory, cwd=worktree, env=environment,
                 stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=4096,
                 timeout=_bounded_git_timeout(timeout, deadline), pass_fds=descriptors)
