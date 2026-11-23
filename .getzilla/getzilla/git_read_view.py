@@ -12,6 +12,7 @@ import time
 import zlib
 
 from . import fsx
+from .git_binding_guard import NativeGitGraph
 
 MAX_BYTES = 20_000_000
 MAX_ENTRIES = 4096
@@ -222,7 +223,12 @@ class GitReadView:
             for name in ('alternates', 'http-alternates'):
                 if self.read(self.binding.objects_directory/'info'/name, 4096) is not None:
                     raise ValueError('Git alternate object stores unsupported')
-            use_descriptor = isinstance(objects, int) and sys.platform in {'linux', 'darwin'}
+            # Ordinary Darwin reads use the checked repository binding. Only
+            # native reads own a graph with descriptor-addressed Git paths.
+            use_descriptor = isinstance(objects, int) and (
+                sys.platform == 'linux' or
+                (sys.platform == 'darwin' and isinstance(self.guard, NativeGitGraph))
+            )
             pointer = str(fsx.held_directory_address(objects)) if use_descriptor else str(self.binding.objects_directory)
             (self.path/'objects/info/alternates').write_text(json.dumps(pointer, ensure_ascii=False)+'\n', encoding='utf-8', newline='\n')
             raw = b'tree 0\0'

@@ -32,6 +32,13 @@ class GitReadViewTests(unittest.TestCase):
         return subprocess.run(['git', *args], cwd=root or self.root,
             env=git._git_environment(), capture_output=True, check=True, timeout=10).stdout
 
+    def test_ordinary_darwin_read_resolves_commit_through_checked_objects_directory(self):
+        from getzilla import git_read_view
+        with patch.object(git_read_view.sys, 'platform', 'darwin'), patch.object(
+            git_read_view.fsx, 'held_directory_address', side_effect=AssertionError('unexpected native address')
+        ):
+            self.assertEqual(git._exact_commit(self.root, self.head, label='base_sha'), self.head)
+
     def test_worktree_and_info_attributes_cannot_change_canonical_byte_diff(self):
         (self.root / '.gitattributes').write_text('value.txt -diff\n')
         (self.root / '.git/info/attributes').write_text('value.txt -diff\n')
