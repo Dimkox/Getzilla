@@ -23,23 +23,11 @@ jobs:
           awk '/^[[:alnum:]]/ {selected=($0 ~ /^pyyaml==/)} selected' trust-ci/requirements-runner.txt > "$RUNNER_TEMP/yaml.txt"
           python -m pip install --require-hashes --only-binary=:all: --no-deps -r "$RUNNER_TEMP/yaml.txt"
           python - <<'PYTEST'
-          import unittest, traceback
-          from getzilla import verification_failure_excerpt as diag
-          def details(e):
-              print('Unqualified test IDs:', e.get('unqualified_skips'))
-              print('Synthetic problems:', str(e.get('problems'))[:4800])
-              return 'archived integration failed'
-          diag.factory_assertion_message = details
-          class Result(unittest.TextTestResult):
-              def addError(self,t,err):
-                  exc=err[1]
-                  while exc is not None:
-                      traceback.print_exception(type(exc),exc,exc.__traceback__,chain=False)
-                      exc=exc.__context__
-                  super().addError(t,err)
-          names=['tests.test_installer.InstallerTests.test_archived_engine_verifier_runs_complete_installed_factory_inventory',
-                 'tests.test_jira_worker_bootstrap', 'tests.test_retrieval_trace.RetrievalTraceTests.test_repeated_query_has_distinct_attempt_and_real_cache_hit',
-                 'tests.test_public_review_witness.PublicReviewWitnessTests.test_owned_review_source_cut_checks_report_custody_before_use']
-          result=unittest.TextTestRunner(resultclass=Result,verbosity=2).run(unittest.defaultTestLoader.loadTestsFromNames(names))
-          raise SystemExit(not result.wasSuccessful())
+          import resource as r, sys, subprocess
+          for kind in (r.RLIMIT_AS,r.RLIMIT_DATA,r.RLIMIT_RSS):
+              for cap in (2**30,2**28,2**26):
+                  for keep in (0,1):
+                      stmt=f"import resource as r; lo,hi=r.getrlimit({kind}); print(lo,hi,flush=True); r.setrlimit({kind},({cap},hi if {keep} else {cap})); print(r.getrlimit({kind}))"
+                      p=subprocess.run([sys.executable,'-c',stmt],capture_output=True,text=True)
+                      print(kind,cap,keep,p.returncode,p.stdout.splitlines(),p.stderr.splitlines()[-1:])
           PYTEST
