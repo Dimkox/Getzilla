@@ -10,6 +10,24 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 
 class PublicReviewWitnessTests(unittest.TestCase):
+    def test_source_binding_matches_full_observation_after_worktree_and_index_changes(self):
+        from getzilla.retrieval import public_review_witness as witness
+        from tests._support import project_copy
+        import subprocess
+
+        with project_copy(git=True) as root:
+            path = root / "witness-binding-test.txt"
+            for stage in ("initial", "untracked", "staged", "modified"):
+                with self.subTest(stage=stage):
+                    if stage == "untracked":
+                        path.write_text("first")
+                    elif stage == "staged":
+                        subprocess.run(["git", "add", "--", path.name], cwd=root, check=True)
+                    elif stage == "modified":
+                        path.write_text("second")
+                    self.assertEqual(witness._source_binding(root),
+                                     (witness._exact_head(root), witness.tree_fingerprint(root)))
+
     def test_observation_kind_is_not_merge_evidence_and_cannot_be_pass(self):
         from getzilla.receipts import write_receipt, get_receipt, RECEIPT_KINDS
         from getzilla import state

@@ -7,9 +7,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
+import re
 from pathlib import Path
 import time
 
+from ..architecture_diff import _git, git_binding_scope
 from .. import state
 from ..continuity import context_binding, scope_gaps
 from ..optional_modules import admit_module
@@ -85,6 +87,22 @@ def _identity(info):
             ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_uid', 'st_gid', 'st_nlink')}
 
 
+def _source_binding(root):
+    # Porcelain v2 reports HEAD's commit and every index/worktree change.
+    # Only the exact two clean-branch headers qualify for the fast path.
+    try:
+        raw = _git(root, ['status', '--porcelain=v2', '--branch', '--untracked-files=all',
+                         '--no-renames', '-z'], limit=65536)
+    except (OSError, ValueError):
+        raw = None
+    clean = re.fullmatch(rb'# branch\.oid ([0-9a-f]{40})\x00# branch\.head [^\x00]+\x00', raw or b'')
+    if clean:
+        head = clean.group(1)
+        return head.decode('ascii'), hashlib.sha256(head).hexdigest()
+    return _exact_head(root), tree_fingerprint(root)
+
+
+
 class _Capture:
     def __init__(self, root):
         root = Path(root)
@@ -103,7 +121,7 @@ class _Capture:
             self.policy = sha(policy)
             self.manifest = sha(anchor.read('.getzilla/managed-components.json', source=True))
             _require(admit_module(root, 'retrieval-research').get('allowed'), 'public_witness_unavailable')
-        self.source_binding = (_exact_head(root), tree_fingerprint(root))
+        self.source_binding = _source_binding(root)
         _require(self.source_binding[0] is not None, 'public_witness_source_unavailable')
         self.current()
 
@@ -120,7 +138,7 @@ class _Capture:
                 and sha(anchor.read('.getzilla/config/policy.json', source=True)) == self.policy
                 and sha(anchor.read('.getzilla/managed-components.json', source=True)) == self.manifest
                 and admit_module(self.root, 'retrieval-research').get('allowed'), 'public_witness_stale')
-        _require((_exact_head(self.root), tree_fingerprint(self.root)) == self.source_binding, 'public_witness_stale')
+        _require(_source_binding(self.root) == self.source_binding, 'public_witness_stale')
         self.check()
 
     def read(self, path, *, limit=MAX_JSON_BYTES, source=False, expected=None, keep=True):
@@ -679,7 +697,7 @@ def _reviewed_source_cut(reference, *, batch, composition):
         object.__setattr__(fence, key, value)
     from .research import _public_source_cut
     try:
-        with _public_source_cut(capture.root, capture.root / checked_relative(registration['public_sources']),
+        with git_binding_scope(), _public_source_cut(capture.root, capture.root / checked_relative(registration['public_sources']),
                 batch=batch, review_fence=fence, catalogs=composition.catalogs) as result:
             yield result
     finally:

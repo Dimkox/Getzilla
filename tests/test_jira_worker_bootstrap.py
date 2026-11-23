@@ -62,7 +62,7 @@ class JiraWorkerBootstrapTests(unittest.TestCase):
             with self.subTest(path=row['path']):
                 self.assertEqual(row['sha256'], hashlib.sha256((MODULE / row['path']).read_bytes()).hexdigest())
 
-    @unittest.skipUnless(os.name == 'posix', 'worker import probe uses POSIX resource bounds')
+    @unittest.skipUnless(sys.platform == 'linux', 'the worker probe requires an enforced RLIMIT_AS')
     def test_exact_own_core_layouts_and_closed_failures(self):
         runtime = ROOT / '.getzilla/runtime'
         runtime.mkdir(exist_ok=True)

@@ -329,7 +329,7 @@ def _stop(process: subprocess.Popen, *, grace_seconds: float | None = None) -> N
     if os.name == 'posix':
         _action_ownership_mark('term')
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            fsx.signal_owned_group(process, signal.SIGTERM)
             _action_ownership_mark('term', status='returned')
         except ProcessLookupError:
             pass
@@ -340,14 +340,14 @@ def _stop(process: subprocess.Popen, *, grace_seconds: float | None = None) -> N
             while time.monotonic() < deadline:
                 process.poll()
                 try:
-                    os.killpg(process.pid, 0)
+                    fsx.signal_owned_group(process, 0)
                 except ProcessLookupError:
                     break
                 time.sleep(0.01)
             _action_ownership_mark('grace', status='returned')
             _action_ownership_mark('kill')
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                fsx.signal_owned_group(process, signal.SIGKILL)
                 _action_ownership_mark('kill', status='returned')
             except ProcessLookupError:
                 pass

@@ -73,6 +73,16 @@ _LINUX_CASES = frozenset({
     "test_setup_manager_real_process_install_failed_update_reconcile_remove_and_purge",
     "test_concurrent_managers_leave_one_child_and_coherent_journal",
 })
+_LOCAL_WRITER_CASES = frozenset({
+    "test_writer_changes_only_isolated_worktree_and_retains_tested_patch",
+    "test_failing_checks_are_retained_and_never_reported_as_success",
+    "test_same_task_run_is_not_executed_twice",
+    "test_changed_verification_command_cannot_reuse_previous_success",
+    "test_native_child_port_boundary_and_cached_identity",
+    "test_timeout_stops_term_resistant_descendant_and_preserves_partial_work",
+    "test_out_of_scope_change_is_refused",
+    "test_cli_runs_a_packet_without_a_server_or_credentials",
+})
 _PROCFS_STORE_CASES = frozenset({
     "test_crc_and_encrypted_members_fail_closed",
     "test_descriptor_lifecycle_close_constructor_rollback_and_hostile_replay_are_bounded",
@@ -313,7 +323,7 @@ def observed_context(path: str | None = None) -> dict:
                      and callable(getattr(signal, "pidfd_send_signal", None)))
     except (OSError, subprocess.SubprocessError, UnicodeError):
         pass
-    return {"unit_database_bindings": "scrubbed", "host_supported": supported,
+    return {"linux_kernel": sys.platform == "linux", "unit_database_bindings": "scrubbed", "host_supported": supported,
             "unix_peer_credentials": os.name == 'posix' and hasattr(socket, 'SO_PEERCRED'),
             "posix_source_custody": os.name == 'posix' and hasattr(os, 'geteuid'),
             "procfs_descriptor_reopen": _procfs_descriptor_reopen(),
@@ -348,6 +358,11 @@ def skip_allowance(identifier: str, context: dict) -> tuple[str, str] | None:
     if (group == 'test_retrieval_current_authority.CurrentAuthorityRetrievalTests'
             and context.get('posix_source_custody') is False):
         return 'unsupported-native-source-profile', 'requires POSIX native source custody'
+    if context.get("linux_kernel") is False:
+        if group == "test_local_writer.LocalWriterTests" and method in _LOCAL_WRITER_CASES:
+            return "unsupported-local-writer-host", "local writer currently supports Linux"
+        if case == "test_local_network.LocalNetworkTests.test_real_child_and_descendant_cannot_bypass_proxy_to_backend":
+            return "unsupported-local-network-host", "Linux Landlock profile"
     if (group == "test_linux_process_adapter.LinuxProcessAdapterTests"
             and method in _LINUX_CASES and not context["host_supported"]):
         return "unsupported-process-host", "requires the supported host profile: Ubuntu 24.04 x86_64 with /usr/bin/python3.12"
