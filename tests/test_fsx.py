@@ -78,6 +78,23 @@ class KillProcessTreeTests(unittest.TestCase):
 
 
 class FsxTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform in {'linux', 'darwin'}, 'native held-directory backend')
+    def test_held_directory_address_survives_path_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / 'directory'
+            original.mkdir()
+            (original / 'value').write_bytes(b'original')
+            descriptor = os.open(original, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                address = fsx.held_directory_address(descriptor)
+                original.rename(root / 'moved')
+                original.mkdir()
+                (original / 'value').write_bytes(b'replacement')
+                self.assertEqual((address / 'value').read_bytes(), b'original')
+            finally:
+                os.close(descriptor)
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root_path = Path(self._tmp.name)

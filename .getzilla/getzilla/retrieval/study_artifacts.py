@@ -6,6 +6,7 @@ import hashlib
 import os
 from pathlib import Path
 import stat
+import sys
 import time
 
 from .budget import RetrievalError
@@ -36,7 +37,13 @@ Metadata snapshots never extend or replace any of those permits.
             self._tick()
             import resource
             limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
-            present = len(os.listdir('/proc/self/fd'))
+            if sys.platform == 'linux':
+                descriptors = '/proc/self/fd'
+            elif sys.platform == 'darwin':
+                descriptors = '/dev/fd'
+            else:
+                raise RetrievalError('artifact_custody_unavailable')
+            present = len(os.listdir(descriptors))
             self._fd_headroom = (8256 if limit == resource.RLIM_INFINITY
                                  else max(0, limit - present - 64))
             root = Path(root)

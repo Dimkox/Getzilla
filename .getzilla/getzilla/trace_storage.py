@@ -617,8 +617,8 @@ class LocalRead:
     def git_location(self):
         self.check()
         descriptor = self.handles[0][0]
-        address = Path(f'/proc/self/fd/{descriptor}')
         try:
+            address = fsx.held_directory_address(descriptor)
             if _local_identity(address.stat()) != self.handles[0][1]:
                 raise ReadUnavailable()
         except OSError:

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import tempfile
 import time
 import zlib
@@ -221,14 +222,15 @@ class GitReadView:
             for name in ('alternates', 'http-alternates'):
                 if self.read(self.binding.objects_directory/'info'/name, 4096) is not None:
                     raise ValueError('Git alternate object stores unsupported')
-            pointer = f'/proc/self/fd/{objects}' if isinstance(objects, int) and Path('/proc/self/fd').is_dir() else str(self.binding.objects_directory)
+            use_descriptor = isinstance(objects, int) and sys.platform in {'linux', 'darwin'}
+            pointer = str(fsx.held_directory_address(objects)) if use_descriptor else str(self.binding.objects_directory)
             (self.path/'objects/info/alternates').write_text(json.dumps(pointer, ensure_ascii=False)+'\n', encoding='utf-8', newline='\n')
             raw = b'tree 0\0'
             self.empty_tree = ('4b825dc642cb6eb9a060e54bf8d69288fbee4904' if object_format == 'sha1' else hashlib.sha256(raw).hexdigest())
             object_path = self.path/'objects'/self.empty_tree[:2]/self.empty_tree[2:]
             object_path.parent.mkdir(mode=0o700)
             object_path.write_bytes(zlib.compress(raw))
-            self.pass_fds = (objects,) if pointer.startswith('/proc/self/fd/') else ()
+            self.pass_fds = (objects,) if use_descriptor else ()
             self.check()
             return self
         except BaseException:

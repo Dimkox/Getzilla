@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import errno
 import functools
+import sys
 import os
 import stat
 import time
@@ -40,6 +41,22 @@ O_NOCTTY = getattr(os, 'O_NOCTTY', 0)
 O_BINARY = getattr(os, 'O_BINARY', 0)
 O_NOINHERIT = getattr(os, 'O_NOINHERIT', 0)
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def held_directory_address(descriptor: int) -> Path:
+    """Address the held directory for a child process, checking its filesystem identity."""
+    held = os.fstat(descriptor)
+    if not stat.S_ISDIR(held.st_mode):
+        raise NotADirectoryError(descriptor)
+    if sys.platform == 'linux':
+        address = Path('/proc/self/fd') / str(descriptor)
+    elif sys.platform == 'darwin':
+        address = Path('/.vol') / str(held.st_dev) / str(held.st_ino)
+    else:
+        raise OSError(errno.ENOTSUP, 'held directory addressing unavailable')
+    if not os.path.samestat(held, address.stat()):
+        raise OSError(errno.ESTALE, 'held directory identity changed')
+    return address
 
 
 class WindowsDirectory:

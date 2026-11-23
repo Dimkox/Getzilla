@@ -120,7 +120,7 @@ class NativeGitGraph:
     mode = 'native-fd-strict-v1'
 
     def __init__(self, anchor):
-        if sys.platform != 'linux' or fsx.WINDOWS:
+        if sys.platform not in {'linux', 'darwin'} or fsx.WINDOWS:
             raise GuardUnavailable('native-platform')
         anchor.check_cwd()
         if os.getcwd() != anchor.workspace:
@@ -328,7 +328,7 @@ class NativeGitGraph:
     def address(self,path):
         self._active()
         record = self._directories[path]
-        value = Path('/proc/self/fd')/str(record.descriptor)
+        value = fsx.held_directory_address(record.descriptor)
         if _identity(os.stat(value)) != _identity(os.fstat(record.descriptor)):
             self._fail('proc descriptor')
         return value
