@@ -232,9 +232,15 @@ def produce(root, source, run, volume, builder):
         roots[reference] = descriptor
         bindings.append(_binding(use, reference))
     build_inventory = collect_inventory(root, image_bindings=bindings)
-    if len(build_inventory.get('builds', [])) != 5 or any(gap['code'] not in
-            {'unresolved-image', 'missing-image-source-selection', 'unused-image-source-selection'} for gap in build_inventory['gaps']):
-        raise BackendUnavailable('current source does not match the five closed local builds')
+    build_count = len(build_inventory.get('builds', []))
+    deferred_codes = {'unresolved-image', 'missing-image-source-selection', 'unused-image-source-selection'}
+    refused = [gap for gap in build_inventory['gaps'] if gap['code'] not in deferred_codes]
+    if build_count != 5 or refused:
+        detail = refused[0]['code'] if refused else 'build-count'
+        if refused and refused[0]['message'] == 'unresolved COPY source':
+            detail += ': unresolved COPY source'
+        raise BackendUnavailable(f'local build inventory: expected 5, found {build_count}; '
+                                 f'{len(refused)} blocking gaps; first condition: {detail}')
     # The hard mounted volume contains every registry blob, context, cache and
     # output. Kernel ENOSPC refuses even while an untrusted build is running.
     for digest, raw in registry.blobs.items():

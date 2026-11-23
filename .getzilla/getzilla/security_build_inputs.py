@@ -205,6 +205,20 @@ def describe_build(root, manifest, service, fields, files, bindings):
             raise BuildInputError('unsupported COPY source grammar')
         for value in values[:-1]:
             value = re.sub(r'\$\{([A-Z][A-Z0-9_]*)\}', lambda m: supplied.get(m[1], '$'), value)
+            if value == 'requirements-*.txt':
+                expected = {'requirements-build.txt', 'requirements-runner.txt',
+                            'requirements-runtime.txt', 'requirements-test.txt'}
+                matches = set()
+                for row in rows:
+                    relative = PurePosixPath(row['path']).relative_to(context)
+                    name = relative.parts[0]
+                    if name.startswith('requirements-') and name.endswith('.txt'):
+                        if len(relative.parts) != 1:
+                            raise BuildInputError('requirements COPY matched a directory')
+                        matches.add(name)
+                if matches != expected:
+                    raise BuildInputError('requirements COPY differs from the four captured lock profiles')
+                continue
             if '$' in value or re.search(r'[*?\[\]]', value):
                 raise BuildInputError('unresolved COPY source')
             source_path = _relative(context, value)
