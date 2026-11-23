@@ -634,7 +634,8 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         import yaml
         workflow = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text(encoding='utf-8'))
         self.assertEqual(workflow['concurrency'], {
-            'group': '${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}',
+            'group': "${{ github.workflow }}-${{ github.event_name == 'pull_request' && "
+                     "format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",
             'cancel-in-progress': "${{ github.event_name == 'pull_request' }}",
         })
 

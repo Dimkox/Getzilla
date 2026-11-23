@@ -24,10 +24,10 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels the outdated run of the same pull request. Push and tag runs
-# group by their exact commit, so they never cancel each other.
+# A new push to a pull request cancels the outdated run of the same pull request. Every push and tag
+# run gets its own group (its run id), so it never waits for, or is cancelled by, another run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
