@@ -43,6 +43,16 @@ _ARCHIVAL_DOCUMENTS = {
 }
 
 
+_RETIRED_BENCHMARK_RECIPE = 'engineering/benchmarks/issue170/Dockerfile.tests'
+_RETIRED_BENCHMARK_INPUTS = {
+    'engineering/benchmarks/issue170/Dockerfile.tests': (227, '7c95be60b2351f64d8c10a979d482db2089c50f4965b08ce3d5f82d5b4ec0be1'),
+    'engineering/benchmarks/issue170/Dockerfile': (633, '2f2279727677104a75a03b208b348c56884a8cb1a12793dfc54bc93d08d4818c'),
+    'engineering/benchmarks/issue170/report.md': (10454, '46be8d4e808930fc548d40d089e2438b73b90a7b3431a38b55def6725f6207d5'),
+    'engineering/benchmarks/issue170/artifacts/cleanup-result.json': (651, '3e6ce7b1aabcbc8cc2a0b7c815b68697b62906ccfcae7d15eeb80b32ad0d6a11'),
+    'engineering/benchmarks/issue170/artifacts/image-identities.json': (245, '7ca768c98c16c1690f806274fbf1d06e6af23846a97e475909c3400bf77522a5'),
+}
+
+
 def canonical_digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
                                     ensure_ascii=True, allow_nan=False).encode()).hexdigest()
@@ -73,6 +83,17 @@ def _safe_bytes(root: Path, relative: str, *, maximum: int = MAX_MANIFEST_BYTES)
 
 
 def _archival_document(root: Path, relative: str, files: list[str]) -> dict | None:
+    if relative == _RETIRED_BENCHMARK_RECIPE:
+        evidence = []
+        for path, (size, digest) in _RETIRED_BENCHMARK_INPUTS.items():
+            if path not in files:
+                raise ValueError('retired benchmark input is absent from tracked source')
+            data = _safe_bytes(root, path, maximum=size)
+            if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+                raise ValueError('retired benchmark input differs')
+            evidence.append({'path': path, 'bytes': size, 'sha256': digest})
+        return {**evidence[0], 'classification': 'retired-benchmark-recipe',
+                'provenance': evidence[1:]}
     record = _ARCHIVAL_DOCUMENTS.get(relative)
     if record is None:
         return None
