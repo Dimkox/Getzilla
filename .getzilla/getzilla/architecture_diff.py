@@ -14,6 +14,7 @@ import signal
 import stat
 # Git is resolved once and invoked only with an argument vector and shell=False.
 import subprocess  # nosec B404
+import sys
 import tempfile
 import threading
 import time
@@ -271,7 +272,8 @@ def _run_capped(
 ) -> tuple[int, bytes, bytes]:
     """Run a process while enforcing limits before output is fully produced."""
     input_stream = None
-    if stdin_data is not None:
+    pipe_input = stdin_data is not None and bool(pass_fds) and sys.platform == 'darwin'
+    if stdin_data is not None and not pipe_input:
         if pass_fds:
             if not hasattr(os,'memfd_create') or not getattr(os,'MFD_CLOEXEC',0):
                 raise ArchitectureError('native Git bounded input is unavailable',code='io')
@@ -289,7 +291,7 @@ def _run_capped(
             input_stream.seek(0)
         process = subprocess.Popen(  # nosec B603
             command, cwd=cwd, env=env,
-            stdin=input_stream if input_stream is not None else subprocess.DEVNULL,
+            stdin=subprocess.PIPE if pipe_input else (input_stream if input_stream is not None else subprocess.DEVNULL),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
             **({'pass_fds':pass_fds} if pass_fds else {}),
             **fsx.process_group_kwargs(),
@@ -320,6 +322,13 @@ def _run_capped(
             for stream in streams:
                 os.set_blocking(stream.fileno(), False)
                 selector.register(stream, selectors.EVENT_READ)
+            if pipe_input:
+                pending_input = memoryview(stdin_data)
+                if pending_input:
+                    os.set_blocking(process.stdin.fileno(), False)
+                    selector.register(process.stdin, selectors.EVENT_WRITE)
+                else:
+                    process.stdin.close()
         except Exception as exc:
             raise ArchitectureError(
                 f"bounded process setup failed: {exc}", code="io"
@@ -336,6 +345,18 @@ def _run_capped(
                 raise ArchitectureError("bounded process timeout exceeded", code="timeout")
             for key, _mask in events:
                 stream = key.fileobj
+                if pipe_input and stream is process.stdin:
+                    try:
+                        written = os.write(stream.fileno(), pending_input[:65536])
+                    except BlockingIOError:
+                        continue
+                    except BrokenPipeError:
+                        written = len(pending_input)
+                    pending_input = pending_input[written:]
+                    if not pending_input:
+                        selector.unregister(stream)
+                        stream.close()
+                    continue
                 buffer, limit = streams[stream]
                 chunk = os.read(stream.fileno(), min(65_536, limit - len(buffer) + 1))
                 if not chunk:
@@ -359,7 +380,7 @@ def _run_capped(
     finally:
         if selector is not None:
             selector.close()
-        for stream in (process.stdout, process.stderr):
+        for stream in (process.stdin, process.stdout, process.stderr):
             if stream is None:
                 continue
             if not stream.closed:
