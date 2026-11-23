@@ -37,6 +37,7 @@ O_DIRECTORY = getattr(os, 'O_DIRECTORY', 0)
 O_NOFOLLOW = getattr(os, 'O_NOFOLLOW', 0)
 O_NONBLOCK = getattr(os, 'O_NONBLOCK', 0)
 O_CLOEXEC = getattr(os, 'O_CLOEXEC', 0)
+_DARWIN_EXIT_SETTLE_SECONDS = 0.5
 O_NOCTTY = getattr(os, 'O_NOCTTY', 0)
 O_BINARY = getattr(os, 'O_BINARY', 0)
 O_NOINHERIT = getattr(os, 'O_NOINHERIT', 0)
@@ -446,8 +447,15 @@ def darwin_owned_group_absent(process) -> bool:
     import subprocess
     import sys
 
-    if sys.platform != 'darwin' or process.poll() is None:
+    if sys.platform != 'darwin':
         return False
+    # Darwin can refuse killpg with EPERM while the leader is still exiting
+    # and not yet waitable. Give that exit a short, bounded time to finish.
+    deadline = time.monotonic() + _DARWIN_EXIT_SETTLE_SECONDS
+    while process.poll() is None:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.005)
     census = subprocess.run(['/bin/ps', '-A', '-o', 'pgid='], capture_output=True,
                             timeout=2, check=True, env={'LC_ALL': 'C'})
     groups = census.stdout.split()

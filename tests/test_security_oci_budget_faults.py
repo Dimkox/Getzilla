@@ -48,6 +48,24 @@ class BudgetFaultControls(unittest.TestCase):
         for port in ("socket.socket", "socket.getaddrinfo", "subprocess.Popen", "subprocess.run"):
             effects.enter_context(mock.patch(port, side_effect=AssertionError("outside effects denied")))
 
+    def test_measurement_rejects_over_budget_before_returning_images(self):
+        records = [{'reference': name + '@sha256:' + 'a' * 64} for name in ('docker', 'python')]
+        for ceiling, status, counts in [(100002, 'partial', [1, 1]), (100003, 'complete', [1, 2])]:
+            budget = oci._Budget(dict(oci.LIMITS, images=[], platform='linux/amd64'))
+            budget.totals['entries'] = 100000
+            with self.subTest(status=status), mock.patch.object(oci, '_MEASUREMENT_CEILING', ceiling):
+                with self.assertRaises(oci.OCIError) as caught:
+                    with oci._measure_import_entries(budget, records, True):
+                        for budget.image_ordinal in (0, 1, 1):
+                            budget.charge('entries', 1, phase='tar-entries')
+                    self.fail('over-budget images reached caller')
+                detail = oci.bound_fault(caught.exception)
+                self.assertEqual((detail['before'], detail['attempted']), (100000, 100001))
+                measurement = detail['entry_measurement']
+                self.assertEqual((measurement['status'], measurement['prior']), (status, 100000))
+                self.assertEqual([row[2] for row in measurement['images']], counts)
+                self.assertEqual([row[0] for row in measurement['images']], ['docker', 'python'])
+
     def test_actual_dimensions_keep_exact_ceiling_and_failed_charge_totals(self):
         profile = dict(
             oci.LIMITS,
