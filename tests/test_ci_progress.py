@@ -228,6 +228,82 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.refuse('gh run rerun 7')
 
+    def test_recovery_allows_one_paced_transient_retry_and_success_resets_the_budget(self):
+        command = 'gh run view 7 --json databaseId,status'
+        self.observe(command, code=1, output='connection reset by peer', now=T0)
+        block = next(row for row in ci.inspect(self.root, SCOPE, now=T0 + 1) if row['class'] == 'transient')
+        ci.recover(self.root, SCOPE, block['loop_id'], block['revision'], 'new-evidence', 'proxy restarted', now=T0 + 2)
+        self.assertIsNone(self.refuse(command, now=T0 + 3))
+        self.assertIsNotNone(self.refuse(command, now=T0 + 4))
+        self.observe(command, output=run_json(), now=T0 + 40)
+        self.observe(command, code=1, output='connection reset by peer', now=T0 + 41)
+        self.assertEqual(next(row['count'] for row in ci.inspect(self.root, SCOPE, now=T0 + 42)
+                              if row['class'] == 'transient'), 1)
+
+    def test_rate_limit_second_step_and_http_4xx_are_deterministic(self):
+        command = 'gh run view 8 --json databaseId,status'
+        self.observe(command, code=1, output='HTTP 429: API rate limit exceeded', now=T0)
+        self.observe(command, code=1, output='HTTP 429: API rate limit exceeded', now=T0 + 60)
+        self.assertIsNotNone(self.refuse(command, now=T0 + 60 + 299))
+        self.assertIsNone(self.refuse(command, now=T0 + 60 + 300))
+        for status in ('405', '410', '451'):
+            other = f'gh run view {status} --json databaseId,status'
+            self.observe(other, code=1, output=f'HTTP {status}: connection reset', now=T0)
+            self.assertIsNone(self.refuse(other, now=T0 + 1), status)
+
+    def test_rerun_rule_needs_two_consecutive_completed_failed_attempts(self):
+        poll = 'gh run view 7 --json databaseId,attempt,headSha,status,conclusion,updatedAt,jobs'
+        for between in ('success', 'cancelled'):
+            with self.subTest(between=between):
+                self.setUp()
+                self.observe(poll, output=run_json(attempt=1, jobs=failed_jobs()), now=T0)
+                self.observe(poll, output=run_json(attempt=2, conclusion=between, updated='2026-11-23T10:30:00Z',
+                                                   jobs=[]), now=T0 + 1)
+                self.observe(poll, output=run_json(attempt=3, updated='2026-11-23T11:00:00Z', jobs=failed_jobs()),
+                             now=T0 + 2)
+                self.assertIsNone(self.refuse('gh run rerun 7', now=T0 + 3))
+
+    def test_older_replay_of_the_same_attempt_is_historical_and_cannot_resume(self):
+        poll = 'gh run view 7 --json databaseId,attempt,headSha,status,conclusion,updatedAt'
+        self.observe(poll, output=run_json(status='in_progress', conclusion=None, updated='2026-11-23T10:10:00Z'), now=T0)
+        self.observe('gh run cancel 7', code=1, output='refused', now=T0 + 1)
+        note = self.observe(poll, output=run_json(updated='2026-11-23T10:00:00Z'), now=T0 + 2)
+        self.assertIn('older than the last recorded state', note)
+        self.assertIsNotNone(self.refuse('gh run cancel 7', now=T0 + 3))
+
+    def test_invalid_repository_values_are_not_classified(self):
+        for command in ('gh -R github.com/o/r run rerun 7', 'gh run rerun 7 --repo github.com/o/r',
+                        'gh --repo=a/b/c run view 7', 'gh api repos/o/r%2F/actions/runs/7'):
+            with self.subTest(command=command):
+                self.assertIsNone(ci.classify(command))
+
+    def test_deep_json_and_large_lists_fail_closed_without_evicting_referenced_runs(self):
+        self.assertEqual(ci.parse_runs('[' * 5000 + ']' * 5000), [])
+        self.observe('gh run rerun 7', code=1, output='refused', now=T0)
+        listing = json.dumps({'workflow_runs': [json.loads(run_json(run_id=1000 + n)) for n in range(100)]})
+        self.observe('gh run list --json databaseId,attempt,headSha,status,conclusion,updatedAt', output=listing, now=T0 + 1)
+        state = json.loads((self.root / '.getzilla/runtime' / ci.STATE_NAME).read_text())
+        block = next(row for row in state['blocks'].values() if row['cls'] == 'external-pending')
+        self.assertIn(block['run'], state['runs'])
+
+    def test_base_engine_state_keeps_loading_next_to_external_state(self):
+        from getzilla.state import bind_session
+        from tests._support import activate_owned_route
+        bind_session('session-coexist')
+        self.addCleanup(bind_session, None)
+        activate_owned_route(self.root, {'route_id': 'coexist', 'session_id': 'session-coexist'})
+        scope = progress.scope_id(self.root, 'session-coexist')
+        for number in range(3):
+            progress.observe(self.root, scope, {'command': 'pytest'}, self.root, {'exit_code': 1}, 'a' * 64,
+                             event_id=str(number), now=T0 + number)
+        ci.observe(self.root, scope, {'command': 'gh run rerun 7'}, {'exit_code': 1, 'stdout': 'refused'}, HEAD, now=T0 + 5)
+        raw = json.loads((self.root / progress.STATE).read_text())
+        self.assertEqual(set(raw), {'version', 'records'})
+        self.assertEqual(raw['version'], 1)
+        report = progress.inspect(self.root, scope, now=T0 + 6)
+        self.assertEqual(len(report['loops']), 1)
+        self.assertEqual([row['class'] for row in report['external']], ['external-pending'])
+
     def test_expired_blocks_do_not_refuse(self):
         self.observe('gh run rerun 7', code=1, output='refused', now=T0)
         self.assertIsNotNone(self.refuse('gh run rerun 7', now=T0 + 10))

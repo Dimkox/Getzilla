@@ -39,7 +39,7 @@ _TRANSIENT = re.compile(r'\bHTTP 429\b|\bHTTP 5\d\d\b|secondary rate limit|api r
                         r'|unexpected (?:eof|disconnect)|could not resolve host|no such host'
                         r'|temporary failure in name resolution|(?:connection|operation|request) timed out', re.I)
 _RATE = re.compile(r'\bHTTP 429\b|rate limit', re.I)
-_DETERMINISTIC = re.compile(r'\bHTTP 4(?:0[0-46-9]|1\d|2[0-8])\b|resource not accessible by integration'
+_DETERMINISTIC = re.compile(r'\bHTTP 4(?!29\b)\d\d\b|resource not accessible by integration'
                             r'|must (?:be authenticated|have admin rights)|\bnot found\b|traceback|assertionerror', re.I)
 _RUN_OPTIONS = {'view': ({'--json', '--attempt', '--job', '-j', '-R', '--repo'}, {'--log', '--log-failed', '-v', '--verbose', '--exit-status'}),
                 'list': ({'--json', '-L', '--limit', '-b', '--branch', '-c', '--commit', '-w', '--workflow', '-s',
@@ -108,7 +108,8 @@ def _options(words, values, flags):
 
 
 def _repo(value):
-    return value if isinstance(value, str) and _REPO.fullmatch(value) else '.'
+    """An explicit owner/name, or None for any other value (the command then stays unmodelled)."""
+    return value if isinstance(value, str) and _REPO.fullmatch(value) else None
 
 
 def classify(command: str) -> Interaction | None:
@@ -123,6 +124,8 @@ def classify(command: str) -> Interaction | None:
             repo, rest = _repo(rest[1]), rest[2:]
         else:
             return None
+        if repo is None:
+            return None
     if len(rest) < 2:
         return None
     group, verb, tail = rest[0], rest[1], rest[2:]
@@ -132,7 +135,10 @@ def classify(command: str) -> Interaction | None:
         if parsed is None:
             return None
         operands, options = parsed
-        repo = _repo(options.get('-R') or options.get('--repo')) if ('-R' in options or '--repo' in options) else repo
+        if '-R' in options or '--repo' in options:
+            repo = _repo(options.get('-R') or options.get('--repo'))
+            if repo is None:
+                return None
         if verb == 'list':
             return None if operands else Interaction('poll', 'runs', None, None, '--json' in options, repo, None, key)
         if len(operands) != 1 or not _ID.fullmatch(operands[0]):
@@ -153,6 +159,10 @@ def classify(command: str) -> Interaction | None:
         if parsed is None or len(parsed[0]) > 1 or parsed[0] and not _ID.fullmatch(parsed[0][0]):
             return None
         operands, options = parsed
+        if '-R' in options or '--repo' in options:
+            repo = _repo(options.get('-R') or options.get('--repo'))
+            if repo is None:
+                return None
         ident = operands[0] if operands else None
         # `gh pr checks` output has no head SHA: it is never a state token.
         return Interaction('wait' if '--watch' in options else 'poll', 'pr', ident, None, False, repo, None, key)
@@ -173,6 +183,8 @@ def _api(tail, repo, key):
         return None
     owner = match.group('repo')
     repo = '.' if owner == '{owner}/{repo}' else _repo(owner)
+    if repo is None:
+        return None
     ident, rest = match.group('run'), match.group('rest') or ''
     attempt = int(match.group('attempt')) if match.group('attempt') else None
     if not _ID.fullmatch(ident) or attempt is not None and not 1 <= attempt <= 1000:
@@ -250,10 +262,10 @@ def parse_runs(text: str) -> list[RunState]:
         return []
     try:
         documents = [_strict(text)]
-    except ValueError:
+    except (ValueError, RecursionError):
         try:
             documents = [_strict(line) for line in text.splitlines() if line.strip()]
-        except ValueError:
+        except (ValueError, RecursionError):
             return []
     items = []
     for document in documents:
@@ -334,7 +346,11 @@ def _prune(state, now):
 def _bound(state, table, limit):
     rows = state[table]
     while len(rows) > limit:
-        harmless = [(row['at'], key) for key, row in rows.items() if table == 'runs' or row['cls'] == 'poll' and row['count'] < POLL_LIMIT]
+        if table == 'runs':
+            referenced = {block['run'] for block in state['blocks'].values()}
+            harmless = [(row['at'], key) for key, row in rows.items() if key not in referenced]
+        else:
+            harmless = [(row['at'], key) for key, row in rows.items() if row['cls'] == 'poll' and row['count'] < POLL_LIMIT]
         victim = min(harmless or [(row['at'], key) for key, row in rows.items()])[1]
         del rows[victim]
 
@@ -369,6 +385,8 @@ def _record(state, scope, interaction, run, now):
     if run.status == 'completed' and run.conclusion in FAILED and run.signature and run.attempt and run.head:
         failures = [item for item in row['failures'] if item[0] != run.attempt] + [[run.attempt, run.head, run.signature]]
         row['failures'] = sorted(failures)[-4:]
+    elif run.status == 'completed' and run.attempt:
+        row['failures'] = [item for item in row['failures'] if item[0] > run.attempt]
     state['runs'][key] = row
     return key
 
@@ -400,7 +418,11 @@ def observe(root, scope, inputs, response, head, *, now=None) -> str:
         _prune(state, now)
         key = _op_key(scope, interaction)
         block = state['blocks'].get(key)
-        if code and interaction.kind != 'wait' and _TRANSIENT.search(sample) and not _DETERMINISTIC.search(sample):
+        transient = bool(code) and interaction.kind != 'wait' and bool(_TRANSIENT.search(sample)) and not _DETERMINISTIC.search(sample)
+        if code == 0 and block and block['cls'] in {'transient', 'transient-exhausted'}:
+            del state['blocks'][key]  # a success ends the transient budget
+            block = None
+        if transient:
             schedule = RATE_BACKOFF if _RATE.search(sample) else BACKOFF
             count = (block['count'] + 1) if block and block['cls'] == 'transient' else 1
             if count > len(schedule):
@@ -479,7 +501,7 @@ def refusal(root, scope, inputs, head, *, now=None) -> str | None:
         key = _op_key(scope, interaction)
         block = state['blocks'].get(key)
         if block and block['cls'] == 'transient':
-            if now >= block['next_at']:
+            if now >= block['next_at'] or _consume(block, now):
                 return None
             moment = datetime.fromtimestamp(block['next_at'], timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             return f'Getzilla: transient failure pacing; retry after {moment}. ' + _recovery(key, block)
@@ -504,8 +526,9 @@ def refusal(root, scope, inputs, head, *, now=None) -> str | None:
         if interaction.kind == 'mutation' and interaction.op == 'rerun' and isinstance(head, str):
             row = state['runs'].get(_run_key(scope, interaction.repo, interaction.ident))
             failures = row['failures'][-2:] if row else []
+            # The two newest completed attempts: consecutive, both failed, same head and signature.
             if (len(failures) == 2 and all(item[1] == head for item in failures) and failures[0][2] == failures[1][2]
-                    and failures[1][0] == row['max_attempt']):
+                    and failures[1][0] == row['max_attempt'] and failures[0][0] == failures[1][0] - 1):
                 block = state['blocks'].get(key)
                 if not block or block['cls'] != 'deterministic':
                     block = state['blocks'][key] = _block(scope, 'deterministic', now, run=_run_key(scope, interaction.repo,

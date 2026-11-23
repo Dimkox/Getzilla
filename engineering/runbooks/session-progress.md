@@ -117,7 +117,10 @@ their loop IDs with the same one-shot, revision-bound diagnosis rules.
 
 State is `.getzilla/runtime/session-external.json` (version 1, 64 runs, 64 blocks,
 one-hour TTL), under the same lock and atomic publication. `session-progress.json`
-keeps version 1, so an older engine still reads it after a rollback.
+keeps version 1, so an older engine still reads it after a rollback. The normalized
+failure signature differs from the old one, so an open repeated-failure count restarts
+once at upgrade or rollback; this only delays a stop within the one-hour TTL. An older
+engine leaves `session-external.json` unread and unpruned; it is inert and bounded.
 
 ## Isolation, storage and limits
 
@@ -128,8 +131,9 @@ same task bucket. A deliberate new task or cross-session handoff creates a disti
 scope. Missing/manual sessions and unrelated global route fallbacks are never pooled. Harnesses that omit
 child identity cannot distinguish that child from the session's main bucket.
 
-The ignored runtime files are `session-progress.json` and the stable
-`.session-progress.guard` lock. State contains hashes, bounded counters, timestamps
+The ignored runtime files are `session-progress.json`, `session-external.json` and the
+stable `.session-progress.guard` lock. `session-external.json` also stores repository
+owner/name strings and run IDs. State contains hashes, bounded counters, timestamps
 and the one-retry flag, with no raw command, output, identity or diagnosis. The
 total limit is 128 operation records / 256 KiB; records expire after one hour.
 At capacity, harmless old observations are removed first. Active blocked records

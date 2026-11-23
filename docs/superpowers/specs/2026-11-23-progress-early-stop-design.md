@@ -80,11 +80,12 @@ so that credits are spent only on attempts with a named change or a new hypothes
 
 A new module `.getzilla/getzilla/ci_progress.py` owns the `gh` model:
 
-- `classify(command, root) -> Interaction | None` — kind, repository, run ID, endpoint, structured flag.
-- `token(output) -> list[RunState]` — bounded JSON parse; duplicate keys refused.
-- `observe(root, scope, inputs, cwd, response, *, now)` — records runs, attempts, failure signatures and blocks;
+- `classify(command) -> Interaction | None` — kind, repository, run ID, attempt, structured flag.
+- `parse_runs(output) -> list[RunState]` — bounded JSON parse; duplicate keys and deep nesting refused.
+- `observe(root, scope, inputs, response, head, *, now)` — records runs, attempts, failure signatures and blocks;
   returns a hint (historical evidence, warning).
-- `refusal(root, scope, inputs, cwd, *, now)` — returns a refusal text or `None`.
+- `refusal(root, scope, inputs, head, *, now)` — returns a refusal text or `None`.
+- `inspect(root, scope, *, now)` and `recover(root, scope, loop_id, revision, reason, evidence, *, now)`.
 
 State: `.getzilla/runtime/session-external.json`, `{'version': 1, 'runs': {...}, 'blocks': {...}}`, at most 64
 runs and 64 blocks, TTL 3600 s, same lock and publication as `session-progress.json`.
