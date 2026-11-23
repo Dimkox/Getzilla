@@ -354,7 +354,7 @@ jobs:
           import pathlib
           import re
 
-          for log in ("core-tests.log", "trust-ci-tests.log"):
+          for log in ("trust-ci-tests.log",):
               path = pathlib.Path(os.environ["RUNNER_TEMP"]) / log
               if not path.is_file():
                   continue
@@ -540,6 +540,27 @@ jobs:
           test "${#selected[@]}" -gt 0
           echo "shard ${SHARD_INDEX}/${SHARD_COUNT}: ${#selected[@]} modules"
           python scripts/getzilla_cli.py test --require-parallel "${selected[@]}" --max-worker-restart=0 --durations=20 -ra 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+      - name: Require core tests to leave the exact checkout clean
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        env:
+          GETZILLA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GETZILLA_EXPECTED_HEAD"
+          dirty=$(git status --porcelain)
+          if [ -n "$dirty" ]; then
+            printf '%s\n' "$dirty"
+            echo '::error title=core-tests::core tests changed the checkout'
+            exit 1
+          fi
+      - name: Retain core test log for 30 days
+        if: always() && steps.source_checkout.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-core-tests-log-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-tests.log
+          retention-days: 30
+          if-no-files-found: ignore
       - name: Annotate failing core tests
         if: failure() && steps.source_checkout.outcome == 'success'
         shell: python

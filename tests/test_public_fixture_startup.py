@@ -54,7 +54,7 @@ class PublicFixtureStartupTests(PaidProtocolTestCase):
 
         with patch('subprocess.Popen', side_effect=start):
             observed = observe_fixture_startup(Path(configured.executable), request_bytes)
-        # This direct Core test reaches the existing native CI core-tests.log.
+        # This direct Core test reaches the native CI core-tests.log of its linux-core-tests shard.
         # It does not depend on nested Factory exception-message serialization.
         print('public-fixture-startup ' + json.dumps(observed, sort_keys=True), flush=True)
         self.assertEqual(set(observed), {'cases', 'canonical_body_exact', 'resources_removed'})

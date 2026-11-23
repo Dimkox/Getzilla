@@ -613,6 +613,15 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         self.assertEqual(core['env'], {'GETZILLA_TEST_CPU_RESERVE': '0', 'SHARD_INDEX': '${{ matrix.shard }}',
                                        'SHARD_COUNT': '${{ strategy.job-total }}'})
         self.assertFalse(jobs['linux-core-tests']['strategy']['fail-fast'])
+        names = [step['name'] for step in steps]
+        clean = steps[names.index('Require core tests to leave the exact checkout clean')]
+        self.assertLess(names.index('Core tests'), names.index(clean['name']))
+        self.assertIn('git status --porcelain', clean['run'])
+        self.assertIn('"$GETZILLA_EXPECTED_HEAD"', clean['run'])
+        retain = steps[names.index('Retain core test log for 30 days')]
+        self.assertTrue(retain['uses'].startswith('actions/upload-artifact@'))
+        # The log artifact must not match the evidence pattern the linux admission downloads.
+        self.assertNotIn('-evidence-', retain['with']['name'])
 
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_macos_installer_runs_once_and_gates_the_aggregate_with_every_shard(self) -> None:
