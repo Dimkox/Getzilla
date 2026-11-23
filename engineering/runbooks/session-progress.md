@@ -107,10 +107,13 @@ Rules:
   ETIMEDOUT, TLS handshake timeout, RPC failed and name-resolution errors get 2 extra
   retries, after 30 s and 120 s (60 s and 300 s for rate limits). A deterministic
   pattern (HTTP 4xx other than 429, "not found", traceback, assertion) wins, so it gets
-  no budget. After the budget, the next unchanged attempt needs a recovery.
+  no budget. After the budget, the next unchanged attempt needs a recovery; a failure
+  after that recovery starts a new budget. A success ends the budget.
 - **Unchanged polls.** The 4th poll with an unchanged non-terminal state is refused.
   Wait without model calls with `gh run watch <id> --exit-status --interval 30` in the
-  foreground, then poll once with `--json`. A completed wait resets the poll count.
+  foreground, then poll once with `--json`. A wait that ends with success, or with the
+  watched run failing, resets the poll count; a wait that fails with a network or `gh`
+  error does not.
 
 `progress-inspect` lists these blocks under `external`; `progress-recover` accepts
 their loop IDs with the same one-shot, revision-bound diagnosis rules.

@@ -356,7 +356,7 @@ def inspect(root, scope, *, now=None):
     try:
         from .ci_progress import inspect as external_inspect
         external = external_inspect(root, scope, now=now)
-    except (OSError, ValueError, TimeoutError):
+    except Exception:  # advisory: a partial install or corrupt external state never breaks inspection
         external = 'unavailable'
     return {'status': 'available', 'loops': loops, 'external': external,
             'control': 'local-observation-only', 'retention_seconds': TTL}

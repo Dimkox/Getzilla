@@ -385,7 +385,7 @@ def _record(state, scope, interaction, run, now):
     if run.status == 'completed' and run.conclusion in FAILED and run.signature and run.attempt and run.head:
         failures = [item for item in row['failures'] if item[0] != run.attempt] + [[run.attempt, run.head, run.signature]]
         row['failures'] = sorted(failures)[-4:]
-    elif run.status == 'completed' and run.attempt:
+    elif run.status == 'completed' and run.attempt and run.conclusion not in FAILED:
         row['failures'] = [item for item in row['failures'] if item[0] > run.attempt]
     state['runs'][key] = row
     return key
@@ -431,7 +431,8 @@ def observe(root, scope, inputs, response, head, *, now=None) -> str:
             else:
                 state['blocks'][key] = _block(scope, 'transient', now, count=count, next_at=now + schedule[count - 1])
                 hints.append(f'Getzilla: transient network failure; retry {count} of {len(schedule)} after {schedule[count - 1]} s.')
-        elif interaction.kind == 'wait':
+        elif interaction.kind == 'wait' and (code == 0 or not (_TRANSIENT.search(sample) or _DETERMINISTIC.search(sample))):
+            # A wait ends only when it really waited: success, or the watched run failing (not a gh error).
             for poll in [name for name, row in state['blocks'].items() if row['scope'] == scope and row['cls'] == 'poll']:
                 del state['blocks'][poll]
         elif interaction.kind == 'mutation':

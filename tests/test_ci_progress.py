@@ -263,6 +263,25 @@ class GuardTests(unittest.TestCase):
                              now=T0 + 2)
                 self.assertIsNone(self.refuse('gh run rerun 7', now=T0 + 3))
 
+    def test_a_failed_attempt_polled_without_jobs_keeps_the_failure_history(self):
+        jobs = 'gh run view 7 --json databaseId,attempt,headSha,status,conclusion,updatedAt,jobs'
+        lean = 'gh run view 7 --json databaseId,attempt,headSha,status,conclusion,updatedAt'
+        self.observe(jobs, output=run_json(attempt=1, jobs=failed_jobs()), now=T0)
+        self.observe(jobs, output=run_json(attempt=2, updated='2026-11-23T11:00:00Z', jobs=failed_jobs()), now=T0 + 1)
+        self.observe(lean, output=run_json(attempt=2, updated='2026-11-23T11:00:00Z'), now=T0 + 2)
+        self.assertIn('same failure', self.refuse('gh run rerun 7', now=T0 + 3))
+
+    def test_only_a_successful_or_run_failure_watch_resets_polls(self):
+        poll = 'gh run view 9 --json databaseId,attempt,headSha,status,conclusion,updatedAt'
+        state = run_json(run_id=9, status='in_progress', conclusion=None)
+        for number in range(3):
+            self.observe(poll, output=state, now=T0 + number)
+        for output in ('connection reset by peer', 'HTTP 404: Not Found'):
+            self.observe('gh run watch 9 --exit-status', code=1, output=output, now=T0 + 10)
+            self.assertIsNotNone(self.refuse(poll, now=T0 + 11), output)
+        self.observe('gh run watch 9 --exit-status', code=1, output='run 9 completed with failure', now=T0 + 20)
+        self.assertIsNone(self.refuse(poll, now=T0 + 21))
+
     def test_older_replay_of_the_same_attempt_is_historical_and_cannot_resume(self):
         poll = 'gh run view 7 --json databaseId,attempt,headSha,status,conclusion,updatedAt'
         self.observe(poll, output=run_json(status='in_progress', conclusion=None, updated='2026-11-23T10:10:00Z'), now=T0)
