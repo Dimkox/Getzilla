@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import stat
 import sys
 import tempfile
@@ -56,6 +57,7 @@ class GitReadView:
         self.stack = ExitStack()
         self.directories, self.files, self.listings = {}, [], []
         self.total = self.entries = 0
+        self.rename_observer = None
 
     def tick(self):
         if time.monotonic() >= self.deadline:
@@ -76,6 +78,14 @@ class GitReadView:
                     raise ValueError('Git read view directory bound exceeded')
                 handle = fsx.open_dir_at(parent, path.name, flags=fsx.O_CLOEXEC)
             self.stack.callback(fsx.close_dir, handle)
+            if sys.platform == 'darwin' and isinstance(self.guard, NativeGitGraph):
+                if self.rename_observer is None:
+                    self.rename_observer = select.kqueue()
+                    self.stack.callback(self.rename_observer.close)
+                changes = select.KQ_NOTE_RENAME | select.KQ_NOTE_DELETE | select.KQ_NOTE_REVOKE
+                watch = select.kevent(handle, filter=select.KQ_FILTER_VNODE,
+                                      flags=select.KQ_EV_ADD, fflags=changes)
+                self.rename_observer.control([watch], 0, 0)
             self.directories[path] = (handle, _identity(fsx.fstat_dir(handle)), parent)
         return self.directories[path][0]
 
@@ -145,6 +155,8 @@ class GitReadView:
                 (destination/name).write_bytes(body)
 
     def check(self):
+        if self.rename_observer is not None and self.rename_observer.control(None, 1, 0):
+            raise ValueError('Git read directory renamed or removed')
         self.tick()
         self.binding.verify(self.guard, strict_directories=True)
         for path, (handle, expected, parent) in self.directories.items():
@@ -223,12 +235,9 @@ class GitReadView:
             for name in ('alternates', 'http-alternates'):
                 if self.read(self.binding.objects_directory/'info'/name, 4096) is not None:
                     raise ValueError('Git alternate object stores unsupported')
-            # Ordinary Darwin reads use the checked repository binding. Only
-            # native reads own a graph with descriptor-addressed Git paths.
-            use_descriptor = isinstance(objects, int) and (
-                sys.platform == 'linux' or
-                (sys.platform == 'darwin' and isinstance(self.guard, NativeGitGraph))
-            )
+            # Git canonicalizes alternates itself and refuses Darwin /.vol aliases.
+            # Native Darwin reads monitor each held ancestor for rename and removal.
+            use_descriptor = isinstance(objects, int) and sys.platform == 'linux'
             pointer = str(fsx.held_directory_address(objects)) if use_descriptor else str(self.binding.objects_directory)
             (self.path/'objects/info/alternates').write_text(json.dumps(pointer, ensure_ascii=False)+'\n', encoding='utf-8', newline='\n')
             raw = b'tree 0\0'

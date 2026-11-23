@@ -3,6 +3,7 @@ from contextlib import nullcontext
 from pathlib import Path, PureWindowsPath
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import time
@@ -31,6 +32,20 @@ class GitReadViewTests(unittest.TestCase):
     def command(self, *args, root=None):
         return subprocess.run(['git', *args], cwd=root or self.root,
             env=git._git_environment(), capture_output=True, check=True, timeout=10).stdout
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Darwin vnode events')
+    def test_native_alternate_rejects_rename_even_after_name_is_restored(self):
+        from unittest.mock import Mock
+        from getzilla.git_read_view import GitReadView, NativeGitGraph
+        objects = self.root / '.git' / 'objects'
+        moved = objects.with_name('objects-moved')
+        view = GitReadView(Mock(), None, time.monotonic() + 5, Mock(spec=NativeGitGraph))
+        with view.stack:
+            view.directory(objects.resolve())
+            objects.rename(moved)
+            moved.rename(objects)
+            with self.assertRaisesRegex(ValueError, 'renamed or removed'):
+                view.check()
 
     def test_ordinary_darwin_read_resolves_commit_through_checked_objects_directory(self):
         from getzilla import git_read_view
