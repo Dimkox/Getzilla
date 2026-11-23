@@ -31,7 +31,8 @@ class ReadonlyStatusTests(unittest.TestCase):
         self.git(root, 'init', '-q', '--template=')
         (root / 'AGENTS.md').write_bytes(self.entry.content)
         self.git(root, 'add', 'AGENTS.md')
-        self.git(root, '-c', 'user.name=Owned fixture', '-c', 'user.email=fixture@example.invalid',
+        self.git(root, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0',
+                 '-c', 'user.name=Owned fixture', '-c', 'user.email=fixture@example.invalid',
                  'commit', '-qm', 'owned fixture')
 
     def plan(self, target):
