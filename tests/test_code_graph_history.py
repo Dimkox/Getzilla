@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -397,7 +398,14 @@ class HistoryTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == 'nt', 'Raw byte filenames are a POSIX fixture')
     def test_non_utf8_filename_is_not_split_or_executed(self):
-        self.commit({'a/' + os.fsdecode(b'raw-\xff;touch sentinel'): b'x\n'})
+        # Git trees allow byte names that the macOS filesystem cannot create.
+        oid = subprocess.check_output(['git', 'hash-object', '-w', '--stdin'],
+                                      cwd=self.root, input=b'x\n').strip()
+        entry = b'100644 ' + oid + b'\ta/raw-\xff;touch sentinel\0'
+        subprocess.run(['git', 'update-index', '-z', '--index-info'],
+                       cwd=self.root, input=entry, check=True)
+        git(self.root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid',
+            'commit', '-qm', 'fixture with raw Git path')
         report = mine_history(self.root, architecture=MODEL)
         self.assertTrue(report['coverage']['complete'], report['coverage'])
         self.assertEqual(report['metrics']['components']['a']['touches'], 1)
