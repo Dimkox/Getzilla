@@ -1087,13 +1087,29 @@ def _serial_batch(current_tool: str, current_input: dict[str, Any], payload: dic
 
 def _progress_loop(current_tool: str, current_input: dict[str, Any], payload: dict[str, Any], root: Path | None) -> str | None:
     """Advisory retries are checked only after ordinary policy authorization."""
+    scope = None
     if current_tool != 'Bash' or root is None:
         return None
     try:
         from getzilla.path_hints import command_cwd
         from getzilla.session_progress import refusal, scope_id
         scope = scope_id(root, session_id(payload), agent_id(payload), agent_generation(payload))
-        return refusal(root, scope, current_input, command_cwd(root, payload, current_input))
+        local = refusal(root, scope, current_input, command_cwd(root, payload, current_input))
+    except Exception:
+        local = None
+        try:
+            sys.stderr.write('Getzilla: progress observations unavailable; ordinary authorization still applies.\n')
+        except Exception:
+            return None
+    if local:
+        return local
+    try:
+        # GitHub CI actions without progress (#153); only classified `gh` commands read HEAD.
+        from getzilla import ci_progress
+        if ci_progress.classify(current_input.get('command')) is None:
+            return None
+        from getzilla.util import git_head
+        return ci_progress.refusal(root, scope, current_input, git_head(root))
     except Exception:
         try:
             sys.stderr.write('Getzilla: progress observations unavailable; ordinary authorization still applies.\n')
