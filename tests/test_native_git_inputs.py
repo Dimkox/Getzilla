@@ -46,8 +46,9 @@ class NativeGitInputTests(fixtures._GuardFixture):
         def observed(command,**kwargs):
             if command[-2:] == ['rev-parse','HEAD']:
                 calls.append(kwargs['cwd'])
-                self.assertTrue(str(kwargs['cwd']).startswith('/proc/self/fd/'))
-                self.assertIn('--work-tree='+str(kwargs['cwd']),command)
+                self.assertIn(kwargs['cwd'], [diff.fsx.held_directory_address(fd) for fd in kwargs['pass_fds']])
+                worktree = '.' if sys.platform == 'darwin' else str(kwargs['cwd'])
+                self.assertIn('--work-tree=' + worktree, command)
                 self.assertTrue(kwargs['pass_fds'])
             return actual(command,**kwargs)
         with native_root(self.root) as anchor:
@@ -104,7 +105,7 @@ class NativeGitInputTests(fixtures._GuardFixture):
     def test_exact_native_commit_child_cannot_bypass_owned_fd_addressing(self):
         actual = diff._run_capped
         def observed(command,**kwargs):
-            self.assertTrue(str(kwargs['cwd']).startswith('/proc/self/fd/'))
+            self.assertIn(kwargs['cwd'], [diff.fsx.held_directory_address(fd) for fd in kwargs['pass_fds']])
             self.assertTrue(kwargs['pass_fds'])
             return actual(command,**kwargs)
         with native_root(self.root) as anchor:
@@ -281,10 +282,11 @@ class NativeGitInputTests(fixtures._GuardFixture):
             if replacement is not None:
                 os.close(replacement)
 
-    def test_missing_proc_addressing_refuses_before_child_without_fallback(self):
+    def test_missing_descriptor_addressing_refuses_before_child_without_fallback(self):
         real_stat = os.stat
         def unavailable(path,*args,**kwargs):
-            if str(path).startswith('/proc/self/fd/'):
+            prefix = '/.vol/' if sys.platform == 'darwin' else '/proc/self/fd/'
+            if str(path).startswith(prefix):
                 raise OSError('synthetic procfs unavailable')
             return real_stat(path,*args,**kwargs)
         with native_root(self.root) as anchor:

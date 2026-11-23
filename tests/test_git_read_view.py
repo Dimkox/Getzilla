@@ -33,6 +33,18 @@ class GitReadViewTests(unittest.TestCase):
         return subprocess.run(['git', *args], cwd=root or self.root,
             env=git._git_environment(), capture_output=True, check=True, timeout=10).stdout
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor passing')
+    def test_darwin_native_input_larger_than_pipe_capacity(self):
+        data = b'bounded input\n' * 50000
+        command = [sys.executable, '-c', 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())']
+        with tempfile.TemporaryFile() as held, patch.object(sys, 'platform', 'darwin'):
+            for payload in (b'', data):
+                with self.subTest(size=len(payload)):
+                    result = git._run_capped(command, cwd=self.root, env=os.environ.copy(),
+                        stdin_data=payload, pass_fds=(held.fileno(),), timeout=5,
+                        stdout_limit=len(payload), stderr_limit=1024)
+                    self.assertEqual(result, (0, payload, b''))
+
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin vnode events')
     def test_native_alternate_rejects_rename_even_after_name_is_restored(self):
         from unittest.mock import Mock

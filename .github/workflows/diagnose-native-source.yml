@@ -7,7 +7,7 @@ permissions:
 jobs:
   trace:
     runs-on: macos-15-intel
-    timeout-minutes: 5
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -20,4 +20,5 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           PYTHONPATH: .getzilla:.
         run: |
-          python -m unittest -q tests.test_ci_evidence tests.test_git_read_view tests.test_trace_context tests.test_sprint_producers tests.test_retrieval_trace tests.test_trace_observation
+          python -m pip install --require-hashes --only-binary=:all: --no-deps -r trust-ci/requirements-runner.txt
+          python -m unittest -v tests.test_ci_gate.SourceWorkflowSmokeTests.test_required_linux_core_preserves_preflight_and_parallel_failure_status tests.test_native_git_inputs tests.test_ci_evidence tests.test_git_read_view tests.test_trace_context tests.test_sprint_producers tests.test_retrieval_trace tests.test_trace_observation
