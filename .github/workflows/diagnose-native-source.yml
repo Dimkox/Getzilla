@@ -20,26 +20,4 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           PYTHONPATH: .getzilla:.
         run: |
-          python - <<'PY'
-          import traceback
-          import unittest
-          from tests.test_ci_evidence import CiEvidenceTests
-          from getzilla import architecture_diff as diff
-          original = diff.run_git_read
-          def logged(root, args, **kwargs):
-              result = original(root, args, **kwargs)
-              if '--show-toplevel' in args:
-                  print('probe', repr(result), 'expected', repr(root), flush=True)
-              return result
-          diff.run_git_read = logged
-          class Details(unittest.TextTestResult):
-              def addError(self, test, err):
-                  exc = err[1]
-                  while exc is not None:
-                      traceback.print_exception(type(exc), exc, exc.__traceback__, chain=False)
-                      exc = exc.__context__
-                  super().addError(test, err)
-          test = CiEvidenceTests('test_legacy_bundle_does_not_export_new_or_unknown_route_fields')
-          result = unittest.TextTestRunner(resultclass=Details).run(test)
-          raise SystemExit(not result.wasSuccessful())
-          PY
+          python -m unittest -q tests.test_ci_evidence tests.test_git_read_view tests.test_trace_context tests.test_sprint_producers tests.test_retrieval_trace tests.test_trace_observation
