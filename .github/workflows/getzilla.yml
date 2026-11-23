@@ -776,9 +776,24 @@ jobs:
           import subprocess
           import sys
 
+          import json
+          import statistics
+
           modules = sorted(pathlib.Path("tests").rglob("test*.py"))
           count = int(os.environ["SHARD_COUNT"])
-          selected = modules[int(os.environ["SHARD_INDEX"])::count]
+          # Balance shards by measured macOS seconds per module (longest first, least loaded shard).
+          # A module without a measurement gets the median, so every module is still assigned once.
+          seconds = json.loads(pathlib.Path(".github/ci/macos-test-seconds.json").read_text(encoding="utf-8"))["seconds"]
+          default = statistics.median(seconds.values())
+          weight = {path: seconds.get(path.as_posix(), default) for path in modules}
+          loads = [0.0] * count
+          assigned = [[] for _ in range(count)]
+          for path in sorted(modules, key=lambda item: (-weight[item], item.as_posix())):
+              shard = min(range(count), key=lambda index: (loads[index], index))
+              loads[shard] += weight[path]
+              assigned[shard].append(path)
+          selected = sorted(assigned[int(os.environ["SHARD_INDEX"])])
+          print(f"shard {os.environ['SHARD_INDEX']}/{count}: {len(selected)} modules, estimated {loads[int(os.environ['SHARD_INDEX'])] / 60:.1f} min", flush=True)
           if not selected:
               raise SystemExit("Empty macOS test shard")
           failed = []
