@@ -53,11 +53,15 @@ class TrustCILockTests(unittest.TestCase):
             self.assertNotIn('".[test]"', content)
         import yaml
         jobs = yaml.safe_load((ROOT / ".github/workflows/getzilla.yml").read_text())["jobs"]
-        workflow = "\n".join(step["run"] for job in jobs.values() for step in job.get("steps", [])
-                             if "trust-ci-source" in step.get("run", ""))
+        installs = [step["run"] for job in jobs.values() for step in job.get("steps", [])
+                    if "trust-ci-source" in step.get("run", "")]
+        workflow = "\n".join(installs)
         self._assert_frozen_commands(workflow)
-        self.assertEqual(workflow.count("--require-hashes"), 2)
-        self.assertEqual(workflow.count("--no-deps --no-build-isolation"), 2)
+        # linux-core, linux-core-tests and macos-core each install the hash-locked runner profile once.
+        self.assertEqual(len(installs), 3)
+        for install in installs:
+            self.assertEqual(install.count("--require-hashes"), 1)
+            self.assertEqual(install.count("--no-deps --no-build-isolation"), 1)
 
     def _module(self):
         spec = importlib.util.spec_from_file_location("trust_lock_profiles", ROOT / "trust-ci/lock_profiles.py")

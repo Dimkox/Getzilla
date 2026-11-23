@@ -495,14 +495,15 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
     def test_source_and_generated_evidence_require_a_successful_checkout(self) -> None:
         import yaml
         workflow = yaml.safe_load((ROOT/'.github/workflows/getzilla.yml').read_text())
-        steps = workflow['jobs']['linux-core']['steps']
-        checkout = next(s for s in steps if s.get('uses', '').startswith('actions/checkout@'))
-        self.assertEqual(checkout.get('id'), 'source_checkout')
-        self.assertEqual(checkout.get('if'), 'always()')
-        for step in steps:
-            condition = step.get('if', '')
-            if step.get('run') and ('failure()' in condition or 'always()' in condition):
-                self.assertIn("steps.source_checkout.outcome == 'success'", condition, step['name'])
+        for job_name in ('linux-core', 'linux-core-tests'):
+            steps = workflow['jobs'][job_name]['steps']
+            checkout = next(s for s in steps if s.get('uses', '').startswith('actions/checkout@'))
+            self.assertEqual(checkout.get('id'), 'source_checkout')
+            self.assertEqual(checkout.get('if'), 'always()')
+            for step in steps:
+                condition = step.get('if', '')
+                if step.get('run') and ('failure()' in condition or 'always()' in condition):
+                    self.assertIn("steps.source_checkout.outcome == 'success'", condition, step['name'])
         template = yaml.safe_load((ROOT/'.getzilla/templates/ci/github-actions-verify.yml').read_text())
         generated = template['jobs']['getzilla-verify']['steps']
         self.assertEqual(generated[0].get('id'), 'source_checkout')
@@ -545,7 +546,9 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_own_linux_admits_fixed_node_before_the_real_profile_and_core(self) -> None:
         import yaml
-        job = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux-core']
+        jobs = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']
+        job = jobs['linux-core-tests']
+        self.assertEqual(job['runs-on'], jobs['linux-core']['runs-on'])
         steps = job['steps']
         by_id = {step['id']: step for step in steps if 'id' in step}
         self.assertIn('node_setup', by_id)
@@ -580,7 +583,7 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
     def test_own_core_requires_successful_node_admission_not_missing_or_failed(self) -> None:
         import yaml
-        steps = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux-core']['steps']
+        steps = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux-core-tests']['steps']
         core = next(step for step in steps if step.get('name') == 'Core tests')
         self.assertEqual(core['if'], "(success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_profile_admission.outcome == 'success'")
         condition = core['if'].replace('(success() || failure())', 'true')
@@ -596,16 +599,29 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_required_linux_core_uses_full_measured_parallel_runner(self) -> None:
         import yaml
-        steps = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux-core']['steps']
+        jobs = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']
+        self.assertFalse([step for step in jobs['linux-core']['steps'] if step.get('name') == 'Core tests'])
+        steps = jobs['linux-core-tests']['steps']
         core = next(step for step in steps if step.get('name') == 'Core tests')
         script = core['run']
         self.assertIn('set -euo pipefail', script)
         self.assertIn("cli.project_python(cli.HOME), '-c', 'import pytest, xdist'", script)
         self.assertIn('check=True', script)
-        self.assertIn('python scripts/getzilla_cli.py test --require-parallel tests --max-worker-restart=0 --durations=20', script)
+        self.assertIn('python scripts/getzilla_cli.py test --require-parallel "${selected[@]}" --max-worker-restart=0 --durations=20', script)
         self.assertNotIn('unittest discover', script)
         self.assertNotIn('continue-on-error', core)
-        self.assertEqual(core['env'], {'GETZILLA_TEST_CPU_RESERVE': '0'})
+        self.assertEqual(core['env'], {'GETZILLA_TEST_CPU_RESERVE': '0', 'SHARD_INDEX': '${{ matrix.shard }}',
+                                       'SHARD_COUNT': '${{ strategy.job-total }}'})
+        self.assertFalse(jobs['linux-core-tests']['strategy']['fail-fast'])
+        names = [step['name'] for step in steps]
+        clean = steps[names.index('Require core tests to leave the exact checkout clean')]
+        self.assertLess(names.index('Core tests'), names.index(clean['name']))
+        self.assertIn('git status --porcelain', clean['run'])
+        self.assertIn('"$GETZILLA_EXPECTED_HEAD"', clean['run'])
+        retain = steps[names.index('Retain core test log for 30 days')]
+        self.assertTrue(retain['uses'].startswith('actions/upload-artifact@'))
+        # The log artifact must not match the evidence pattern the linux admission downloads.
+        self.assertNotIn('-evidence-', retain['with']['name'])
 
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_macos_installer_runs_once_and_gates_the_aggregate_with_every_shard(self) -> None:
@@ -615,6 +631,8 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         install_steps = [step['name'] for step in jobs['macos-install']['steps']]
         self.assertIn('Installer from this commit (non-interactive, no agent)', install_steps)
         self.assertIn('Hooks and CLI smoke in the installed project', install_steps)
+        # Free/Pro/Team plans run at most 5 macOS jobs at once: the installer plus every shard fit one wave.
+        self.assertLessEqual(1 + len(jobs['macos-core']['strategy']['matrix']['shard']), 5)
         shard_steps = [step['name'] for step in jobs['macos-core']['steps']]
         self.assertFalse([name for name in shard_steps if name.startswith(('Installer', 'Hooks and CLI smoke'))])
         aggregate = jobs['macos']
@@ -630,6 +648,32 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
                 self.assertEqual(process.returncode, expected)
 
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_every_test_module_runs_in_exactly_one_linux_and_one_macos_shard(self) -> None:
+        import yaml
+        jobs = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text(encoding='utf-8'))['jobs']
+        modules = sorted(path.relative_to(ROOT).as_posix() for path in (ROOT / 'tests').rglob('test*.py'))
+        for job_name, step_name, marker in (('linux-core-tests', 'Core tests', "<<'SHARD'"),
+                                            ('macos-core', 'Core tests on macOS', "<<'PYTEST'")):
+            job = jobs[job_name]
+            count = len(job['strategy']['matrix']['shard'])
+            self.assertGreaterEqual(count, 2, job_name)
+            script = next(step for step in job['steps'] if step['name'] == step_name)['run']
+            code = script.split(marker, 1)[1].split('\n', 1)[1]
+            code = code.split('\n' + marker.strip("<'") + '\n', 1)[0]
+            if job_name == 'macos-core':
+                code = code.split('failed = []', 1)[0] + '\nprint("\\n".join(p.as_posix() for p in selected))\n'
+            seen = []
+            for index in range(count):
+                with self.subTest(job=job_name, shard=index):
+                    result = subprocess.run([sys.executable, '-I', '-c', code], cwd=ROOT, capture_output=True,
+                                            text=True, timeout=60, check=True,
+                                            env={**os.environ, 'SHARD_INDEX': str(index), 'SHARD_COUNT': str(count)})
+                    selected = [line for line in result.stdout.splitlines() if line.startswith('tests/')]
+                    self.assertTrue(selected)
+                    seen.extend(selected)
+            self.assertEqual(sorted(seen), modules, job_name)
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_only_pull_request_runs_cancel_their_outdated_run(self) -> None:
         import yaml
         workflow = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text(encoding='utf-8'))
@@ -643,22 +687,27 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
                          'requires POSIX, YAML and bash')
     def test_required_linux_core_preserves_preflight_and_parallel_failure_status(self) -> None:
         import yaml
-        steps = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux-core']['steps']
+        steps = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux-core-tests']['steps']
         script = next(step for step in steps if step.get('name') == 'Core tests')['run']
         # Execute only an inert public shim, never the represented repository tests.
-        for preflight, runner, expected, calls in ((7, 0, 7, 1), (0, 0, 0, 2),
-                (0, 1, 1, 2), (0, 2, 2, 2), (0, 3, 3, 2), (0, 5, 5, 2)):
+        for preflight, runner, expected, calls in ((7, 0, 7, 1), (0, 0, 0, 3),
+                (0, 1, 1, 3), (0, 2, 2, 3), (0, 3, 3, 3), (0, 5, 5, 3)):
             with self.subTest(preflight=preflight, runner=runner), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 shim = root / 'python'
                 shim.write_text(f'#!{sys.executable}\n' +
                     "import os, pathlib, sys\n"
+                    "source = sys.stdin.read() if sys.argv[1:] == ['-'] else ''\n"
+                    "selection = 'SHARD_COUNT' in source\n"
                     "with pathlib.Path(os.environ['CALL_LOG']).open('a') as stream:\n"
-                    "    stream.write('preflight\\n' if sys.argv[1:] == ['-'] else 'runner\\n')\n"
-                    "if sys.argv[1:] == ['-']:\n"
-                    "    sys.stdin.read()\n"
+                    "    stream.write(('select' if selection else 'preflight') + '\\n' if source else 'runner\\n')\n"
+                    "if selection:\n"
+                    "    print('tests/test_a.py')\n"
+                    "    print('tests/test_b.py')\n"
+                    "    raise SystemExit(0)\n"
+                    "if source:\n"
                     "    raise SystemExit(int(os.environ['PREFLIGHT_RC']))\n"
-                    "expected = ['scripts/getzilla_cli.py', 'test', '--require-parallel', 'tests', '--max-worker-restart=0', '--durations=20', '-ra']\n"
+                    "expected = ['scripts/getzilla_cli.py', 'test', '--require-parallel', 'tests/test_a.py', 'tests/test_b.py', '--max-worker-restart=0', '--durations=20', '-ra']\n"
                     "if sys.argv[1:] != expected:\n"
                     "    raise SystemExit(91)\n"
                     "raise SystemExit(int(os.environ['RUNNER_RC']))\n", encoding='utf-8')
@@ -666,11 +715,12 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
                 log = root / 'calls'
                 environment = {**os.environ, 'PATH': str(root) + os.pathsep + os.defpath,
                     'RUNNER_TEMP': str(root), 'CALL_LOG': str(log),
-                    'PREFLIGHT_RC': str(preflight), 'RUNNER_RC': str(runner)}
+                    'PREFLIGHT_RC': str(preflight), 'RUNNER_RC': str(runner),
+                    'SHARD_INDEX': '0', 'SHARD_COUNT': '4'}
                 result = subprocess.run(['bash', '-c', script], cwd=ROOT, env=environment,
                                         capture_output=True, timeout=5)
                 self.assertEqual(result.returncode, expected)
-                self.assertEqual(log.read_text().splitlines(), ['preflight', 'runner'][:calls])
+                self.assertEqual(log.read_text().splitlines(), ['preflight', 'select', 'runner'][:calls])
 
     @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
     def test_required_linux_status_fails_for_missing_or_cancelled_platform_results(self) -> None:

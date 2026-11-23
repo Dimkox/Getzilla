@@ -271,6 +271,16 @@ class GuardTests(unittest.TestCase):
         self.observe(lean, output=run_json(attempt=2, updated='2026-11-23T11:00:00Z'), now=T0 + 2)
         self.assertIn('same failure', self.refuse('gh run rerun 7', now=T0 + 3))
 
+    def test_poll_omitting_conclusion_preserves_known_failures(self):
+        poll = 'gh run view 7 --json databaseId,attempt,headSha,status,conclusion,updatedAt,jobs'
+        for attempt in (1, 2):
+            self.observe(poll, output=run_json(attempt=attempt, jobs=failed_jobs()), now=T0 + attempt)
+        lean = json.loads(run_json(attempt=2))
+        del lean['conclusion']
+        self.observe('gh run view 7 --json databaseId,attempt,headSha,status,updatedAt',
+                     output=json.dumps(lean), now=T0 + 3)
+        self.assertIn('same failure', self.refuse('gh run rerun 7', now=T0 + 4))
+
     def test_only_a_successful_or_run_failure_watch_resets_polls(self):
         poll = 'gh run view 9 --json databaseId,attempt,headSha,status,conclusion,updatedAt'
         state = run_json(run_id=9, status='in_progress', conclusion=None)

@@ -24,7 +24,8 @@ class PreservedFreshClusterGuardTests(unittest.TestCase):
         return namespace['setUpClass']
 
     def test_owned_endpoint_refusal_precedes_migrations(self):
-        from factory.tests import postgres_restart_probe as probe
+        from importlib import import_module
+        probe = import_module('factory.tests.postgres_restart_probe')
         from unittest.mock import Mock
         migrations = Mock(side_effect=AssertionError('migration must not run'))
         setup = self.setup_function(migrations)

@@ -385,7 +385,7 @@ def _record(state, scope, interaction, run, now):
     if run.status == 'completed' and run.conclusion in FAILED and run.signature and run.attempt and run.head:
         failures = [item for item in row['failures'] if item[0] != run.attempt] + [[run.attempt, run.head, run.signature]]
         row['failures'] = sorted(failures)[-4:]
-    elif run.status == 'completed' and run.attempt and run.conclusion not in FAILED:
+    elif run.status == 'completed' and run.attempt and run.conclusion in CONCLUSIONS - FAILED:
         row['failures'] = [item for item in row['failures'] if item[0] > run.attempt]
     state['runs'][key] = row
     return key

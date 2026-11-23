@@ -37,7 +37,7 @@ class CurrentCIProfileTests(unittest.TestCase):
         self.assertIsNone(target.ci_install_context(root,'trust-ci/Dockerfile.api'))
     path.write_bytes(original)
    path=root/'trust-ci/Dockerfile.api'
-   path.write_text(path.read_text().replace('--no-deps -r','-r'))
+   path.write_text(path.read_text().replace('--no-deps ', ''))
    self.assertIsNone(target.ci_install_context(root,'trust-ci/Dockerfile.api'))
 
  def test_self_consistent_binding_cannot_hide_wrong_locked_project_version(self):

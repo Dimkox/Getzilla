@@ -19,6 +19,7 @@ from getzilla import security_family_inputs  # noqa: F401 preload before fixture
 from getzilla import security_license_acquisition, security_licenses
 # Preload the complete production closure before closing fixture I/O.
 from getzilla import security_packagist as _packagist  # noqa: F401
+from getzilla import security_release_tool_inputs  # noqa: F401
 from getzilla.security_artifacts import ArtifactError
 
 b'x'.decode('cp437')

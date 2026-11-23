@@ -48,7 +48,7 @@ class TrustCiLockfileTests(unittest.TestCase):
             text = (TRUST_CI / dockerfile).read_text(encoding='utf-8')
             with self.subTest(dockerfile=dockerfile):
                 self.assertIn('python lock_profiles.py --check', text)
-                self.assertIn(f'--only-binary=:all: --require-hashes --no-deps -r {lockfile}', text)
+                self.assertIn(f'--only-binary=:all: --require-hashes --no-deps --no-compile -r {lockfile}', text)
                 for install in re.findall(r'pip install[^\n]*\s(?:\.|"\.\[test\]")\s*(?:\\|$)', text, re.M):
                     self.assertIn('--no-deps', install)
 
