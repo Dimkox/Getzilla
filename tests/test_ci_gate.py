@@ -615,6 +615,8 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         install_steps = [step['name'] for step in jobs['macos-install']['steps']]
         self.assertIn('Installer from this commit (non-interactive, no agent)', install_steps)
         self.assertIn('Hooks and CLI smoke in the installed project', install_steps)
+        # Free/Pro/Team plans run at most 5 macOS jobs at once: the installer plus every shard fit one wave.
+        self.assertLessEqual(1 + len(jobs['macos-core']['strategy']['matrix']['shard']), 5)
         shard_steps = [step['name'] for step in jobs['macos-core']['steps']]
         self.assertFalse([name for name in shard_steps if name.startswith(('Installer', 'Hooks and CLI smoke'))])
         aggregate = jobs['macos']
