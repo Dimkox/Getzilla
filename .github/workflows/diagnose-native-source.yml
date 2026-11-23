@@ -6,7 +6,7 @@ permissions:
   contents: read
 jobs:
   trace:
-    runs-on: ubuntu-latest
+    runs-on: macos-15-intel
     timeout-minutes: 18
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -20,26 +20,4 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           PYTHONPATH: .getzilla:.
         run: |
-          python - <<'PROBE'
-          import json, urllib.request as u, urllib.parse as p
-          from getzilla.security_image_registry import INDEX_MEDIA, MANIFEST_MEDIA, _Redirect
-          class Redirect(_Redirect):
-              def redirect_request(self,req,fp,code,msg,headers,url):
-                  print('blob redirect',code,p.urlsplit(url).hostname,flush=True)
-                  return super().redirect_request(req,fp,code,msg,headers,url)
-          for repo,selector in [('python','sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70'),('postgres','17.6-bookworm')]:
-              base='https://registry-1.docker.io/v2/library/'+repo+'/'
-              token=json.load(u.urlopen('https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/'+repo+':pull',timeout=8))['token']
-              headers={'Authorization':'Bearer '+token,'Accept':', '.join(INDEX_MEDIA|MANIFEST_MEDIA)}
-              def manifest(digest):
-                  with u.urlopen(u.Request(base+'manifests/'+digest,headers=headers),timeout=8) as r:
-                      return json.loads(r.read(1048577))
-              m=manifest(selector)
-              if 'manifests' in m: m=manifest(m['manifests'][0]['digest'])
-              for obj in (m['config'],m['layers'][0]):
-                  url=base+'blobs/'+obj['digest']
-                  try:
-                      with u.build_opener(Redirect(url)).open(u.Request(url,headers=headers),timeout=8) as r:
-                          print(repo,r.status,len(r.read(1)),flush=True)
-                  except Exception as e: print(repo,type(e).__name__,getattr(e,'code',None),flush=True)
-          PROBE
+          python -m unittest -v tests.test_public_review_witness.PublicReviewWitnessTests.test_owned_review_source_cut_checks_report_custody_before_use

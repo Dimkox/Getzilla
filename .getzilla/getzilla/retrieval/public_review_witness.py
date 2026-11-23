@@ -7,9 +7,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
+import re
 from pathlib import Path
 import time
 
+from ..architecture_diff import run_git_read
 from .. import state
 from ..continuity import context_binding, scope_gaps
 from ..optional_modules import admit_module
@@ -85,6 +87,23 @@ def _identity(info):
             ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_uid', 'st_gid', 'st_nlink')}
 
 
+def _source_binding(root):
+    head = _exact_head(root)
+    # On a clean worktree the existing fingerprint is precisely SHA256(HEAD).
+    # Require Git to report that same commit and no index or worktree records.
+    if head is not None:
+        try:
+            code, raw, _ = run_git_read(root, ['status', '--porcelain=v2', '--branch',
+                '--untracked-files=all', '--no-renames', '-z'], stdout_limit=65536)
+        except (OSError, ValueError):
+            pass
+        else:
+            if code == 0 and re.fullmatch(rb'# branch.oid ' + head.encode('ascii') +
+                    rb'\x00# branch.head [^\x00]+\x00', raw):
+                return head, hashlib.sha256(head.encode('ascii')).hexdigest()
+    return head, tree_fingerprint(root)
+
+
 class _Capture:
     def __init__(self, root):
         root = Path(root)
@@ -103,7 +122,7 @@ class _Capture:
             self.policy = sha(policy)
             self.manifest = sha(anchor.read('.getzilla/managed-components.json', source=True))
             _require(admit_module(root, 'retrieval-research').get('allowed'), 'public_witness_unavailable')
-        self.source_binding = (_exact_head(root), tree_fingerprint(root))
+        self.source_binding = _source_binding(root)
         _require(self.source_binding[0] is not None, 'public_witness_source_unavailable')
         self.current()
 
@@ -120,7 +139,7 @@ class _Capture:
                 and sha(anchor.read('.getzilla/config/policy.json', source=True)) == self.policy
                 and sha(anchor.read('.getzilla/managed-components.json', source=True)) == self.manifest
                 and admit_module(self.root, 'retrieval-research').get('allowed'), 'public_witness_stale')
-        _require((_exact_head(self.root), tree_fingerprint(self.root)) == self.source_binding, 'public_witness_stale')
+        _require(_source_binding(self.root) == self.source_binding, 'public_witness_stale')
         self.check()
 
     def read(self, path, *, limit=MAX_JSON_BYTES, source=False, expected=None, keep=True):
