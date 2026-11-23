@@ -48,7 +48,7 @@ class TrustCILockTests(unittest.TestCase):
             content = (ROOT / "trust-ci" / filename).read_text()
             self._assert_frozen_commands(content)
             self.assertIn("--require-hashes", content, filename)
-            self.assertIn("--no-deps --no-build-isolation", content, filename)
+            self.assertIn("--no-deps --no-compile --no-build-isolation", content, filename)
             self.assertIn("--only-binary=:all:", content, filename)
             self.assertNotIn('".[test]"', content)
         import yaml

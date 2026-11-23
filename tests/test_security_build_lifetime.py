@@ -241,9 +241,9 @@ class BuildLifetimeControls(unittest.TestCase):
         for recipe, profile in profiles.items():
             with self.subTest(recipe=recipe):
                 text = (directory / recipe).read_text()
-                install = f'--only-binary=:all: --require-hashes --no-deps -r requirements-{profile}.txt'
+                install = f'--only-binary=:all: --require-hashes --no-deps --no-compile -r requirements-{profile}.txt'
                 self.assertLess(text.index('python lock_profiles.py --check'), text.index(install))
-                self.assertLess(text.index(install), text.index('--no-deps --no-build-isolation .'))
+                self.assertLess(text.index(install), text.index('--no-deps --no-compile --no-build-isolation .'))
                 self.assertNotIn('coverage==7.15.4', text)
                 lock = (directory / f'requirements-{profile}.txt').read_text()
                 self.assertRegex(lock, r'(?m)^setuptools==84\.1\.0 [^\n]*\n(?:    --hash=[^\n]*\n)*?'

@@ -193,8 +193,8 @@ def ci_install_context(root, recipe):
         statements = [' '.join(value.split()) for _, value in _instructions(raw.decode())]
         copied = 'COPY pyproject.toml README.md uv.lock lock_profiles.py lock_profile_validation.py lock-profiles.json requirements-*.txt ./'
         first = ('python lock_profiles.py --check && python -m pip install --no-cache-dir '
-                 '--only-binary=:all: --require-hashes --no-deps -r requirements-' + profile + '.txt')
-        second = 'python -m pip install --no-cache-dir --no-deps --no-build-isolation .'
+                 '--only-binary=:all: --require-hashes --no-deps --no-compile -r requirements-' + profile + '.txt')
+        second = 'python -m pip install --no-cache-dir --no-deps --no-compile --no-build-isolation .'
         matches = [row for row in statements if row.startswith('RUN ') and first + ' && ' + second in row]
         if (len(matches) != 1 or matches[0].count('python -m pip install ') != 2
                 or statements.count(copied) != 1 or statements.count('COPY src ./src') != 1
