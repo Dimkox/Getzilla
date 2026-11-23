@@ -20,5 +20,6 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           PYTHONPATH: .getzilla:.
         run: |
-          python -m pip install --require-hashes --only-binary=:all: --no-deps -r trust-ci/requirements-runner.txt
+          awk '/^[[:alnum:]]/ {selected=($0 ~ /^pyyaml==/)} selected' trust-ci/requirements-runner.txt > "$RUNNER_TEMP/yaml.txt"
+          python -m pip install --require-hashes --only-binary=:all: --no-deps -r "$RUNNER_TEMP/yaml.txt"
           python -m unittest -v tests.test_ci_gate.SourceWorkflowSmokeTests.test_required_linux_core_preserves_preflight_and_parallel_failure_status tests.test_native_git_inputs tests.test_ci_evidence tests.test_git_read_view tests.test_trace_context tests.test_sprint_producers tests.test_retrieval_trace tests.test_trace_observation
