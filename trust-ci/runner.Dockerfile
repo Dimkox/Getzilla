@@ -14,8 +14,17 @@ ARG OPENGREP_VERSION=1.30.1
 ARG OPENGREP_SHA256=d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates git php-cli composer nodejs npm \
+        ca-certificates git php-cli composer xz-utils \
     && rm -rf /var/lib/apt/lists/* \
+    && python -c "import urllib.request; urllib.request.urlretrieve('https://nodejs.org/dist/v24.22.0/node-v24.22.0-linux-x64.tar.xz', '/tmp/node.tar.xz')" \
+    && echo "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008  /tmp/node.tar.xz" | sha256sum -c - \
+    && mkdir /opt/node \
+    && tar -xJf /tmp/node.tar.xz --strip-components=1 -C /opt/node \
+    && rm /tmp/node.tar.xz \
+    && ln -s /opt/node/bin/node /usr/local/bin/node \
+    && ln -s /opt/node/bin/npm /usr/local/bin/npm \
+    && ln -s /opt/node/bin/npx /usr/local/bin/npx \
+    && node --version && npm --version && npx --version \
     && groupadd --gid 10001 ci \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/ci ci \
     && python lock_profiles.py --check \
