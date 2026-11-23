@@ -103,6 +103,24 @@ def _key(root, scope, inputs, cwd):
     return _digest('operation', [scope, location, raw])
 
 
+# Volatile text that changes between identical failures (#153). Order matters: timestamps before durations.
+_VOLATILE = (
+    (re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?'), '<time>'),
+    (re.compile(r'\(\d+:\d{2}:\d{2}(?:\.\d+)?\)'), '(<duration>)'),
+    (re.compile(r'\b\d+(?:\.\d+)?\s?(?:ms|s|secs?|seconds?)\b'), '<duration>'),
+    (re.compile(r'\b0x[0-9a-fA-F]{6,16}\b'), '<address>'),
+    (re.compile(r'\[\s*\d{1,3}%\]'), '[<progress>]'),
+    (re.compile(r'(?<![\w.-])((?:/private)?/tmp|/var/folders/[^/\s]+/[^/\s]+/T)/[^/\s:]+(?:/[^/\s:]*-\d+)?'), r'\1/<tmp>'),
+)
+
+
+def normalize_output(text: str) -> str:
+    """Replace durations, timestamps, addresses, temp directories and progress counters; keep everything else."""
+    for pattern, replacement in _VOLATILE:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def _outcome(response):
     if not isinstance(response, dict):
         return None
@@ -120,8 +138,10 @@ def _outcome(response):
         value = response.get(field, '')
         if not isinstance(value, str):
             return None
-        # Work and storage are bounded even when a harness delivers a large log.
-        output[field] = [len(value), value[:8192], value[-8192:] if len(value) > 8192 else '']
+        # Work and storage are bounded even when a harness delivers a large log. The slices are
+        # normalized, so the length is not part of the signature (a longer duration is not progress).
+        head, tail = value[:8192], value[-8192:] if len(value) > 8192 else ''
+        output[field] = [len(value) > 8192, normalize_output(head), normalize_output(tail)]
     return codes[0], _digest('failure', [codes[0], output])
 
 
