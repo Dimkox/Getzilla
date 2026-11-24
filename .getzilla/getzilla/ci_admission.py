@@ -243,7 +243,7 @@ def admission_result(needs, records, *, waiver, repository, head, tree, run_id, 
                    and checker["head"] == checker.get("selected_ref") == expected_checker
                    and HEX40.fullmatch(checker.get("tree", ""))
                    and report.get("status") in {"fail", "fail-for-selected-run"}
-                   and report.get("kind") in {"public-security-input-refusal", "security-expanded"}
+                   and report.get("kind") == "public-security-input-refusal"
                    and "candidate changed or expected head mismatch" not in security.get("problems", [])
                    and "trusted checker checkout changed during scanning" not in security.get("problems", [])
                    and security.get("event_provenance", {}).get("repository") == repository)

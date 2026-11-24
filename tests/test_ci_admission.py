@@ -152,6 +152,15 @@ class CiAdmissionTests(unittest.TestCase):
                         event_provenance={"repository": "Dimkox/Getzilla"}, report={"kind": "public-security-input-refusal", "status": "fail"})
         self.assertEqual(decision()["status"], "pass-with-waiver")
         self.assertEqual(decision()["waiver"]["issue"], 456)
+        original = security["report"]
+        for status in ("fail", "fail-for-selected-run"):
+            with self.subTest(scan_status=status):
+                security["report"] = {"kind": "security-expanded", "status": status,
+                                      "checks": [{"name": "known-vulnerabilities", "status": "fail"}]}
+                result = decision()
+                self.assertEqual(result["status"], "fail")
+                self.assertFalse(result["waiver"]["used"])
+        security["report"] = original
         self.assertEqual(decision(now=datetime(2026,12,8,tzinfo=timezone.utc))["status"], "fail")
         self.assertEqual(decision(repository="Fork/Getzilla")["status"], "fail")
         for job in ("linux-core", "linux-core-tests", "live-acceptance"):
