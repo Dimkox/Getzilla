@@ -77,6 +77,19 @@ class GitReadViewTests(unittest.TestCase):
             '--no-renames', '--numstat', head, '--'])
         self.assertEqual(result, b'1\t1\tvalue.txt\n')
 
+    def test_status_observes_crlf_launcher_without_hiding_an_edit(self):
+        attrs = Path(__file__).resolve().parents[1] / '.gitattributes'
+        (self.root / '.gitattributes').write_bytes(attrs.read_bytes())
+        launcher = self.root / 'bin/getzilla.cmd'
+        launcher.parent.mkdir()
+        launcher.write_bytes(b'@echo off\r\n')
+        self.command('add', '.')
+        self.command('commit', '-qm', 'launcher attributes')
+        launcher.write_bytes(b'@echo off\r\n')
+        self.assertEqual(git._git(self.root, ['status', '--porcelain=v1']), b'')
+        launcher.write_bytes(b'@echo changed\r\n')
+        self.assertIn(b'M bin/getzilla.cmd', git._git(self.root, ['status', '--porcelain=v1']))
+
     def test_private_child_metadata_keeps_original_head_index_and_registration(self):
         original_index = (self.root / '.git/index').read_bytes()
         original_mtime = (self.root / '.git/index').stat().st_mtime_ns

@@ -93,6 +93,24 @@ class LinuxProcessAdapterTests(unittest.TestCase):
         self.assertFalse(self.adapter.status(self.release, timeout=2))
 
     @real_process
+    def test_start_rechecks_empty_cmdline_and_refuses_nonempty_foreign_argv(self):
+        observe = self.linux._process_identity
+        def first_empty(pid):
+            stamp, argv = observe(pid)
+            return (stamp, ("",)) if observed.call_count == 1 else (stamp, argv)
+
+        with patch.object(self.linux, "_process_identity", side_effect=first_empty) as observed:
+            self.adapter.start(self.release, timeout=5)
+            self.assertGreaterEqual(observed.call_count, 2)
+        self.adapter.stop(self.release, timeout=2)
+        with patch.object(self.linux, "_process_identity", return_value=("1", ("foreign",))) as observed:
+            with self.assertRaises(setup.InstallerError) as error:
+                self.adapter.start(self.release, timeout=5)
+            self.assertEqual(error.exception.code, "RUNTIME_IDENTITY_MISMATCH")
+            observed.assert_called_once()
+        self.assertFalse(self.adapter.status(self.release, timeout=2))
+
+    @real_process
     def test_pid_record_tamper_and_reuse_fail_closed_without_signalling(self):
         self.adapter.start(self.release, timeout=5)
         record_path = self.root / "state/process" / (self.release.name + ".json")

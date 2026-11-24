@@ -65,6 +65,7 @@ _DATABASE_CASES = {
 _LINUX_CASES = frozenset({
     "test_real_child_has_fixed_identity_health_logs_and_bounded_shutdown",
     "test_pid_record_tamper_and_reuse_fail_closed_without_signalling",
+    "test_start_rechecks_empty_cmdline_and_refuses_nonempty_foreign_argv",
     "test_startup_failure_kills_resistant_descendant_process_group",
     "test_stop_kills_resistant_descendant_and_never_signals_own_group",
     "test_stop_kills_child_forked_by_term_handler_before_deleting_state",

@@ -985,6 +985,17 @@ def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
                 timeout=_bounded_git_timeout(timeout, deadline), pass_fds=descriptors)
             if code or any(entry.startswith(b'160000 ') for entry in entries.split(b'\0')):
                 raise ValueError('Git submodule observations unavailable')
+            if arguments[0] == 'status':
+                # Recognize only the reviewed root rules; the private repository
+                # must never load arbitrary filters or working-tree encodings.
+                rows = entries.split(b'\0')
+                known_attributes = {
+                    b'100644 1894c9917341fed8b2755d94381a9cc93c114cf1 0\t.gitattributes',
+                    b'100644 a8c1edc8d3cbcf42cfe4fc43035c25a79926b46de4c98d50610ffd580f35686e 0\t.gitattributes',
+                }
+                if not known_attributes.isdisjoint(rows) and not any(
+                        row.endswith(b'\tbin/.gitattributes') for row in rows):
+                    (view.path / 'info' / 'attributes').write_bytes(b'bin/getzilla.cmd text eol=crlf\n')
         yield command, environment, descriptors, deadline, binding, view
 
 
