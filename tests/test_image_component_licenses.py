@@ -58,6 +58,19 @@ class ImageComponentTests(unittest.TestCase):
         self.assertEqual(c["files"][0]["sha256"], hashlib.sha256(b"\x7fELFtiny").hexdigest())
         self.assertTrue(c["license_paths"])
 
+    def test_unparsed_copyright_retains_evidence_and_blocks_qualification(self):
+        path = "usr/share/doc/tiny/copyright"
+        raw = COPY + b"\n### Additional conditions ###\n"
+        files = dict(self.debian())
+        files[path] = raw
+        observation = self.observe([list(files.items())])
+        self.assertFalse(observation["complete"])
+        component, = observation["components"]
+        self.assertIsNone(component["expression"])
+        self.assertEqual(component["license_paths"][0]["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertTrue(any(g["code"] == "dpkg-copyright-format-unproved"
+                            and g["group"] == component["id"] for g in observation["unresolved"]))
+
     def test_declared_mit_without_fulltext_is_unknown(self):
         rows = self.debian()
         rows[-1] = (rows[-1][0], COPY.split(b"Permission")[0])

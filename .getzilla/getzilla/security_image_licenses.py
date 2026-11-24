@@ -237,7 +237,12 @@ def observe_components(image):
                 c["license_paths"].append(copyright[1])
                 gap("dpkg-legacy-license-scope", c["id"])
                 continue
-            sections = _paragraphs(raw)
+            try:
+                sections = _paragraphs(raw)
+            except (oci.OCIError, UnicodeDecodeError):
+                c["license_paths"].append(copyright[1])
+                gap("dpkg-copyright-format-unproved", c["id"], **copyright[1])
+                continue
             declarations = [v for v in sections if "License" in v]
             c["raw_license_declarations"] = declarations
             scope = [v for v in declarations if v.get("Files") == "*"]
