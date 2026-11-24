@@ -5,6 +5,8 @@ Publisher identity and execution provenance remain external-runner obligations.
 """
 from __future__ import annotations
 
+from .security_oci_layout import OCIError, read_archive as read_oci_archive
+
 import base64
 import bz2
 import gzip
@@ -25,8 +27,102 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
 
 from . import manifest as file_manifest
-from .security_osv_snapshot import VulnerabilityError, _pypi_key, _semver_key, normalize_name
+from typing import Any
 from .security_data import _json
+
+class VulnerabilityError(RuntimeError):
+    pass
+
+
+# Preserve the existing public exception/pickle lookup through the exact alias.
+VulnerabilityError.__module__ = __package__ + ".security_osv_snapshot"
+
+
+def normalize_name(ecosystem: str, name: str) -> str:
+    if ecosystem == 'PyPI':
+        return re.sub(r'[-_.]+', '-', name).lower()
+    if ecosystem in {'Packagist', 'npm'}:
+        return name.lower()
+    return name
+
+
+def _semver_key(version: str) -> tuple[Any, ...]:
+    """SemVer 2.0.0 precedence; build metadata never changes precedence."""
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported SemVer version')
+    match = re.fullmatch(
+        r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+        r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+        r'(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?', version)
+    if match is None:
+        raise VulnerabilityError(f'unsupported SemVer version: {version!r}')
+    pre = []
+    if match[4] is not None:
+        for part in match[4].split('.'):
+            if part.isdigit():
+                if len(part) > 1 and part[0] == '0':
+                    raise VulnerabilityError(f'unsupported SemVer prerelease: {version!r}')
+                pre.append((0, int(part)))
+            else:
+                pre.append((1, part))
+    return (int(match[1]), int(match[2]), int(match[3]),
+            (0, tuple(pre)) if match[4] is not None else (1, ()))
+
+
+def _pypi_key(version: str) -> tuple[Any, ...]:
+    """Qualified canonical PEP 440 subset, not a full PEP 440 normalizer.
+
+    Supports [epoch!]release[a|b|rcN][.postN][.devN][+local]. Alternative
+    suffix spellings/separators and leading v/whitespace are refused.
+    """
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported PyPI version (canonical PEP 440 subset)')
+    match = re.fullmatch(
+        r'(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)'
+        r'(?:(?P<pre>a|b|rc)(?P<pre_n>[0-9]+))?'
+        r'(?:\.post(?P<post>[0-9]+))?(?:\.dev(?P<dev>[0-9]+))?'
+        r'(?:\+(?P<local>[a-z0-9]+(?:\.[a-z0-9]+)*))?', version.lower())
+    if match is None:
+        raise VulnerabilityError(f'unsupported PyPI version (canonical PEP 440 subset): {version!r}')
+    release = [int(part) for part in match['release'].split('.')]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    if match['pre']:
+        pre = (0, {'a': 0, 'b': 1, 'rc': 2}[match['pre']], int(match['pre_n']))
+    elif match['dev'] is not None and match['post'] is None:
+        pre = (-1, 0, 0)
+    else:
+        pre = (1, 0, 0)
+    post = (-1, 0) if match['post'] is None else (0, int(match['post']))
+    dev = (1, 0) if match['dev'] is None else (0, int(match['dev']))
+    local = (0, ()) if match['local'] is None else (1, tuple(
+        (1, int(part)) if part.isdigit() else (0, part) for part in match['local'].split('.')))
+    return int(match['epoch'] or 0), tuple(release), pre, post, dev, local
+
+
+
+_PACKAGIST_NAME = re.compile(r'[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?/[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?\Z')
+
+
+_PACKAGIST_VERSION = re.compile(r'v?([0-9]+(?:\.[0-9]+){0,3})\Z')
+
+
+def _packagist_error(code, message):
+    return ArtifactError(code, message)
+
+
+def _packagist_version(value):
+    if type(value) is not str or len(value) > 128 or (not _PACKAGIST_VERSION.fullmatch(value)):
+        raise _packagist_error('artifact-identity', 'Packagist requires an exact stable numeric version')
+    parts = tuple((int(p) for p in _PACKAGIST_VERSION.fullmatch(value)[1].split('.')))
+    return parts + (0,) * (4 - len(parts))
+
+
+def _packagist_key(name, value):
+    if type(name) is not str or len(name) > 200 or (not _PACKAGIST_NAME.fullmatch(name)):
+        raise _packagist_error('artifact-identity', 'Packagist requires a canonical vendor/package name')
+    return ('Packagist', name, _packagist_version(value))
+
 
 MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 MAX_INDEX_BYTES = 16 * 1024 * 1024
@@ -105,8 +201,7 @@ def package_key(ecosystem: str, name: str, version: str) -> tuple:
         if ecosystem == 'npm':
             return ecosystem, name.lower(), _semver_key(version)
         if ecosystem == 'Packagist':
-            from .security_packagist import key
-            return key(name, version)
+            return _packagist_key(name, version)
     except VulnerabilityError as exc:
         raise ArtifactError('artifact-identity', str(exc)) from exc
     raise ArtifactError('license-ecosystem-coverage', f'artifact license metadata is unsupported for {ecosystem}')
@@ -149,6 +244,11 @@ def artifact_identity(record: dict) -> str:
     value = {field: record[field] for field in ('ecosystem', 'name', 'version', 'filename', 'sha256')}
     value['context'] = context
     value['origin'] = {field: origin[field] for field in ('index_url', 'index_sha256', 'artifact_url')}
+    if 'python_target' in record:
+        from .security_python_target import observation
+        if record['ecosystem'] != 'PyPI':
+            raise ArtifactError('artifact-target-unknown', 'Python target attached to another artifact family')
+        value['python_target'] = observation(record['python_target'])
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -378,6 +478,13 @@ def _action_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict
 
 
 def _release_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
+    if record.get('origin', {}).get('kind') == 'github-release-native-v1':
+        from .security_release_tool_inputs import read_source
+        read_source(root, record, payload)
+        # Nuitka file ownership is not ownership of compiled Python/OCaml/C
+        # components. Do not accept a caller's whole-binary LGPL partition.
+        raise ArtifactError('release-component-sbom-missing',
+                            'raw OpenGrep source/container verified; compiled component mapping and terms remain unavailable')
     subject, origin = record['subject'], record['origin']
     match = re.fullmatch(r'https://github.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/releases/download/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)', subject['reference'])
     if (not match or subject.get('kind') != 'release-tool' or subject.get('artifact_sha256') != record['sha256']
@@ -408,91 +515,37 @@ def _release_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dic
 
 
 def _image_source(record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
-    """Read one OCI image and every layer; a vulnerability report is not a SBOM."""
+    """One shared OCI object/format reader; format support grants no license."""
     subject, origin = record['subject'], record['origin']
     reference = subject['reference']
     if (subject.get('kind') != 'oci-image' or not re.fullmatch(r'[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}', reference)
-            or subject.get('platform') not in {'linux/amd64', 'linux/arm64'} or not record['filename'].endswith('.zip')
+            or subject.get('platform') not in {'linux/amd64', 'linux/arm64'}
+            or not record['filename'].endswith(('.zip', '.tar'))
             or set(origin) != {'kind', 'manifest_digest'} or origin['kind'] != 'oci-layout'
             or origin['manifest_digest'] != reference.rsplit('@', 1)[1]):
-        raise ArtifactError('artifact-origin', 'image needs an exact OCI identity and supported platform')
-    outer = archive_inventory(payload, record['filename'])
-    if 'oci-layout' not in outer or 'index.json' not in outer:
-        raise ArtifactError('artifact-origin', 'OCI layout/index is missing')
-    bound, licenses = {}, {}
-    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        if any(member.orig_filename != member.filename for member in archive.infolist()):
-            raise ArtifactError('artifact-archive', 'OCI archive names are ambiguous')
-        def read(name):
-            if name not in outer or outer[name]['size'] > MAX_ARTIFACT_BYTES:
-                raise ArtifactError('artifact-size', 'OCI object is missing or exceeds its bound')
-            return archive.read(name)
-        if _json(read('oci-layout')) != {'imageLayoutVersion': '1.0.0'}:
-            raise ArtifactError('artifact-origin', 'unsupported OCI layout')
-        index = _json(read('index.json'))
-        platform = dict(zip(('os', 'architecture'), subject['platform'].split('/')))
-        if (index.get('schemaVersion') != 2 or not isinstance(index.get('manifests'), list)
-                or len(index['manifests']) != 1 or not isinstance(index['manifests'][0], dict)
-                or index['manifests'][0].get('platform') != platform):
-            raise ArtifactError('artifact-origin', 'OCI index must select exactly one matching platform')
-        names = {'oci-layout', 'index.json'}
-        def blob(descriptor, media):
-            if (not isinstance(descriptor, dict) or descriptor.get('mediaType') not in media
-                    or not isinstance(descriptor.get('digest'), str) or not re.fullmatch('sha256:[0-9a-f]{64}', descriptor['digest'])
-                    or type(descriptor.get('size')) is not int or not 0 < descriptor['size'] <= MAX_ARTIFACT_BYTES):
-                raise ArtifactError('artifact-origin', 'OCI descriptor is unsupported or unbounded')
-            name = 'blobs/sha256/' + descriptor['digest'][7:]
-            raw = read(name)
-            if len(raw) != descriptor['size'] or hashlib.sha256(raw).hexdigest() != descriptor['digest'][7:]:
-                raise ArtifactError('artifact-hash', 'OCI descriptor bytes differ')
-            names.add(name)
-            return raw
-        selected = index['manifests'][0]
-        if selected.get('digest') != origin['manifest_digest']:
-            raise ArtifactError('artifact-origin', 'OCI selected manifest differs from image reference')
-        manifest = _json(blob(selected, {'application/vnd.oci.image.manifest.v1+json'}))
-        if (manifest.get('schemaVersion') != 2 or not isinstance(manifest.get('layers'), list)
-                or not 0 < len(manifest['layers']) <= MAX_MEMBERS):
-            raise ArtifactError('artifact-origin', 'OCI image has no complete bounded layers')
-        config = _json(blob(manifest.get('config'), {'application/vnd.oci.image.config.v1+json'}))
-        if any(config.get(key) != value for key, value in platform.items()):
-            raise ArtifactError('artifact-origin', 'OCI config platform differs')
-        rootfs = config.get('rootfs')
-        if (not isinstance(rootfs, dict) or rootfs.get('type') != 'layers' or not isinstance(rootfs.get('diff_ids'), list)
-                or len(rootfs['diff_ids']) != len(manifest['layers'])):
-            raise ArtifactError('artifact-origin', 'OCI config lacks exact uncompressed layer identities')
-        total = sum(row['size'] for row in outer.values())
-        for layer, diff_id in zip(manifest['layers'], rootfs['diff_ids']):
-            raw = blob(layer, {'application/vnd.oci.image.layer.v1.tar', 'application/vnd.oci.image.layer.v1.tar+gzip'})
-            if layer['mediaType'].endswith('+gzip'):
-                with gzip.open(io.BytesIO(raw), 'rb') as stream:
-                    expanded = stream.read(MAX_ARCHIVE_BYTES + 1)
-            else:
-                expanded = raw
-            if len(expanded) > MAX_ARCHIVE_BYTES or diff_id != 'sha256:' + hashlib.sha256(expanded).hexdigest():
-                raise ArtifactError('artifact-hash', 'OCI uncompressed layer identity differs or exceeds its budget')
-            prefix = 'layers/' + layer['digest'][7:] + '/'
-            members = archive_inventory(expanded, 'layer.tar')
-            total += sum(row['size'] for row in members.values())
-            if total > MAX_ARCHIVE_BYTES or len(bound) + len(members) + len(outer) > MAX_MEMBERS:
-                raise ArtifactError('artifact-size', 'OCI complete layer inventory exceeds aggregate limits')
-            for name, row in members.items():
-                if prefix + name in bound:
-                    raise ArtifactError('artifact-origin', 'OCI repeats layer identity')
-                bound[prefix + name] = row
-            licenses.update({prefix + name: body for name, body in archive_files(expanded, 'layer.tar').items()})
-        if names != set(outer):
-            raise ArtifactError('artifact-origin', 'OCI layout contains unreferenced or missing objects')
-    bound.update({'oci/' + name: row for name, row in outer.items()})
-    return bound, licenses, []
+        raise ArtifactError('artifact-origin', 'image needs an exact OCI identity and supported platform/format')
+    try:
+        result = read_oci_archive(payload, record['filename'], reference, subject['platform'])
+    except OCIError as exc:
+        raise ArtifactError('artifact-origin', 'OCI object/format validation refused') from exc
+    return result['members'], result['files'], []
 
 
 def family_evidence(root: Path, record: dict) -> dict:
     """One byte-bound reader shared by license evaluation and receipt projection."""
     identity = family_identity(record)
+    if record['kind'] == 'action' and record['origin'].get('kind') == 'github-action-source/v1':
+        from .security_action_inputs import verify_family
+        return verify_family(root, record)
+    if record['kind'] == 'image' and record['origin'].get('kind') == 'held-oci-components/v1':
+        from .security_image_licenses import verify_family
+        return verify_family(root, record)
     payload = read_file(root, record['path'], MAX_ARTIFACT_BYTES)
     if len(payload) != record['bytes'] or hashlib.sha256(payload).hexdigest() != record['sha256']:
         raise ArtifactError('artifact-hash', 'family payload differs from its exact bytes')
+    if record['kind'] == 'tool' and record['origin'].get('kind') == 'go-checker-release/v1':
+        from .security_go_tool_inputs import verify_family
+        return verify_family(root, record, payload)
     if record['kind'] == 'action':
         members, files, evidence = _action_source(root, record, payload)
     elif record['kind'] == 'tool':
@@ -670,7 +723,7 @@ def verify_origin(root: Path, record: dict, payload: bytes, *, index_bytes: byte
 
 def _interesting(path: str) -> bool:
     name = PurePosixPath(path).name.lower()
-    return (name in {'metadata', 'pkg-info', 'package.json', 'composer.json'} or name.startswith(('license', 'copying', 'notice'))
+    return (name in {'metadata', 'wheel', 'pkg-info', 'package.json', 'composer.json'} or name.startswith(('license', 'copying', 'notice'))
             or any(part.lower() in {'licenses', 'licences'} for part in PurePosixPath(path).parts))
 
 

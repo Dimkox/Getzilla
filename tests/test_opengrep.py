@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import os
 import shutil
@@ -27,12 +28,13 @@ RULES = ROOT / '.getzilla/sast/rules'
 FAKE_NAME = 'opengrep.cmd' if os.name == 'nt' else 'opengrep'
 
 
-def _fake_opengrep(directory: Path, payload: dict | str, exit_code: int = 0) -> str:
+def _fake_opengrep(directory: Path, payload: dict | str, exit_code: int = 0, *, delay: float = 0) -> str:
     """Write a fake ``opengrep`` that records each run in ``ran`` and return its sha256."""
     body = payload if isinstance(payload, str) else json.dumps(payload)
     program = textwrap.dedent(f'''\
-        import pathlib, sys
+        import pathlib, sys, time
         pathlib.Path({str(directory / 'ran')!r}).touch()
+        time.sleep({delay!r})
         sys.stdout.write({body!r})
         sys.exit({exit_code})
     ''')
@@ -59,6 +61,7 @@ class OpengrepCheckTests(unittest.TestCase):
         shutil.copytree(RULES, self.root / V.OPENGREP_RULES)
         self.bin = Path(self._tmp.name) / 'bin'
         self.bin.mkdir()
+        (self.root / 'app.py').write_text('print("inert source")\n', encoding='utf-8')
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -74,13 +77,81 @@ class OpengrepCheckTests(unittest.TestCase):
         self.assertTrue((self.bin / 'ran').exists())
         self.assertFalse((competing / 'ran').exists())
 
-    def _run(self, payload: dict | str | None, exit_code: int = 0, *, pinned: bool = True) -> V.CheckResult:
-        digest = _fake_opengrep(self.bin, payload, exit_code) if payload is not None else '0' * 64
+    def _run(self, payload: dict | str | None, exit_code: int = 0, *, pinned: bool = True, delay: float = 0) -> V.CheckResult:
+        digest = _fake_opengrep(self.bin, payload, exit_code, delay=delay) if payload is not None else '0' * 64
         path = str(self.bin) if payload is not None else '/nonexistent'
         # Hide both resolver additions, so only this fixture PATH can supply opengrep.
+        if payload is not None and (not sys.platform.startswith('linux') or not hasattr(os, 'memfd_create')):
+            self.skipTest('the real sealed-core fixture profile is explicitly unavailable on this platform')
+        from getzilla import security_opengrep as scanner
+        original_run = scanner._run
+        self._core_calls = []
+
+        def fixture_frontend(language, *, deadline=None):
+            # Report-decoder fixtures use the test interpreter's real compile
+            # helper. OS custody/version qualification belongs to SyntaxProfileTests.
+            self.assertEqual(language, 'python')
+            executable = Path(sys.executable).resolve(strict=True)
+            descriptor = os.open(executable, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                identity = scanner._identity(os.fstat(descriptor))
+                with os.fdopen(os.dup(descriptor), 'rb') as stream:
+                    digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+                return scanner.SyntaxFrontend(
+                    executable, descriptor, identity, digest, language,
+                    f'fixture-{sys.implementation.name}-{sys.version_info.major}.{sys.version_info.minor}')
+            except BaseException:
+                os.close(descriptor)
+                raise
+
+        def fixture_core(command, root, environment, deadline, **options):
+            if '-json_nodots' not in command:
+                return original_run(command, root, environment, deadline, **options)
+            self._core_calls.append(command)
+            # The inert worker supplies untrusted report bytes. Real installed
+            # launcher/cache/core custody is exercised in ActualPinnedAdapterTests.
+            result = V.run([str(self.bin / FAKE_NAME)], cwd=root, timeout=900, encoding='utf-8', errors='replace')
+            if result.returncode == 124:
+                raise scanner.OpenGrepError('scanner_timeout')
+            if isinstance(payload, dict):
+                report = copy.deepcopy(payload)
+                report.setdefault('version', '1.30.1')
+                source = command[-1]
+                declared = [rule.identifier for rule in scanner.rule_catalog((RULES / 'python.yaml').read_bytes())]
+                report.setdefault('rules_by_engine', [[identifier, 'OSS'] for identifier in declared])
+                report.setdefault('engine_requested', 'OSS')
+                report.setdefault('interfile_languages_used', [])
+                report.setdefault('skipped_rules', [])
+                if 'paths' not in report:
+                    report['paths'] = {'scanned': [source]}
+                elif isinstance(report['paths'], dict) and isinstance(report['paths'].get('scanned'), list):
+                    report['paths']['scanned'] = [source if value == 'app.py' else value for value in report['paths']['scanned']]
+                if isinstance(report.get('results'), list):
+                    for finding in report['results']:
+                        if not isinstance(finding, dict):
+                            continue
+                        if finding.get('path') == 'app.py':
+                            finding['path'] = source
+                        if isinstance(finding.get('start'), dict):
+                            finding['start'].setdefault('col', 1)
+                            finding['start'].setdefault('offset', 0)
+                            finding.setdefault('end', {'line': finding['start'].get('line', 1), 'col': 2, 'offset': 1})
+                        if isinstance(finding.get('extra', {}), dict):
+                            finding['extra'] = {'metavars': {}, 'engine_kind': 'OSS', 'is_ignored': False,
+                                                **finding.get('extra', {})}
+                result.stdout = json.dumps(report)
+                # CLI uses1 for findings; the demonstrated direct core uses0.
+                if result.returncode == 1 and report.get('results') and report.get('errors') == []:
+                    result.returncode = 0
+            return result
+
         with mock.patch.dict(os.environ, {'PATH': path}), _pin(digest if pinned else '0' * 64), \
              mock.patch('getzilla.util.user_tool_dirs', return_value=[]), \
-             mock.patch('getzilla.util.environment_scripts_dir', return_value=None):
+             mock.patch('getzilla.util.environment_scripts_dir', return_value=None), \
+             mock.patch('getzilla.opengrep_releases.verify_active', side_effect=ValueError('fixture has no qualified managed release')), \
+             mock.patch.object(scanner, 'syntax_frontend', side_effect=fixture_frontend), \
+             mock.patch.object(scanner, '_bootstrap_core', return_value=Path('/usr/bin/true').read_bytes()), \
+             mock.patch.object(scanner, '_run', side_effect=fixture_core):
             return V._opengrep(self.root)
 
     def test_binary_on_path_that_does_not_match_the_pin_is_refused_unexecuted(self) -> None:
@@ -97,8 +168,30 @@ class OpengrepCheckTests(unittest.TestCase):
         result = self._run({'results': [], 'errors': []})
         self.assertEqual(result.status, 'pass')
         self.assertTrue((self.bin / 'ran').exists())
-        self.assertEqual(Path(result.command[0]), self.bin / FAKE_NAME)
-        self.assertIn('--strict', result.command)
+        self.assertTrue(result.command[0].startswith('/proc/self/fd/'))
+        self.assertIn('-json_nodots', result.command)
+
+    def test_report_fixture_parses_without_the_exact_os_frontend_installation(self) -> None:
+        from getzilla import security_opengrep as scanner
+        (self.root / 'app.py').write_text('raise RuntimeError("fixture source must not execute")\n')
+        unavailable = ('/nonexistent/protected/python3.12', ('-I', '-S', '--version'),
+                       'Python 3.12.', 'python3.12')
+        with mock.patch.dict(scanner._FRONTENDS, {'python': unavailable}):
+            result = self._run({'results': [], 'errors': []})
+        self.assertEqual(result.status, 'pass', result.summary)
+        self.assertEqual(len(self._core_calls), 1)
+
+    def test_report_fixture_still_rejects_invalid_syntax_before_core(self) -> None:
+        from getzilla import security_opengrep as scanner
+        (self.root / 'app.py').write_text('def broken(:\n  pass\n')
+        unavailable = ('/nonexistent/protected/python3.12', ('-I', '-S', '--version'),
+                       'Python 3.12.', 'python3.12')
+        with mock.patch.dict(scanner._FRONTENDS, {'python': unavailable}):
+            result = self._run({'results': [], 'errors': []})
+        self.assertEqual(result.status, 'fail')
+        self.assertIn('syntax_incomplete', result.summary)
+        self.assertEqual(self._core_calls, [])
+        self.assertFalse((self.bin / 'ran').exists())
 
     def test_skips_without_the_binary_or_the_rules(self) -> None:
         self.assertEqual((self._run(None).status, self._run(None).summary), ('skip', 'opengrep not available'))
@@ -110,10 +203,10 @@ class OpengrepCheckTests(unittest.TestCase):
                    'extra': {'severity': 'ERROR', 'message': 'Untrusted input reaches a SQL string.'}}
         failed = self._run({'results': [finding], 'errors': []}, exit_code=1)
         self.assertEqual(failed.status, 'fail')
-        self.assertEqual(failed.details[0]['rule'], 'getzilla.python.sql-injection')
+        self.assertEqual(failed.details[0]['rule'], 'getzilla.sast.rules.getzilla.python.sql-injection')
         self.assertEqual(failed.details[0]['line'], '12')
-        self.assertIn('--taint-intrafile', failed.command)
-        self.assertIn(V.OPENGREP_RULES, failed.command)
+        self.assertIn('-taint_intrafile', failed.command)
+        self.assertIn('-rules', failed.command)
         self.assertEqual(self._run({'results': [], 'errors': []}).status, 'pass')
 
     def test_crashes_and_scan_errors_fail_closed(self) -> None:
@@ -150,37 +243,28 @@ class OpengrepCheckTests(unittest.TestCase):
 
 
 class NativeOpengrepReportTests(unittest.TestCase):
+    setUp = OpengrepCheckTests.setUp
+    tearDown = OpengrepCheckTests.tearDown
+    _run = OpengrepCheckTests._run
+
     def check_report(self, report, exit_code=0, refusal=None):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / V.OPENGREP_RULES).mkdir(parents=True)
-            executable = root / 'owned-pinned-opengrep'
-            response = SimpleNamespace(returncode=exit_code, stdout=json.dumps(report), stderr='')
-            with mock.patch.object(V, 'find_tool', return_value=str(executable)), \
-                    mock.patch.object(V, '_unpinned_opengrep', return_value=refusal) as pin, \
-                    mock.patch.object(V, 'run', return_value=response) as runner, \
-                    mock.patch.object(subprocess, 'Popen', side_effect=AssertionError('unexpected process')):
-                result = V._opengrep(root)
-            pin.assert_called_once_with(executable)
-            return result, runner.call_args, runner.call_count
+        with mock.patch.object(V, '_unpinned_opengrep', return_value=refusal):
+            result = self._run("null" if report is None else report, exit_code)
+        calls = self._core_calls
+        call = SimpleNamespace(args=[calls[-1]], kwargs={}) if calls else None
+        return result, call, len(calls)
 
     def test_complete_clean_report_uses_strict_pinned_command_and_existing_scope(self):
         for exit_code in (0, 1):
             with self.subTest(exit_code=exit_code):
                 result, call, count = self.check_report({'results': [], 'errors': []}, exit_code)
-                self.assertEqual(result.status, 'pass')
+                # Direct core requires zero even when the CLI would accept one.
+                self.assertEqual(result.status, 'pass' if exit_code == 0 else 'fail')
                 self.assertEqual(count, 1)
-                expected = [result.command[0], 'scan', '--config', V.OPENGREP_RULES,
-                            '--taint-intrafile', '--json', '--quiet', '--strict',
-                            '--disable-version-check', '--timeout', '30']
-                for pattern in V.OPENGREP_EXCLUDES:
-                    expected.extend(('--exclude', pattern))
-                expected.append('.')
-                self.assertEqual(result.command, expected)
-                self.assertEqual(call.args[0], expected)
-                self.assertEqual(call.kwargs['timeout'], 900)
-                self.assertEqual(call.kwargs['encoding'], 'utf-8')
-                self.assertEqual(call.kwargs['errors'], 'replace')
+                self.assertEqual(call.args[0], result.command)
+                self.assertIn('-json_nodots', result.command)
+                self.assertTrue(result.command[0].startswith('/proc/self/fd/'))
+                self.assertTrue(result.command[-1].startswith('/proc/self/fd/'))
 
     def test_any_analysis_diagnostic_blocks_clean_regardless_of_level_or_exit(self):
         diagnostics = [{'level': level, 'message': 'PUBLIC-FIXTURE-NOTE'}
@@ -211,11 +295,11 @@ class NativeOpengrepReportTests(unittest.TestCase):
                 self.assertEqual(result.status, 'fail')
 
     def test_complete_findings_preserve_details(self):
-        finding = {'check_id': 'fixture.rule', 'path': 'owned.py', 'start': {'line': 12},
+        finding = {'check_id': 'getzilla.python.sql-injection', 'path': 'app.py', 'start': {'line': 12},
                    'extra': {'severity': 'ERROR', 'message': 'public finding'}}
         result, _, _ = self.check_report({'results': [finding], 'errors': []}, 1)
         self.assertEqual(result.status, 'fail')
-        self.assertEqual(result.details, [{'rule': 'fixture.rule', 'path': 'owned.py', 'line': '12',
+        self.assertEqual(result.details, [{'rule': 'getzilla.sast.rules.getzilla.python.sql-injection', 'path': 'app.py', 'line': '12',
                                           'severity': 'ERROR', 'message': 'public finding'}])
 
     def test_pin_refusal_never_calls_runner(self):

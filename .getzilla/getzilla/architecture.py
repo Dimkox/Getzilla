@@ -258,8 +258,12 @@ def _absolute_shape_unsafe(raw: str) -> bool:
     return "//" in raw or raw.endswith("/") or any(part in {".", ".."} for part in raw.split("/"))
 
 
-def _document_relative(root: Path, path: Path | str, *, label: str) -> str:
-    root_real = root.resolve(strict=True)
+def _document_relative(root: Path, path: Path | str, *, label: str, anchor=None) -> str:
+    if anchor is None:
+        root_real = root.resolve(strict=True)
+    else:
+        anchor.check_root(root)
+        root_real = Path(anchor.workspace)
     # A path object names its parts with the platform separator; the repository
     # form is always POSIX. Backslashes in caller-supplied strings stay refused.
     raw = path.as_posix() if isinstance(path, PurePath) else os.fspath(path)
@@ -312,7 +316,29 @@ def _secure_open_flags(*, label: str) -> tuple[int, int, int]:
 def _read_regular_bytes(
     root: Path, relative: str, *, label: str,
     identities: dict[tuple[int, int], str] | None = None,
+    anchor=None,
+    limit: int = MAX_DOCUMENT_BYTES,
+    single_link: bool = False,
 ) -> bytes:
+    if type(limit) is not int or not 0 < limit <= MAX_DOCUMENT_BYTES:
+        raise ArchitectureError("invalid document byte bound", code="limit")
+    if anchor is not None:
+        try:
+            anchor.check_root(root)
+            with anchor.file(relative, public_source=True, limit=limit) as (descriptor,_parent):
+                before = os.fstat(descriptor)
+                if single_link and before.st_nlink != 1:
+                    raise ArchitectureError(f"{label}: linked fixture input", code="io")
+                if identities is not None:
+                    identity = before.st_dev,before.st_ino
+                    if identity in identities and identities[identity] != relative:
+                        raise ArchitectureError(f'{label}: filesystem alias of {identities[identity]}',code='path')
+                    identities[identity] = relative
+                return anchor.read(relative,limit,public_source=True)
+        except ArchitectureError:
+            raise
+        except (OSError,ValueError) as exc:
+            raise ArchitectureError('native architecture input unavailable',code='io') from exc
     parts = PurePosixPath(relative).parts
     directories: list[fsx.DirHandle] = []
     descriptors: list[int] = []
@@ -328,21 +354,23 @@ def _read_regular_bytes(
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise ArchitectureError(f"{label}: must be a regular non-symlink file", code="io")
+        if single_link and before.st_nlink != 1:
+            raise ArchitectureError(f"{label}: linked fixture input", code="io")
         if identities is not None:
             identity = before.st_dev, before.st_ino
             if identity in identities and identities[identity] != relative:
                 raise ArchitectureError(f"{label}: filesystem alias of {identities[identity]}", code="path")
             identities[identity] = relative
-        if before.st_size > MAX_DOCUMENT_BYTES:
+        if before.st_size > limit:
             raise ArchitectureError(f"{label}: document byte limit exceeded", code="limit")
         chunks: list[bytes] = []
         total = 0
         while True:
-            chunk = os.read(descriptor, min(65_536, MAX_DOCUMENT_BYTES + 1 - total))
+            chunk = os.read(descriptor, min(65_536, limit + 1 - total))
             if not chunk:
                 break
             total += len(chunk)
-            if total > MAX_DOCUMENT_BYTES:
+            if total > limit:
                 raise ArchitectureError(f"{label}: document byte limit exceeded", code="limit")
             chunks.append(chunk)
         after = os.fstat(descriptor)
@@ -360,7 +388,7 @@ def _read_regular_bytes(
             after.st_mtime_ns,
             after.st_ctime_ns,
         )
-        if total != before.st_size or identity_after != identity_before:
+        if total != before.st_size or identity_after != identity_before or (single_link and after.st_nlink != 1):
             raise ArchitectureError(f"{label}: file changed while reading", code="io")
         return b"".join(chunks)
     except ArchitectureError as exc:
@@ -498,9 +526,10 @@ def parse_adoption_marker(data: bytes, *, label: str = "architecture adoption") 
 
 def _load_schema(
     root: Path, relative: Path, *, identities: dict[tuple[int, int], str] | None = None,
+    anchor=None,
 ) -> dict[str, Any]:
     label = relative.as_posix()
-    value = _parse_json(_read_regular_bytes(root, label, label=label, identities=identities), label=label)
+    value = _parse_json(_read_regular_bytes(root, label, label=label, identities=identities,anchor=anchor), label=label)
     try:
         _schema_preflight(value)
     except SpecError as exc:
@@ -544,6 +573,39 @@ def _require_references(values: list[str], known: set[str], *, label: str) -> No
         raise ArchitectureError(f"{label}: unresolved references: {missing}", code="reference")
 
 
+# This closed profile admits one reviewed test input, not the C language.
+# The consumer pin covers its owned compile-only command, bounded timeout and
+# tests which forbid target execution. Changing either body needs profile review.
+_SOURCE_FIXTURE_PROFILES = {
+    "c-public-elf-probe-v1": {
+        "profile": "c-public-elf-probe-v1",
+        "path": "tests/fixtures/reverse263/public-probe.c",
+        "sha256": "6126fe8336235c0b2f6adc34cdfa35ab79331306143e4a6cac282f3bd1cd4b5a",
+        "consumer_path": "tests/test_reverse_engineering.py",
+        "consumer_sha256": "9ee0499514a7b698103c7ca765b0b5d4b304cf6f2156b0367c6bd1b7e2856583",
+        "owner_node": "NODE-LOCAL-VERIFIER",
+        "purpose": "compile_inspect_only",
+    }
+}
+
+
+def _validate_source_fixture_declarations(system):
+    seen = set()
+    nodes = {node["id"]: node for node in system["nodes"]}
+    for row in system.get("source_fixtures", []):
+        profile = _SOURCE_FIXTURE_PROFILES.get(row["profile"])
+        if row != profile or row["path"] in seen:
+            raise ArchitectureError("source fixture differs from its closed profile", code="source_fixture")
+        owner = nodes.get(row["owner_node"])
+        if (owner is None or owner["type"] != "local_component"
+                or owner["runtime"]["kind"] != "python_process"
+                or owner["runtime"]["lifecycle"] != "on_demand" or owner["secrets"]
+                or any(not _is_declared(row[key], owner["repository_paths"])
+                       for key in ("path", "consumer_path"))):
+            raise ArchitectureError("source fixture lacks its test owner", code="source_fixture")
+        seen.add(row["path"])
+
+
 def _validate_system_semantics(system: dict[str, Any]) -> None:
     _stable_ids(system, SYSTEM_COLLECTIONS, label="system")
     trust_domains = {item["id"] for item in system["trust_domains"]}
@@ -585,6 +647,7 @@ def _validate_system_semantics(system: dict[str, Any]) -> None:
                     code="ownership",
                 )
             repository_owners[normalized] = node["id"]
+    _validate_source_fixture_declarations(system)
     capability_keys: set[str] = set()
     for edge in system["edges"]:
         if "secret_classes" in edge:
@@ -720,27 +783,32 @@ def load_architecture(
     rules_path: Path | str | None = None,
     *,
     _input_identities: dict[tuple[int, int], str] | None = None,
+    anchor=None,
 ) -> ArchitectureSnapshot:
     repository = Path(root)
-    try:
-        repository = repository.resolve(strict=True)
-    except OSError as exc:
-        raise ArchitectureError(f"repository root is unavailable: {exc}", code="io") from exc
-    if not repository.is_dir():
-        raise ArchitectureError("repository root must be a directory", code="io")
+    if anchor is None:
+        try:
+            repository = repository.resolve(strict=True)
+        except OSError as exc:
+            raise ArchitectureError(f"repository root is unavailable: {exc}", code="io") from exc
+        if not repository.is_dir():
+            raise ArchitectureError("repository root must be a directory", code="io")
+    else:
+        anchor.check_root(repository)
+        repository = Path(anchor.workspace)
 
     system_relative = _document_relative(
-        repository, SYSTEM_PATH if system_path is None else system_path, label="architecture system"
+        repository, SYSTEM_PATH if system_path is None else system_path, label="architecture system",anchor=anchor
     )
     rules_relative = _document_relative(
-        repository, RULES_PATH if rules_path is None else rules_path, label="architecture rules"
+        repository, RULES_PATH if rules_path is None else rules_path, label="architecture rules",anchor=anchor
     )
     if system_relative == rules_relative:
         raise _at_document(ArchitectureError("duplicate normalized model document path", code="path"), rules_relative)
     counter = [0]
     identities = _input_identities if _input_identities is not None else {}
-    system_data = _read_regular_bytes(repository, system_relative, label="architecture system", identities=identities)
-    rules_data = _read_regular_bytes(repository, rules_relative, label="architecture rules", identities=identities)
+    system_data = _read_regular_bytes(repository, system_relative, label="architecture system", identities=identities,anchor=anchor)
+    rules_data = _read_regular_bytes(repository, rules_relative, label="architecture rules", identities=identities,anchor=anchor)
     system = _parse_json(
         system_data,
         label=system_relative,
@@ -756,8 +824,8 @@ def load_architecture(
     system_text, rules_text = system_data.decode("utf-8"), rules_data.decode("utf-8")
     _validate_declared_paths(system, document=system_relative, text=system_text)
     _validate_declared_paths(rules, document=rules_relative, text=rules_text)
-    system_schema = _load_schema(repository, SYSTEM_SCHEMA_PATH, identities=identities)
-    rules_schema = _load_schema(repository, RULES_SCHEMA_PATH, identities=identities)
+    system_schema = _load_schema(repository, SYSTEM_SCHEMA_PATH, identities=identities,anchor=anchor)
+    rules_schema = _load_schema(repository, RULES_SCHEMA_PATH, identities=identities,anchor=anchor)
     _validate_against_schema(system, system_schema, label=system_relative, text=system_text)
     _validate_against_schema(rules, rules_schema, label=rules_relative, text=rules_text)
     if system["schema_version"] != 1 or rules["schema_version"] != 1:
@@ -866,6 +934,16 @@ def validate_architecture(
         if result:
             code = "missing_contract" if result == "missing" else "unsafe_contract_path"
             findings.append(ArchitectureFinding(code, f"contract path is {result}: {path}", path))
+    for row in snapshot.system.get("source_fixtures", []):
+        for path_key, hash_key, limit in (("path", "sha256", 4096),
+                                          ("consumer_path", "consumer_sha256", 131072)):
+            path = row[path_key]
+            try:
+                body = _read_regular_bytes(repository, path, label="source fixture", limit=limit, single_link=True)
+                if hashlib.sha256(body).hexdigest() != row[hash_key]:
+                    raise ArchitectureError("source fixture input changed", code="source_fixture")
+            except ArchitectureError:
+                findings.append(ArchitectureFinding("invalid_source_fixture", "source fixture input unavailable or changed", path))
     return tuple(sorted(findings, key=lambda item: (item.code, item.path, item.message)))
 
 
@@ -921,14 +999,19 @@ def preflight_architecture(root: Path | str) -> tuple[ArchitectureFinding, ...]:
 def contract_inventory(
     root: Path | str,
     snapshot: ArchitectureSnapshot,
+    *, anchor=None,
 ) -> tuple[ContractRecord, ...]:
-    repository = Path(root).resolve(strict=True)
+    if anchor is None:
+        repository = Path(root).resolve(strict=True)
+    else:
+        anchor.check_root(root)
+        repository = Path(anchor.workspace)
     if len(snapshot.system["contracts"]) > MAX_CONTRACTS:
         raise ArchitectureError("contract inventory limit exceeded", code="limit")
     records: list[ContractRecord] = []
     for contract in snapshot.system["contracts"]:
         path = _safe_relative_path(contract["path"], label=f"contract {contract['id']}")
-        data = _read_regular_bytes(repository, path, label=f"contract {contract['id']}")
+        data = _read_regular_bytes(repository, path, label=f"contract {contract['id']}",anchor=anchor)
         document = _parse_json(data, label=f"contract {contract['id']}")
         records.append(
             ContractRecord(
@@ -1304,6 +1387,8 @@ def validate_repository_drift(
         path for node in snapshot.system["nodes"] for path in node["repository_paths"]
     }
     declared_contracts = {contract["path"] for contract in snapshot.system["contracts"]}
+    fixtures = {row["path"] for row in snapshot.system.get("source_fixtures", [])}
+    invalid_fixtures = {item.path for item in findings if item.code == "invalid_source_fixture"}
     for artifact in _bounded_repository_inventory(repository):
         path = artifact.path
         pure = PurePosixPath(path)
@@ -1334,7 +1419,7 @@ def validate_repository_drift(
         suffix = pure.suffix.lower()
         if suffix not in _SOURCE_LIKE_SUFFIXES:
             continue
-        if suffix not in _SUPPORTED_SOURCE_SUFFIXES:
+        if suffix not in _SUPPORTED_SOURCE_SUFFIXES and not (path in fixtures and path not in invalid_fixtures):
             findings.append(
                 ArchitectureFinding(
                     "unsupported_source_artifact",
@@ -3746,10 +3831,15 @@ def architecture_fingerprint(
     base_sha: str,
     head_sha: str,
     contract_digests: Mapping[str, str],
+    anchor=None,
 ) -> str:
-    repository = Path(root).resolve(strict=True)
+    if anchor is None:
+        repository = Path(root).resolve(strict=True)
+    else:
+        anchor.check_root(root)
+        repository = Path(anchor.workspace)
     for model_path in (snapshot.system_path, snapshot.rules_path):
-        _document_relative(repository, model_path, label="architecture model")
+        _document_relative(repository, model_path, label="architecture model",anchor=anchor)
     contracts = [
         {"path": _safe_relative_path(path, label="contract digest"), "digest": digest}
         for path, digest in contract_digests.items()

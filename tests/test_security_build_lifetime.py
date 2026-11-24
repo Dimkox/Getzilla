@@ -14,6 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_image_backend as backend, security_image_producer as producer
 from getzilla.security_build_inputs import _instructions
 
@@ -37,7 +38,7 @@ class BuildLifetimeControls(unittest.TestCase):
         guard = object()
         builder = self.builder(guard)
         with (
-            mock.patch.object(backend, "_GUARD", guard),
+            mock.patch.object(image_authority, "_GUARD", guard),
             mock.patch.object(backend.BuildKit, "_daemon_alive", return_value=True),
             mock.patch.object(backend.BuildKit, "_volume_usage", return_value={}),
             mock.patch("getzilla.architecture_diff._run_capped", return_value=(0, b"", b"")) as port,
@@ -51,7 +52,7 @@ class BuildLifetimeControls(unittest.TestCase):
                 with self.subTest(change=change):
                     builder._in_build = change == "busy"
                     builder.deadline = time.monotonic() - 1 if change == "expired" else time.monotonic() + 3
-                    with mock.patch.object(backend, "_GUARD", object() if change == "foreign" else guard):
+                    with mock.patch.object(image_authority, "_GUARD", object() if change == "foreign" else guard):
                         before = port.call_count
                         with self.assertRaises(backend.BackendUnavailable):
                             builder.prune()
@@ -75,7 +76,7 @@ class BuildLifetimeControls(unittest.TestCase):
         builder.last_prune_usage = dict(before)
         recipe = dict(dockerfile="/owned/Dockerfile", context="/owned", platform="linux/amd64", arguments={})
         with (
-            mock.patch.object(backend, "_GUARD", guard),
+            mock.patch.object(image_authority, "_GUARD", guard),
             mock.patch.object(backend.BuildKit, "_daemon_alive", return_value=True),
             mock.patch.object(backend.BuildKit, "_volume_usage", side_effect=[before, failed]),
             mock.patch("getzilla.architecture_diff._run_capped", return_value=(1, b"", b"owned ENOSPC")),
@@ -103,8 +104,8 @@ class BuildLifetimeControls(unittest.TestCase):
             builder = self.builder(guard)
             info = SimpleNamespace(f_blocks=2097152, f_frsize=4096, f_bfree=3, f_bavail=2)
             with (
-                mock.patch.object(backend, "_GUARD", guard),
-                mock.patch.object(backend, "measured_ci_profile", return_value=True),
+                mock.patch.object(image_authority, "_GUARD", guard),
+                mock.patch.object(image_authority, "measured_ci_profile", return_value=True),
                 mock.patch.object(os, "fstatvfs", return_value=info) as port,
             ):
                 self.assertEqual(
@@ -116,7 +117,7 @@ class BuildLifetimeControls(unittest.TestCase):
                     builder._volume_usage()
                 self.assertEqual(port.call_count, 1)
                 proof["volume_identity"] = (identity.st_dev, identity.st_ino)
-                with mock.patch.object(backend, "measured_ci_profile", return_value=False):
+                with mock.patch.object(image_authority, "measured_ci_profile", return_value=False):
                     with self.assertRaises(backend.BackendUnavailable):
                         builder._volume_usage()
                 self.assertEqual(port.call_count, 1)
@@ -233,17 +234,36 @@ class BuildLifetimeControls(unittest.TestCase):
             self.assertEqual((contexts[0].parent / 'export.tar').read_bytes(), b'owned model export')
             builder.prune.assert_called_once_with()
 
+    def test_all_four_recipes_pin_wheel_backend_before_local_project_build(self):
+        profiles = {'Dockerfile.api': 'runtime', 'Dockerfile.worker': 'runtime',
+                    'Dockerfile.test': 'test', 'runner.Dockerfile': 'runner'}
+        directory = ROOT / 'trust-ci'
+        for recipe, profile in profiles.items():
+            with self.subTest(recipe=recipe):
+                text = (directory / recipe).read_text()
+                install = f'--only-binary=:all: --require-hashes --no-deps --no-compile -r requirements-{profile}.txt'
+                self.assertLess(text.index('python lock_profiles.py --check'), text.index(install))
+                self.assertLess(text.index(install), text.index('--no-deps --no-compile --no-build-isolation .'))
+                self.assertNotIn('coverage==7.15.4', text)
+                lock = (directory / f'requirements-{profile}.txt').read_text()
+                self.assertRegex(lock, r'(?m)^setuptools==84\.1\.0 [^\n]*\n(?:    --hash=[^\n]*\n)*?'
+                                       r'    --hash=sha256:5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9')
+        runner = (directory / 'requirements-runner.txt').read_text()
+        for pin in ('coverage==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
+                    'pytest-cov==7.1.0', 'ruff==0.16.3', 'bandit==1.9.4', 'tomli==2.5.0'):
+            self.assertIn(pin, runner)
+
     def test_runner_installs_after_exact_inputs_and_preserves_final_runtime(self):
         statements = [value for _, value in _instructions((ROOT / "trust-ci/runner.Dockerfile").read_text())]
         copy = [value for value in statements if value.startswith("COPY ")]
-        self.assertEqual(copy, ["COPY pyproject.toml README.md requirements-test.txt ./", "COPY src ./src"])
+        self.assertEqual(copy, ["COPY pyproject.toml README.md uv.lock lock_profiles.py lock_profile_validation.py lock-profiles.json requirements-*.txt ./", "COPY src ./src"])
         run = [value for value in statements if value.startswith("RUN ")]
         self.assertEqual(len(run), 1, "avoid native full-rootfs copies between heavy install steps")
         self.assertLess(statements.index(copy[1]), statements.index(run[0]))
         self.assertLess(statements.index("WORKDIR /opt/adaptive-trust-ci"), statements.index(copy[0]))
-        self.assertLess(run[0].index("apt-get update"), run[0].index("pip install --no-cache-dir --require-hashes"))
+        self.assertLess(run[0].index("apt-get update"), run[0].index("pip install --no-cache-dir --only-binary=:all: --require-hashes"))
         self.assertLess(
-            run[0].index("pip install --no-cache-dir --require-hashes"), run[0].index("urllib.request.urlretrieve")
+            run[0].index("pip install --no-cache-dir --only-binary=:all: --require-hashes"), run[0].index("urllib.request.urlretrieve")
         )
         self.assertIn("sha256sum -c -", run[0])
         self.assertIn("opengrep --version", run[0])

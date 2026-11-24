@@ -14,6 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_inventory as inventory
 from getzilla import security_image_backend as backend
 from getzilla import security_image_producer as producer
@@ -90,7 +91,7 @@ class OwnedControls(unittest.TestCase):
                 return observed[path]
             stack.enter_context(mock.patch.object(Path, 'read_text', read_text))
             stack.enter_context(mock.patch.object(backend, '_fixed'))
-            stack.enter_context(mock.patch.object(backend, '_filesystem', side_effect=lambda path:
+            stack.enter_context(mock.patch.object(image_authority, '_filesystem', side_effect=lambda path:
                 0x63677270 if str(path) == '/sys/fs/cgroup' else 0x01021994))
             held = os.open(volume, os.O_RDONLY | os.O_DIRECTORY)
             stack.callback(os.close, held)

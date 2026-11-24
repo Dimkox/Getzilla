@@ -355,6 +355,21 @@ class BaselineStatus:
         return {'complete': self.complete, 'missing': self.missing, 'details': self.details}
 
 
+def _security_availability(home: Path, *, which: Callable[[str], str | None] = shutil.which,
+                           environ: Mapping[str, str] | None = None) -> tuple[list[str], dict]:
+    """Shared mandatory availability check; artifact integrity is checked elsewhere."""
+    env = os.environ if environ is None else environ
+    missing: list[str] = []
+    osv = Path(env.get('GETZILLA_OSV_DB') or home / 'osv')
+    osv_ok = env.get('GETZILLA_OSV_ONLINE', '').strip() == '1' or any(osv.glob('*/all.zip'))
+    opengrep_ok = any((home / 'bin' / name).is_file() for name in ('opengrep', 'opengrep.exe')) or bool(which('opengrep'))
+    if not osv_ok:
+        missing.append('SECURITY_BASELINE_MISSING:osv')
+    if not opengrep_ok:
+        missing.append('SECURITY_BASELINE_MISSING:opengrep')
+    return missing, {'osv': osv_ok, 'opengrep': opengrep_ok}
+
+
 def inspect(home: Path, project: Path | None = None, agent: str | None = None, *,
             run: Runner = default_runner, which: Callable[[str], str | None] = shutil.which,
             environ: Mapping[str, str] | None = None) -> BaselineStatus:
@@ -362,19 +377,10 @@ def inspect(home: Path, project: Path | None = None, agent: str | None = None, *
         # Presence chooses a stricter current-source check. Its JSON never grants
         # source authority; official metadata and exact objects are rederived.
         from .current_workflows import inspect_current
-        return inspect_current(home, project, agent)
-    env = os.environ if environ is None else environ
+        return inspect_current(home, project, agent, which=which, environ=environ)
     config = components()
-    missing: list[str] = []
-    details: dict[str, Any] = {}
-    osv = Path(env.get('GETZILLA_OSV_DB') or home / 'osv')
-    osv_ok = env.get('GETZILLA_OSV_ONLINE', '').strip() == '1' or any(osv.glob('*/all.zip'))
-    opengrep_ok = any((home / 'bin' / name).is_file() for name in ('opengrep', 'opengrep.exe')) or bool(which('opengrep'))
-    details['security'] = {'osv': osv_ok, 'opengrep': opengrep_ok}
-    if not osv_ok:
-        missing.append('SECURITY_BASELINE_MISSING:osv')
-    if not opengrep_ok:
-        missing.append('SECURITY_BASELINE_MISSING:opengrep')
+    missing, security = _security_availability(home, which=which, environ=environ)
+    details: dict[str, Any] = {'security': security}
     pinned = {}
     for component_id, component in sorted(config.items()):
         head = _head(run, pinned_checkout(home) / component_id) if (pinned_checkout(home) / component_id).is_dir() else None

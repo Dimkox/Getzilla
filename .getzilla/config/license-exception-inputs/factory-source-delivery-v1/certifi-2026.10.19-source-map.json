@@ -1,0 +1,251 @@
+{
+  "acquisition": [
+    {
+      "bytes": 4631,
+      "final_url": "https://pypi.org/pypi/certifi/2026.10.19/json",
+      "request": 3,
+      "response_headers": {
+        "Content-Type": "application/json",
+        "ETag": "\"ZNVCS1uX/HeTuxZgtMLoiw\"",
+        "Last-Modified": null
+      },
+      "sha256": "ff912753725b147f8da6250d871b07cc801030bdee0b6e3ce1354ff8ddc6ed43",
+      "status": 200,
+      "timestamp_utc": "2026-11-18T21:40:28.363120+00:00",
+      "url": "https://pypi.org/pypi/certifi/2026.10.19/json"
+    },
+    {
+      "bytes": 137598,
+      "final_url": "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz",
+      "request": 4,
+      "response_headers": {
+        "Content-Type": "binary/octet-stream",
+        "ETag": "\"f64fcaadfe9a0ced492ccbfe88bc4a27\"",
+        "Last-Modified": "Tue, 20 Oct 2026 02:24:18 GMT"
+      },
+      "sha256": "035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae",
+      "status": 200,
+      "timestamp_utc": "2026-11-18T21:40:28.765004+00:00",
+      "url": "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz"
+    }
+  ],
+  "assurance": "All source content and file modes match the identified publisher archive; delivery container is a canonical repack, not original publisher gzip bytes. No legal compliance or original upstream-generation provenance claim.",
+  "legal_text_origins": [
+    {
+      "bytes": 16726,
+      "final_url": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+      "request": 1,
+      "response_headers": {
+        "Content-Type": "text/plain",
+        "ETag": "\"f75d2927d3c1ed2414ef72048f5ad640\"",
+        "Last-Modified": "Mon, 10 Aug 2026 15:15:32 GMT"
+      },
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "status": 200,
+      "timestamp_utc": "2026-11-18T21:40:07.482692+00:00",
+      "url": "https://www.mozilla.org/media/MPL/2.0/index.txt"
+    }
+  ],
+  "package": "certifi",
+  "schema_version": 1,
+  "source": {
+    "filename": "certifi-2026.10.19.tar.gz",
+    "original_archive_sha256": "035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae",
+    "original_archive_url": "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz",
+    "original_index_sha256": "ff912753725b147f8da6250d871b07cc801030bdee0b6e3ce1354ff8ddc6ed43",
+    "representation": "canonical-repack-of-unchanged-source",
+    "snapshot_manifest": "certifi-2026.10.19-snapshot.json",
+    "snapshot_manifest_sha256": "55233d49508cbaedddaab023a20f446ec60616cf2b2923a17c75eb9fef44752d"
+  },
+  "source_members": [
+    {
+      "bytes": 989,
+      "mode": 420,
+      "path": "certifi-2026.10.19/LICENSE",
+      "relative_path": "LICENSE",
+      "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+    },
+    {
+      "bytes": 200,
+      "mode": 420,
+      "path": "certifi-2026.10.19/MANIFEST.in",
+      "relative_path": "MANIFEST.in",
+      "sha256": "7dffab8a578e0cf98fead81ebe76a32bcde30b650519f50f55d9e7ddb5c950ee"
+    },
+    {
+      "bytes": 2526,
+      "mode": 420,
+      "path": "certifi-2026.10.19/PKG-INFO",
+      "relative_path": "PKG-INFO",
+      "sha256": "a5c0be3a42daeef0edfaf58e6ea5b7550f3e4e8eb35420f72e902df9bcf00f5c"
+    },
+    {
+      "bytes": 1157,
+      "mode": 420,
+      "path": "certifi-2026.10.19/README.rst",
+      "relative_path": "README.rst",
+      "sha256": "b36c3a5405b444d155327a647cce2ec27b564bb04710359e6322205ee04994e4"
+    },
+    {
+      "bytes": 94,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi/__init__.py",
+      "relative_path": "certifi/__init__.py",
+      "sha256": "f8ccfc10235998c7edd340f2f305b5f3d71aed978aea82a02af30d7877bee902"
+    },
+    {
+      "bytes": 243,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi/__main__.py",
+      "relative_path": "certifi/__main__.py",
+      "sha256": "c410688fdd394d45812d118034e71fee88ba7beddd30fe1c1281bd3b232cd758"
+    },
+    {
+      "bytes": 238856,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi/cacert.pem",
+      "relative_path": "certifi/cacert.pem",
+      "sha256": "50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785"
+    },
+    {
+      "bytes": 3394,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi/core.py",
+      "relative_path": "certifi/core.py",
+      "sha256": "5c55f2727746e697f7edac9e17c377d8752e0da7ecca191531b3b80403d61dad"
+    },
+    {
+      "bytes": 0,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi/py.typed",
+      "relative_path": "certifi/py.typed",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 0,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi/tests/__init__.py",
+      "relative_path": "certifi/tests/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 467,
+      "mode": 493,
+      "path": "certifi-2026.10.19/certifi/tests/test_certify.py",
+      "relative_path": "certifi/tests/test_certify.py",
+      "sha256": "7c179d1edf37f7e912b133663735fb46c6338d5d0e5f8915d11c3bc287d227b8"
+    },
+    {
+      "bytes": 2526,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi.egg-info/PKG-INFO",
+      "relative_path": "certifi.egg-info/PKG-INFO",
+      "sha256": "a5c0be3a42daeef0edfaf58e6ea5b7550f3e4e8eb35420f72e902df9bcf00f5c"
+    },
+    {
+      "bytes": 356,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi.egg-info/SOURCES.txt",
+      "relative_path": "certifi.egg-info/SOURCES.txt",
+      "sha256": "52a6f6268c2986594afbc178e2d9dab9fba7c420de07570fff929d49a648163d"
+    },
+    {
+      "bytes": 1,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi.egg-info/dependency_links.txt",
+      "relative_path": "certifi.egg-info/dependency_links.txt",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "bytes": 1,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi.egg-info/not-zip-safe",
+      "relative_path": "certifi.egg-info/not-zip-safe",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "bytes": 8,
+      "mode": 420,
+      "path": "certifi-2026.10.19/certifi.egg-info/top_level.txt",
+      "relative_path": "certifi.egg-info/top_level.txt",
+      "sha256": "28cbb8bd409fb232eb90f6d235d81d7a44bea552730402453bffe723c345ebe5"
+    },
+    {
+      "bytes": 91,
+      "mode": 420,
+      "path": "certifi-2026.10.19/pyproject.toml",
+      "relative_path": "pyproject.toml",
+      "sha256": "81562b11a9a84cb5d47f66a78e7338546fddb7f5c62f4308b337e891f7d8a0d7"
+    },
+    {
+      "bytes": 38,
+      "mode": 420,
+      "path": "certifi-2026.10.19/setup.cfg",
+      "relative_path": "setup.cfg",
+      "sha256": "1c473cbaee8da5fc46e7f0158794af5cea4414c34a3cf3f180c2001f5e38bd3e"
+    },
+    {
+      "bytes": 2271,
+      "mode": 493,
+      "path": "certifi-2026.10.19/setup.py",
+      "relative_path": "setup.py",
+      "sha256": "5cb6c5d1b80469d0e2c9079039a59e1b4d0a9c4bc8b58c43c3f7cc3259ffca22"
+    }
+  ],
+  "version": "2026.10.19",
+  "wheel": {
+    "filename": "certifi-2026.10.19-py3-none-any.whl",
+    "sha256": "42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b"
+  },
+  "wheel_source_comparison": [
+    {
+      "bytes": 94,
+      "identical": true,
+      "sha256": "f8ccfc10235998c7edd340f2f305b5f3d71aed978aea82a02af30d7877bee902",
+      "source_member": "certifi/__init__.py",
+      "wheel_member": "certifi/__init__.py"
+    },
+    {
+      "bytes": 243,
+      "identical": true,
+      "sha256": "c410688fdd394d45812d118034e71fee88ba7beddd30fe1c1281bd3b232cd758",
+      "source_member": "certifi/__main__.py",
+      "wheel_member": "certifi/__main__.py"
+    },
+    {
+      "bytes": 238856,
+      "identical": true,
+      "sha256": "50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785",
+      "source_member": "certifi/cacert.pem",
+      "wheel_member": "certifi/cacert.pem"
+    },
+    {
+      "bytes": 3394,
+      "identical": true,
+      "sha256": "5c55f2727746e697f7edac9e17c377d8752e0da7ecca191531b3b80403d61dad",
+      "source_member": "certifi/core.py",
+      "wheel_member": "certifi/core.py"
+    },
+    {
+      "bytes": 0,
+      "identical": true,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_member": "certifi/py.typed",
+      "wheel_member": "certifi/py.typed"
+    },
+    {
+      "bytes": 0,
+      "identical": true,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_member": "certifi/tests/__init__.py",
+      "wheel_member": "certifi/tests/__init__.py"
+    },
+    {
+      "bytes": 467,
+      "identical": true,
+      "sha256": "7c179d1edf37f7e912b133663735fb46c6338d5d0e5f8915d11c3bc287d227b8",
+      "source_member": "certifi/tests/test_certify.py",
+      "wheel_member": "certifi/tests/test_certify.py"
+    }
+  ]
+}

@@ -552,6 +552,14 @@
       "path": "engineering/contracts/openapi/trust-ci.public.v1.json",
       "role": "bidirectional",
       "version": "1"
+    },
+    {
+      "compatibility": "bidirectional",
+      "id": "CONTRACT-PAID-EXECUTION-AUTHORITY-V1",
+      "kind": "json_schema",
+      "path": "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json",
+      "role": "bidirectional",
+      "version": "1"
     }
   ],
   "data_classifications": [
@@ -1950,6 +1958,30 @@
     },
     {
       "allowed_data": [
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-NPM",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-NPM-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
         "DATA-PILOT-STATE"
       ],
       "authentication": "external_managed",
@@ -3311,6 +3343,52 @@
       "sync_or_async": "synchronous",
       "to": "NODE-SUPPLY-CHAIN-REGISTRY",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
+      "id": "EDGE-PAID-EXECUTOR-ADMISSION",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-PAID-ADMISSION",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-PAID-ADMISSION",
+      "id": "EDGE-PAID-AUTHORITY-JOURNAL",
+      "network_policy": "no_network",
+      "protocol": "sqlite",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-SQLITE",
+      "type": "data_flow"
     }
   ],
   "nodes": [
@@ -3461,6 +3539,16 @@
         "factory/src/getzilla_factory/__init__.py",
         "factory/src/getzilla_factory/_fpf_snapshot_data.py",
         "factory/src/getzilla_factory/admin.py",
+        "factory/src/getzilla_factory/access_authority.py",
+        "factory/src/getzilla_factory/access_release.py",
+        "factory/src/getzilla_factory/retrieval_access.py",
+        "factory/src/getzilla_factory/retrieval_receiver.py",
+        "factory/src/getzilla_factory/retrieval_retention.py",
+        "factory/src/getzilla_factory/factory_stop.py",
+        "factory/src/getzilla_factory/local_writer.py",
+        "factory/src/getzilla_factory/native_access.py",
+        "factory/src/getzilla_factory/qwen_native_handoff.py",
+        "factory/src/getzilla_factory/payload_access.py",
         "factory/src/getzilla_factory/bb_contracts.py",
         "factory/src/getzilla_factory/context_contracts.py",
         "factory/src/getzilla_factory/contracts.py",
@@ -3471,13 +3559,16 @@
         "factory/src/getzilla_factory/model_rotator_registry.py",
         "factory/src/getzilla_factory/prediction_contracts.py",
         "factory/src/getzilla_factory/recovery.py",
+        "factory/src/getzilla_factory/retrieval_context_contracts.py",
         "factory/src/getzilla_factory/vibevm_store.py",
         "factory/src/getzilla_factory/service.py",
         "factory/src/getzilla_factory/state.py",
         "factory/src/getzilla_factory/store.py",
         "factory/src/getzilla_factory/v15_contracts.py",
         "factory/tests",
-        "tests/test_factory_v15_decisions.py"
+        "tests/test_factory_v15_decisions.py",
+        "factory/src/getzilla_factory/local_network.py",
+        "factory/src/getzilla_factory/workflow.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3594,6 +3685,8 @@
         "factory/src/getzilla_factory/landing_runtime.py",
         "factory/src/getzilla_factory/landing_service.py",
         "factory/src/getzilla_factory/landing_sse.py",
+        "factory/src/getzilla_factory/shared_landing_contracts.py",
+        "factory/src/getzilla_factory/shared_landing_control.py",
         "factory/src/getzilla_factory/resources/landing-normalization-draft.v1.schema.json",
         "factory/src/getzilla_factory/resources/landing_pdf_worker.py",
         "factory/contracts/jsonschema/landing-provider-observation.v1.schema.json",
@@ -3685,7 +3778,10 @@
       "owner": "local factory operators",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/getzilla_factory/landing_sqlite_store.py"
+        "factory/src/getzilla_factory/landing_sqlite_store.py",
+        "factory/sqlite",
+        "factory/src/getzilla_factory/landing_sqlite",
+        "factory/src/getzilla_factory/landing_sqlite/migrations"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3777,7 +3873,8 @@
       "repository_paths": [
         "factory/src/getzilla_factory/brokers.py",
         "factory/src/getzilla_factory/result_broker.py",
-        "factory/src/getzilla_factory/result_contracts.py"
+        "factory/src/getzilla_factory/result_contracts.py",
+        "factory/src/getzilla_factory/_payload_engine.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4205,6 +4302,9 @@
         ".getzilla/managed-components.json",
         ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
         ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
+        ".getzilla/optional-modules/reverse-engineering/0.1.0/elf.py",
+        ".getzilla/optional-modules/mcp-jira/0.1.0",
+        ".getzilla/optional-modules/retrieval-research/0.1.0",
         ".getzilla/templates",
         ".grok",
         ".qwen",
@@ -4386,6 +4486,9 @@
       "repository_paths": [
         ".getzilla/getzilla/security_acquisition.py",
         ".getzilla/getzilla/security_license_acquisition.py",
+        ".getzilla/getzilla/security_action_inputs.py",
+        ".getzilla/getzilla/security_action_npm_fetch.py",
+        ".getzilla/getzilla/security_release_tool_inputs.py",
         ".getzilla/getzilla/security_osv_snapshot.py"
       ],
       "runtime": {
@@ -4579,6 +4682,22 @@
       "data_classification": "DATA-REPOSITORY-SOURCE",
       "id": "NODE-PYPI-REGISTRY",
       "owner": "public PyPI registry and artifact endpoints",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-NPM-REGISTRY",
+      "owner": "public npm registry and package source endpoints",
       "public_contracts": [],
       "repository_paths": [],
       "runtime": {
@@ -4933,7 +5052,9 @@
         "trust-ci/ops/public-worker-cgroup.conf",
         "trust-ci/public-checker-inputs",
         "trust-ci/Dockerfile.worker",
-        ".github/workflows/getzilla-public-producer.yml"
+        ".github/workflows/getzilla-public-producer.yml",
+        "trust-ci/lock_profiles.py",
+        "trust-ci/lock_profile_validation.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -5029,6 +5150,49 @@
       },
       "secrets": [],
       "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-RESEARCH-EVIDENCE",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        "engineering/benchmarks/issue162",
+        "engineering/benchmarks/issue172",
+        "engineering/benchmarks/issue170"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "none",
+        "lifecycle": "none",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
+      "type": "repository"
+    },
+    {
+      "data_classification": "DATA-FACTORY-LANDING-INPUT",
+      "id": "NODE-FACTORY-PAID-ADMISSION",
+      "owner": "explicit owning server authority",
+      "public_contracts": [
+        "CONTRACT-PAID-EXECUTION-AUTHORITY-V1"
+      ],
+      "repository_paths": [
+        "factory/src/getzilla_factory/paid_admission.py",
+        "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json",
+        "factory/tests/test_paid_admission.py",
+        "factory/tests/test_control_schema_bindings.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
       "type": "local_component"
     }
   ],
@@ -5171,6 +5335,17 @@
     {
       "description": "Upstream debug event for a failed best-effort public version lookup; the CLI continues without update information and does not expose this as an adapter operation failure. The manifest and GitHub fallback share one 2000 ms budget.",
       "id": "SIG-ENTIRE-VERSION-CHECK-FAILURE"
+    }
+  ],
+  "source_fixtures": [
+    {
+      "consumer_path": "tests/test_reverse_engineering.py",
+      "consumer_sha256": "9ee0499514a7b698103c7ca765b0b5d4b304cf6f2156b0367c6bd1b7e2856583",
+      "owner_node": "NODE-LOCAL-VERIFIER",
+      "path": "tests/fixtures/reverse263/public-probe.c",
+      "profile": "c-public-elf-probe-v1",
+      "purpose": "compile_inspect_only",
+      "sha256": "6126fe8336235c0b2f6adc34cdfa35ab79331306143e4a6cac282f3bd1cd4b5a"
     }
   ],
   "trust_domains": [

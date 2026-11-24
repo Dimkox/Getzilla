@@ -7,14 +7,14 @@ Directory handles deny delete sharing; file handles deny write sharing.
 from __future__ import annotations
 
 import ctypes as C
-import contextlib
-import hashlib
+import contextlib as contextlib
+import hashlib as hashlib
 import itertools
 import json
 import os
 import re
 import threading
-import uuid
+import uuid as uuid
 from dataclasses import dataclass
 from pathlib import PureWindowsPath
 
@@ -254,7 +254,7 @@ class Native:
             return None
         return self._sid(C.addressof(sid))
 
-    def open(self, parent, name, *, directory, create=False, temporary=False, inspect=False):
+    def open(self, parent, name, *, directory, create=False, temporary=False, inspect=False, exclusive=False):
         if parent is not None:
             _component(name)
         encoded = name.encode('utf-16-le')
@@ -267,7 +267,7 @@ class Native:
         # Keep LIST_DIRECTORY access and deny DELETE sharing to pin ancestry.
         # Relative rename internally opens this directory for FILE_ADD_FILE;
         # allow that sharing, without granting any additional ACL rights.
-        share = 3 if directory else (7 if inspect else 5)
+        share = 0 if exclusive else (3 if directory else (7 if inspect else 5))
         code = self.n.NtCreateFile(C.byref(result), access, C.byref(attrs), C.byref(status), None,
                                    0x10 if directory else 0x80, share, 2 if create else 1,
                                    0x200020 | (1 if directory else 0x40), None, 0)
@@ -416,13 +416,17 @@ class Held:
     owned: bool
 
 
-class SnapshotStore:
+class SnapshotReader:
     """Same closed store API as POSIX, backed only by held native handles."""
 
     def __init__(self, database, *, create=False, _native=None):
         self.database, self.create = database, create
         self.native = _native
         self.directories, self.relative, self.files = [], {}, {}
+        self.absent = set()
+        self.publication_lock = None
+        self.last_replaced = None
+        self.before_replace = None
 
     def __enter__(self):
         raw = os.fspath(self.database)
@@ -456,11 +460,15 @@ class SnapshotStore:
 
     def close(self):
         if self.native:
+            if self.publication_lock is not None:
+                self.native.close(self.publication_lock)
+                self.publication_lock = None
             for held in [*self.files.values(), *reversed(self.directories)]:
                 self.native.close(held.handle)
             self.files.clear()
             self.directories.clear()
             self.relative.clear()
+            self.absent.clear()
             self.native.shutdown()
             self.native = None
 
@@ -501,6 +509,13 @@ class SnapshotStore:
         return held
 
     def confirm(self):
+        for parent, name in self.absent:
+            try:
+                handle = self.native.open(parent, name, directory=False, inspect=True)
+            except FileNotFoundError:
+                continue
+            self.native.close(handle)
+            raise SecurityDataError('snapshot commit_unknown; publication appeared during consumption')
         for depth, (directory, held) in enumerate([(True, node) for node in self.directories] + [(False, f) for f in self.files.values()]):
             ancestor_depth = depth if directory and not held.owned else None
             volume_root = directory and held.parent is None and not held.owned
@@ -516,6 +531,16 @@ class SnapshotStore:
                         raise SecurityDataError('snapshot native name was replaced while held')
                 finally:
                     self.native.close(named)
+
+
+    def expect_absent(self, parts):
+        parent = self.directory(parts[:-1])
+        self.absent.add((parent.handle, parts[-1]))
+        self.confirm()
+
+    def _pin_file(self, parent, name, maximum):
+        return self._file(parent, name, maximum)
+
 
     def _directory(self, parent, name, *, create, owned):
         self.confirm()
@@ -576,62 +601,10 @@ class SnapshotStore:
         self.confirm()
         return payload
 
-    def write(self, parts, payload):
-        parent = self.directory(parts[:-1], create=True)
-        name = _component(parts[-1])
-        try:
-            previous = self._file(parent, name, 1024 * 1024 * 1024)
-        except FileNotFoundError:
-            previous = None
-        temporary = f'.{name}.{uuid.uuid4().hex}.partial'
-        handle = self.native.open(parent.handle, temporary, directory=False, create=True, temporary=True)
-        committed = False
-        unresolved = False
-        try:
-            offset = 0
-            while offset < len(payload):
-                block = payload[offset:offset + 1024 * 1024]
-                written = self.native.write(handle, block)
-                if not 0 < written <= len(block):
-                    raise SecurityDataError('incomplete native snapshot write')
-                offset += written
-            self.native.flush(handle)
-            before = self._metadata(handle, owned=True, directory=False, maximum=len(payload))
-            actual = self._read(handle, len(payload))
-            if (before.size != len(payload) or hashlib.sha256(actual).digest() != hashlib.sha256(payload).digest()
-                    or self._metadata(handle, owned=True, directory=False).identity() != before.identity()):
-                raise SecurityDataError('snapshot native temporary changed before publication')
-            probe = self.native.open(parent.handle, temporary, directory=False, inspect=True)
-            try:
-                if self._metadata(probe, owned=True, directory=False).identity() != before.identity():
-                    raise SecurityDataError('snapshot native temporary name was replaced')
-            finally:
-                self.native.close(probe)
-            self.confirm()
-            key = parent.handle, name
-            if previous:
-                # Ordinary native replacement refuses an open destination.
-                # Release only our verified witness, retaining every parent
-                # and unrelated reader. On failure _file() reopens the old name.
-                self.native.close(self.files.pop(key).handle)
-            try:
-                self.native.rename(handle, parent.handle, name, replace=previous is not None)
-            except SecurityDataError as error:
-                unresolved = bool(getattr(error, 'native_rename_unresolved', False))
-                raise
-            committed = True
-            metadata = self._metadata(handle, owned=True, directory=False)
-            self.files[key] = Held(handle, parent.handle, name, metadata.identity(), True)
-            handle = None  # held file now owns it
-            self.confirm()
-            self.native.flush(self.files[key].handle)
-        finally:
-            if handle is not None:
-                if not committed and not unresolved:
-                    try:
-                        with contextlib.suppress(OSError):
-                            self.native.discard(handle)  # delete only the exact owned object
-                    finally:
-                        self.native.close(handle)
-                else:
-                    self.native.close(handle)
+
+
+def __getattr__(name):
+    if name == "SnapshotStore":
+        from .security_windows_publication import SnapshotStore
+        return SnapshotStore
+    raise AttributeError(name)

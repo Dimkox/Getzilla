@@ -27,6 +27,20 @@ CHECK_FAMILIES = {
 _SOURCE_FIELDS = ('source_id', 'source_url', 'content_sha256', 'payload_size', 'acquisition', 'coverage')
 
 
+def _license_target(environ):
+    env = os.environ if environ is None else environ
+    raw = env.get('GETZILLA_SECURITY_INPUT_PROFILE')
+    if raw is None:
+        return {}
+    from .security_artifacts import MAX_INDEX_BYTES
+    from .security_data import _json
+    from .security_python_target import binding
+    if type(raw) is not str or len(raw.encode()) > MAX_INDEX_BYTES:
+        raise SecurityDataError('Python artifact target input profile unavailable or excessive')
+    value = binding(_json(raw.encode()))
+    return {'target_binding':value} if value is not None else {}
+
+
 def _clock(now: datetime | None) -> datetime:
     current = datetime.now(timezone.utc) if now is None else now
     if current.tzinfo is None or current.utcoffset() is None:
@@ -93,7 +107,7 @@ def _source_descriptor(root: Path, database: Path, source_id: str, now: datetime
 
 
 def _selection_authority(root, env):
-    from .security_cli import source_binding, ci_run_context
+    from .public_security_context import source_binding, ci_run_context
     from .security_tools import TRUSTED_ROOT
     from .public_security_context import current_context, validate_context
     with tempfile.TemporaryDirectory(prefix='selection-binding-', dir=Path(root).parent) as directory:
@@ -108,7 +122,7 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
     from .security_artifacts import MAX_INDEX_BYTES, read_file
     from .security_data import _json
     from .security_oci import source_bindings, validate_selection
-    from .security_cli import validate_selection_authority, validate_input_profile
+    from .public_security_context import validate_selection_authority, validate_input_profile
     env = os.environ if environ is None else environ
     selected = env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS')
     declaration = env.get('GETZILLA_SECURITY_IMAGE_SELECTION')
@@ -127,15 +141,30 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
     inventory = (declared_inventory(root, selection) if selection is not None else
                  collect_inventory(root, image_bindings=source_bindings(catalog)))
     raw = env.get('GETZILLA_SECURITY_INPUT_PROFILE', '')
-    if not isinstance(raw, str) or len(raw.encode()) > MAX_INDEX_BYTES:
+    if not isinstance(raw, str) or not raw or len(raw.encode()) > MAX_INDEX_BYTES:
         raise SecurityDataError('selected image current input profile absent or excessive')
     profile = _json(raw.encode())
     roots = {'database': str(_database(root, env)),
              'artifacts': str(Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts').absolute()),
              'tools': str(Path(env.get('GETZILLA_SECURITY_TOOLS') or root / '.getzilla/runtime/security-tools').absolute())}
     from .security_tools import TRUSTED_ROOT
+    package_pins=None
+    package_graphs=None
+    if 'python_source_pins' in profile:
+        from .security_python_target import source_pins,validate_target,closure_graphs
+        package_pins=source_pins(root,inventory,validate_target(profile['python_target']))
+        package_graphs=closure_graphs(root,inventory)
+    factory_inputs=None
+    if 'factory_inputs' in profile:
+        from .security_factory_inputs import declaration as factory_declaration
+        from .security_license_contracts import load_policy
+        factory_inputs=factory_declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=Path(roots['tools']))
+    package_ci_uses=None
+    if 'python_ci_uses' in profile:
+        from .security_image_authority import ci_use_observations
+        package_ci_uses=ci_use_observations(root,inventory,before,run,package_graphs)
     validate_input_profile(profile, before, inventory, roots, run, _policy_digest(TRUSTED_ROOT),
-                           now=now, image_artifacts=catalog, image_selection=selection)
+                           now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
     if catalog is not None:
         validate_selection(catalog, inventory, profile['image_profile'])
     after, after_run = _selection_authority(root, env)
@@ -153,7 +182,7 @@ def current_inventory(root: Path, *, environ=None, now=None) -> dict[str, Any]:
     selection = read_image_selection(Path(path)) if path else None
     if selection is None:
         return collect_inventory(root)
-    from .security_cli import validate_selection_authority
+    from .public_security_context import validate_selection_authority
     before, run = _selection_authority(root, env)
     validate_selection_authority(before, run, selection, now=_clock(now))
     result = declared_inventory(root, selection)
@@ -176,11 +205,11 @@ def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime |
             raise SecurityDataError('image database differs from the frozen required source')
         return True
     if binding['source_id'] == 'artifact-license-catalog':
-        from .security_licenses import artifact_catalog_source, load_policy
+        from .security_license_contracts import load_policy
         env = os.environ if environ is None else environ
         artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
         inventory = selected_inventory(root, environ=env, now=now)
-        proof = artifact_catalog_source(inventory, artifacts, load_policy(policy_root or root), now=now)
+        proof = artifact_catalog_source(inventory, artifacts, load_policy(policy_root or root), now=now, **_license_target(env))
         if proof != binding:
             raise SecurityDataError('license catalog differs from the frozen required source')
         return True
@@ -216,12 +245,12 @@ def security_obligations(root: Path, inventory: dict[str, Any] | None = None, *,
             descriptors['trivy-db'] = {'database': str(tools_path / 'cache/db/trivy.db'),
                                        'source_id': 'trivy-db', 'unavailable': True}
     if dependencies or images or tools or unknown:
-        from .security_licenses import artifact_catalog_source, load_policy
+        from .security_license_contracts import load_policy
         env = os.environ if environ is None else environ
         artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
         try:
             descriptors['artifact-license-catalog'] = artifact_catalog_source(
-                inventory, artifacts, load_policy(policy_root or root), now=current)
+                inventory, artifacts, load_policy(policy_root or root), now=current, **_license_target(environ))
         except (OSError, ValueError, RuntimeError):
             descriptors['artifact-license-catalog'] = {'database': str(artifacts.absolute()),
                                                        'source_id': 'artifact-license-catalog', 'unavailable': True}
@@ -394,16 +423,27 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                                        f'{len(hits)} active malicious-package catalog matches in complete OSV ecosystem snapshots',
                                        inventory, policy, sources=source_evidence, findings=hits))
             elif name == 'security-licenses':
-                from .security_licenses import artifact_catalog_source, evaluate_artifacts, load_policy
+                from .security_licenses import evaluate_artifacts
+                from .security_license_contracts import load_policy
                 artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
                 license_policy = load_policy(policy_root or root)
-                report = evaluate_artifacts(inventory, artifacts, license_policy, now=current)
-                outcome = 'pass' if report['status'] == 'pass' else 'blocked'
-                proof = artifact_catalog_source(inventory, artifacts, license_policy, now=current)
+                target_options=_license_target(env)
+                from .security_license_scope import current as current_run_scope
+                run_context=current_run_scope(root,inventory,target_options.get('target_binding'))
+                report = evaluate_artifacts(inventory, artifacts, license_policy, now=current, **target_options,
+                    **({'run_context':run_context} if run_context is not None else {}))
+                selected=report.get('selected_run')
+                outcome = ('pass' if selected['status']=='pass-for-selected-run' else 'blocked') if selected is not None else 'pass' if report['status'] == 'pass' else 'blocked'
+                proof = artifact_catalog_source(inventory, artifacts, license_policy, now=current, **_license_target(env))
                 if [proof] != obligation['data_sources']:
                     raise SecurityDataError('license artifact inputs changed during evaluation')
-                results.append(_result(name, outcome, report['summary'], inventory, policy,
-                                       sources=[proof], findings=report.get('details', []), gaps=report.get('gaps', [])))
+                check=_result(name, outcome, selected['summary'] if selected is not None else report['summary'], inventory, policy,
+                    sources=[proof],findings=selected['details'] if selected is not None else report.get('details', []),
+                    gaps=selected['gaps'] if selected is not None else report.get('gaps', []))
+                if selected is not None:
+                    check['details'][0].update(selected_run=selected,raw_coverage=report['raw_coverage'],
+                        raw_license_diagnostics=report.get('gaps',[]))
+                results.append(check)
             else:
                 if image_scan is None:
                     raise SecurityDataError('no image scan covered the required image inventory')
@@ -415,8 +455,150 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
         except (ImportError, OSError, ValueError, RuntimeError) as exc:
             results.append(_result(name, 'blocked', str(exc), inventory, policy,
                                    sources=obligation['data_sources'], gaps=[{'code': 'required-input-unavailable', 'message': str(exc)}]))
-    from .security_licenses import attach_factory_offline_intent, factory_offline_intent, load_policy
+    from .security_license_contracts import attach_factory_offline_intent, factory_offline_intent, load_policy
     for check in results:
         if check.get('name') == 'security-licenses':
             attach_factory_offline_intent(check, factory_offline_intent(root, load_policy(policy_root or root)))
     return results
+
+
+def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None,
+                            target_binding: dict | None = None) -> dict:
+    """Freeze actual catalog bytes for final-receipt revalidation, without policy PASS.
+
+    Recompute at receipt consumption and compare the whole source projection.
+    Coverage.complete describes only the structural completeness of this
+    manifest's referenced records. It never claims complete dependency, tool,
+    image, license or distribution coverage. evaluate_artifacts supplies those
+    decisions independently. Hashes and unsigned timestamps supply integrity
+    bindings only; external runner qualification supplies independent authority.
+
+    The returned projection stays stable while bytes, inventory, policy and the
+    original acquisition time stay unchanged. Clock validation runs on every
+    call; copying a catalog cannot renew its 72-hour lifetime. Missing or
+    inconsistent references raise ArtifactError; an invalid clock may raise
+    SecurityDataError. Callers must map either exception to unavailable.
+    """
+    from . import security_license_contracts as _catalog_policy
+    import json
+    import re
+    from .security_artifacts import (ArtifactError, MAX_INDEX_BYTES, MAX_ARTIFACT_BYTES,
+                                     artifact_identity, read_file, verify_origin, family_evidence, _json)
+    from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _timestamp
+    from .security_deliveries import verify_deliveries
+    try:
+        digest = inventory.get('digest') if isinstance(inventory, dict) else None
+        if not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None:
+            raise ArtifactError('artifact-inventory-binding', 'catalog needs the exact source inventory digest')
+        selected_policy = _catalog_policy._policy(policy)
+        if target_binding is not None:
+            from .security_python_target import _binding
+            _binding(target_binding)
+            if target_binding['inventory_sha256'] != digest:
+                raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another source inventory')
+        current = _clock(now)
+        raw = read_file(artifacts, 'manifest.json', MAX_INDEX_BYTES)
+        bundle = _json(raw)
+        if type(bundle.get('schema_version')) is not int or bundle['schema_version'] != 1 or bundle.get('inventory_digest') != digest:
+            raise ArtifactError('artifact-inventory-binding', 'catalog schema or source inventory binding differs')
+        acquired = bundle.get('last_verified_sync_utc')
+        age = (current - _timestamp(acquired)).total_seconds()
+        if age < 0 or age > MAX_AGE_SECONDS:
+            raise ArtifactError('artifact-stale', 'catalog acquisition is future-dated or older than 72 hours')
+        records = bundle.get('records')
+        if not isinstance(records, list) or not records or len(records) > 10000 or not all(isinstance(record, dict) for record in records):
+            raise ArtifactError('artifact-manifest', 'catalog has no bounded complete records')
+        bindings, seen, total = [], set(), len(raw)
+        for record in records:
+            key = artifact_identity(record)
+            if key in seen:
+                raise ArtifactError('artifact-manifest', 'catalog repeats a package artifact identity')
+            seen.add(key)
+            if 'kind' in record:
+                subjects = inventory.get('images' if record['kind'] == 'image' else 'tools', [])
+                if record['subject'] not in subjects:
+                    raise ArtifactError('artifact-inventory-binding', 'family does not belong to the current source inventory')
+                _catalog_policy._family_age(record, current, acquired)
+                evidence = family_evidence(artifacts, record)
+                total += evidence['bound_bytes']
+                if total > 512 * 1024 * 1024:
+                    raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
+                bindings.append(evidence['binding'])
+                continue
+            origin = record.get('origin')
+            if not isinstance(origin, dict):
+                raise ArtifactError('artifact-origin', 'catalog record lacks its saved registry index')
+            if 'acquired_at' in record:
+                _catalog_policy._family_age(record, current, acquired)
+            payload = read_file(artifacts, record.get('path'), MAX_ARTIFACT_BYTES)
+            index = read_file(artifacts, origin.get('index_path'), MAX_INDEX_BYTES)
+            verified = verify_origin(artifacts, record, payload, index_bytes=index)
+            observed = None
+            if record['ecosystem'] == 'PyPI' and (target_binding is not None or 'python_target' in record):
+                from .security_python_target import verify_record
+                observed = verify_record(record,payload,target_binding)
+            bound = {'ecosystem': record['ecosystem'], 'name': record['name'], 'version': record['version'],
+                     'path': record['path'], 'filename': record['filename'], 'artifact_size': len(payload),
+                     'artifact_id': key, 'context': record.get('context', {}),
+                     'index_path': origin['index_path'], 'index_size': len(index), **verified}
+            if observed is not None:
+                bound['python_target'] = observed
+            total += len(payload) + len(index)
+            if record.get('redistributed_path') is not None:
+                delivered = read_file(artifacts, record['redistributed_path'], MAX_ARTIFACT_BYTES)
+                delivery_digest = hashlib.sha256(delivered).hexdigest()
+                if delivery_digest != verified['artifact_sha256']:
+                    raise ArtifactError('artifact-hash', 'catalog delivered artifact bytes no longer match')
+                bound['delivery'] = {'path': record['redistributed_path'], 'sha256': delivery_digest, 'size': len(delivered)}
+                total += len(delivered)
+            if total > 512 * 1024 * 1024:
+                raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
+            bindings.append(bound)
+        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, inventory.get('dependencies', []),
+            corresponding_source_delivery=inventory.get('corresponding_source_delivery'))
+        total += sum(delivery['output_bytes'] for delivery in deliveries.values())
+        if total > 512 * 1024 * 1024:
+            raise ArtifactError('artifact-size', 'catalog and delivered outputs exceed the aggregate bound-byte budget')
+        # Also bind the supplied input contents: a caller changing an input
+        # while retaining its old digest must not obtain the same projection.
+        inventory_body = json.dumps(inventory, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+        if len(inventory_body) > MAX_INDEX_BYTES:
+            raise ArtifactError('artifact-size', 'source inventory exceeds its byte budget')
+        binding = {'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'inventory_digest': digest,
+                   'inventory_content_sha256': hashlib.sha256(inventory_body).hexdigest(),
+                   'policy_digest': selected_policy['digest'],
+                   'records': sorted(bindings, key=lambda item: item['artifact_id']),
+                   'deliveries': deliveries}
+        if target_binding is not None and 'factory_inputs' in target_binding:
+            from .security_factory_inputs import verify
+            auxiliary=verify(artifacts,target_binding,selected_policy,now=now)
+            binding['factory_output']=auxiliary['projection']
+            total+=auxiliary['projection']['payload_size']
+            if total>512*1024*1024:
+                raise ArtifactError('artifact-size','catalog and Factory output exceed the shared aggregate byte budget')
+        if target_binding is not None and 'ci_uses' in target_binding and 'ci_consumer' not in target_binding:
+            from .security_ci_inputs import verify as verify_ci
+            binding['ci_installations']=[]
+            for index,consumer in enumerate(target_binding['ci_uses']['consumers']):
+                if consumer.get('image_target_observed') is not True:
+                    continue
+                auxiliary=verify_ci(artifacts,target_binding,index,selected_policy,now=now)
+                binding['ci_installations'].append(auxiliary['projection'])
+                total+=auxiliary['projection']['payload_size']
+                if total>512*1024*1024:
+                    raise ArtifactError('artifact-size','CI installations exceed the shared package byte budget')
+        if target_binding is not None and 'ci_uses' in target_binding:
+            from .security_python_target import digest as python_digest
+            binding['ci_use_observation_sha256']=python_digest(target_binding['ci_uses'])
+        content = json.dumps(binding, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+        return {'database': str(Path(artifacts).absolute()), 'source_id': 'artifact-license-catalog',
+                'source_url': 'urn:getzilla:artifact-license-catalog:1',
+                'content_sha256': hashlib.sha256(content).hexdigest(), 'payload_size': total,
+                'acquisition': {'last_verified_sync_utc': acquired, 'retrieval_kind': 'catalog-binding',
+                                'producer': 'getzilla-artifact-catalog-v1'},
+                'coverage': {'schema': 'artifact-license-catalog-1', 'scopes': ['catalog'],
+                             'record_count': len(bindings), 'complete': True}}
+    except (ArtifactError, SecurityDataError):
+        raise
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ArtifactError('artifact-catalog-unavailable', str(exc)) from exc

@@ -189,7 +189,7 @@ def install_source(target: Target, data: bytes, root: Path, *, run=execute) -> P
     _probe(target, executable, source, env, run)
     # This is local build custody, not a publisher's compiled binary attestation.
     # The next invocation revalidates fresh official source integrity first.
-    from .updater import _replace_bytes
+    from .release_transport import _replace_bytes
     record = dict(source=dict(component=target.component, version=target.version, sha256=target.sha256, url=target.url),
                   files=_inventory(prefix), claim='local-source-build-custody')
     _replace_bytes(stage/'build-custody.json', json.dumps(record, sort_keys=True).encode(), mode=0o600)

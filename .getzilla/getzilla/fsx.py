@@ -13,13 +13,14 @@ path that was swapped between the ``lstat`` and the ``open``.
 from __future__ import annotations
 
 import hashlib
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 import errno
 import functools
+import sys
 import os
 import stat
 import time
@@ -36,10 +37,27 @@ O_DIRECTORY = getattr(os, 'O_DIRECTORY', 0)
 O_NOFOLLOW = getattr(os, 'O_NOFOLLOW', 0)
 O_NONBLOCK = getattr(os, 'O_NONBLOCK', 0)
 O_CLOEXEC = getattr(os, 'O_CLOEXEC', 0)
+_DARWIN_EXIT_SETTLE_SECONDS = 0.5
 O_NOCTTY = getattr(os, 'O_NOCTTY', 0)
 O_BINARY = getattr(os, 'O_BINARY', 0)
 O_NOINHERIT = getattr(os, 'O_NOINHERIT', 0)
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def held_directory_address(descriptor: int) -> Path:
+    """Address the held directory for a child process, checking its filesystem identity."""
+    held = os.fstat(descriptor)
+    if not stat.S_ISDIR(held.st_mode):
+        raise NotADirectoryError(descriptor)
+    if sys.platform == 'linux':
+        address = Path('/proc/self/fd') / str(descriptor)
+    elif sys.platform == 'darwin':
+        address = Path('/.vol') / str(held.st_dev) / str(held.st_ino)
+    else:
+        raise OSError(errno.ENOTSUP, 'held directory addressing unavailable')
+    if not os.path.samestat(held, address.stat()):
+        raise OSError(errno.ESTALE, 'held directory identity changed')
+    return address
 
 
 class WindowsDirectory:
@@ -197,6 +215,38 @@ def open_dir_at(parent: DirHandle, name: str, *, flags: int = 0) -> DirHandle:
     return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | flags, dir_fd=parent)
 
 
+def validate_directory_path(root: str | os.PathLike[str], relative_parent: str,
+                            opened_handle: DirHandle, *,
+                            opened_ancestors: tuple[DirHandle, ...] | None = None) -> None:
+    """Reopen a root-relative directory without links and compare its identity.
+
+    Call immediately before a mutation. This detects a moved or replaced parent;
+    it does not lock the namespace against a rename after the check.
+    """
+    parts = relative_parent.split('/') if relative_parent else []
+    handles = [open_dir(root)]
+    try:
+        for part in parts:
+            _check_name(part)
+            handles.append(open_dir_at(handles[-1], part))
+        originals = opened_ancestors if opened_ancestors is not None else (opened_handle,)
+        current = handles if opened_ancestors is not None else handles[-1:]
+        if len(originals) != len(current):
+            raise OSError(errno.ESTALE, 'directory ancestry changed', relative_parent)
+        for opened, fresh in zip(originals, current):
+            expected = fstat_dir(opened)
+            named = fstat_dir(fresh)
+            if (expected.st_dev, expected.st_ino, stat.S_IFMT(expected.st_mode)) != (
+                    named.st_dev, named.st_ino, stat.S_IFMT(named.st_mode)):
+                raise OSError(errno.ESTALE, 'directory moved or replaced', relative_parent)
+            if isinstance(opened, WindowsDirectory) and (
+                    expected.st_dev, expected.st_ino) != (opened.info.st_dev, opened.info.st_ino):
+                raise OSError(errno.ESTALE, 'directory replaced since opening', relative_parent)
+    finally:
+        for handle in reversed(handles):
+            close_dir(handle)
+
+
 def lstat_at(parent: DirHandle, name: str) -> os.stat_result:
     """``lstat`` of ``name`` in ``parent``.
 
@@ -289,6 +339,28 @@ def rmdir_at(parent: DirHandle, name: str) -> None:
     os.rmdir(name, dir_fd=parent)
 
 
+def rmdir_owned_at(parent: DirHandle, name: str, held: int) -> bool:
+    """Remove the name and confirm deletion of the already-open directory inode."""
+    import sys
+
+    if sys.platform != 'darwin':
+        rmdir_at(parent, name)
+        return fstat_dir(held).st_nlink == 0
+    import select
+
+    # APFS directory link counts need not drop to zero on the retained handle.
+    # Subscribe before rmdir so a rename alone can never confirm removal.
+    with closing(select.kqueue()) as queue:
+        watch = select.kevent(held, filter=select.KQ_FILTER_VNODE,
+                              flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                              fflags=select.KQ_NOTE_DELETE)
+        queue.control([watch], 0, 0)
+        rmdir_at(parent, name)
+        return any(event.ident == held and event.filter == select.KQ_FILTER_VNODE
+                   and not event.flags & select.KQ_EV_ERROR and event.fflags & select.KQ_NOTE_DELETE
+                   for event in queue.control(None, 1, 0))
+
+
 def replace_at(source_parent: DirHandle, source: str, target_parent: DirHandle, target: str) -> None:
     """Atomic rename that replaces an existing target file."""
     if isinstance(source_parent, WindowsDirectory) or isinstance(target_parent, WindowsDirectory):
@@ -368,6 +440,36 @@ def process_group_kwargs() -> dict[str, object]:
         import subprocess
         return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
     return {'start_new_session': True}
+
+
+def darwin_owned_group_absent(process) -> bool:
+    """Confirm that an exited Darwin child's group has no remaining members."""
+    import subprocess
+    import sys
+
+    if sys.platform != 'darwin':
+        return False
+    # Darwin can refuse killpg with EPERM while the leader is still exiting
+    # and not yet waitable. Give that exit a short, bounded time to finish.
+    deadline = time.monotonic() + _DARWIN_EXIT_SETTLE_SECONDS
+    while process.poll() is None:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.005)
+    census = subprocess.run(['/bin/ps', '-A', '-o', 'pgid='], capture_output=True,
+                            timeout=2, check=True, env={'LC_ALL': 'C'})
+    groups = census.stdout.split()
+    return bool(groups) and all(group.isdigit() for group in groups) and str(process.pid).encode() not in groups
+
+
+def signal_owned_group(process, signum: int) -> None:
+    """Signal a POSIX session created for this child, or report its confirmed absence."""
+    try:
+        os.killpg(process.pid, signum)
+    except PermissionError:
+        if not darwin_owned_group_absent(process):
+            raise
+        raise ProcessLookupError(errno.ESRCH, 'owned process group has exited') from None
 
 
 def kill_process_tree(pid: int) -> None:
@@ -842,3 +944,7 @@ class ReadOnlyBoundRoot:
 
     def __exit__(self, *args: object) -> None:
         self.close()
+
+
+def mode_matches(actual: int, expected: int) -> bool:
+    return bool(actual & stat.S_IWRITE) == bool(expected & stat.S_IWUSR) if WINDOWS else stat.S_IMODE(actual) == expected

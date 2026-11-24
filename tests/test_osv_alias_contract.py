@@ -167,10 +167,13 @@ class SnapshotAliasTests(unittest.TestCase):
                         cwd=root, env=_git_environment(), stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE, check=True, timeout=10).stdout
                 git('init', '-q', '--template=')
+                (root / '.git/info').mkdir(exist_ok=True)
                 self.assertEqual(Path(os.fsdecode(git('rev-parse', '--show-toplevel')).strip()).resolve(), root.resolve())
                 paths = ['requirements.txt', '.getzilla/config/known-vulnerabilities.json']
                 git('add', '--', *paths)
-                tree = git('write-tree').decode().strip()
+                git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                    '-c', 'maintenance.auto=false', 'commit', '-qm', 'Pin the owned alias fixture')
+                tree = git('rev-parse', 'HEAD^{tree}').decode().strip()
                 self.assertEqual(set(git('ls-tree', '-r', '--name-only', tree).decode().splitlines()), set(paths))
                 refresh(root / '.getzilla/runtime/security-data', aliases)
                 checks = {item['name']: item for item in expanded_security.run_checks(root, environ={}, now=NOW)}

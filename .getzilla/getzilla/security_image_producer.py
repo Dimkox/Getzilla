@@ -5,7 +5,7 @@ never restores it. The existing OCI importer independently checks every graph.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import hashlib
 import gzip
 import io
@@ -20,29 +20,21 @@ import tempfile
 import time
 
 from .security_artifacts import read_file
+from . import security_image_authority as authority
+from .security_image_authority import (  # noqa: F401 compatibility function/seal aliases
+    _LICENSE_ENTRY,
+    _MEMBER_SEAL,
+    ci_member_evidence,
+    ci_use_observations,
+    require_builds,
+    validate_ci_uses,
+)
 from .security_image_backend import BuildKit, _ACTIVE, BackendUnavailable, _diagnostic
 from .security_image_registry import Registry, RegistryError
 from .security_inventory import collect_inventory, declared_inventory
 from .security_oci import LIMITS, active_limits, INDEX, MANIFEST, OCIError, canonical, document, _descriptor, import_layouts
 
-_LIVE = None
 _PHASE = 'opening'
-
-
-def require_builds(inventory, source, run):
-    builds = inventory.get('builds', [])
-    if not builds:
-        return
-    if _LIVE is None or _LIVE['source'] != source or _LIVE['run'] != run:
-        raise BackendUnavailable('current source builds require the live owned producer')
-    expected = {row['build_sha256'] for row in builds}
-    if expected != set(_LIVE['builds']):
-        raise BackendUnavailable('current build recipes differ from actual completed builds')
-    for row in builds:
-        matches = [use for use in inventory['images'] if use['manifest'] == row['manifest']
-                   and use['line'] == row['line'] and use['source_reference'] == row['source_reference']]
-        if len(matches) != 1 or matches[0]['reference'] != _LIVE['builds'][row['build_sha256']]:
-            raise BackendUnavailable('current build output differs from actual completed graph')
 
 
 def _write(root, relative, raw):
@@ -61,17 +53,16 @@ def _write(root, relative, raw):
 
 def _ci_write(root, relative, raw):
     """Image outputs stay below held native volume, including through parents."""
-    from . import security_image_backend as native
     from .security_oci import _Root
     root, relative = Path(root), Path(relative)
-    if (not root.is_relative_to(native._GUARD[0]) or relative.is_absolute()
+    if (not root.is_relative_to(authority._GUARD[0]) or relative.is_absolute()
             or not relative.parts or '..' in relative.parts or len(relative.parts) > 64):
         raise BackendUnavailable('CI image output leaves its held volume')
     held = _Root(root)
     fd = None
     try:
         fd = os.dup(held.fd)
-        if os.fstat(fd).st_dev != os.fstat(native._GUARD[3]['volume_fd']).st_dev:
+        if os.fstat(fd).st_dev != os.fstat(authority._GUARD[3]['volume_fd']).st_dev:
             raise BackendUnavailable('CI image output filesystem differs')
         for name in relative.parts[:-1]:
             try:
@@ -81,7 +72,7 @@ def _ci_write(root, relative, raw):
             child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
             os.close(fd)
             fd = child
-            if os.fstat(fd).st_dev != os.fstat(native._GUARD[3]['volume_fd']).st_dev:
+            if os.fstat(fd).st_dev != os.fstat(authority._GUARD[3]['volume_fd']).st_dev:
                 raise BackendUnavailable('CI image output parent leaves its bounded filesystem')
         try:
             output = os.open(relative.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -197,8 +188,7 @@ def _choice_name(expression):
 @contextmanager
 def produce(root, source, run, volume, builder):
     """Acquire actual source graphs and build four recipes covering five uses."""
-    global _LIVE
-    if _LIVE is not None or type(builder) is not BuildKit:
+    if authority._LIVE is not None or type(builder) is not BuildKit:
         raise BackendUnavailable('nested build producer is forbidden')
     root, volume = Path(root), Path(volume)
     deadline = time.monotonic() + LIMITS['deadline_seconds']
@@ -246,12 +236,25 @@ def produce(root, source, run, volume, builder):
     for digest, raw in registry.blobs.items():
         _write(layout, 'blobs/sha256/' + digest[7:], raw)
     del registry.blobs
+    from .security_oci import _Budget
+    shared_budget=_Budget(dict(active_limits(),images=[],platform='linux/amd64'))
+    shared_budget.deadline=min(shared_budget.deadline,deadline)
+    base_targets,observed_bases={},{}
     completed, by_service, by_recipe = {}, {}, {}
     if builder.deadline > deadline:
         builder.deadline = deadline
     for recipe in build_inventory['builds']:
             identity = recipe['recipe_sha256']
             if identity not in by_recipe:
+                from .security_tools import TRUSTED_ROOT
+                from .security_ci_inputs import observe_base
+                base=recipe['arguments'].get('PYTHON_BASE_IMAGE')
+                if (recipe['dockerfile'] in {'trust-ci/Dockerfile.api','trust-ci/Dockerfile.worker','trust-ci/Dockerfile.test','trust-ci/runner.Dockerfile'}
+                        and base==resolved[ci['python']['reference']][0]
+                        and read_file(root,recipe['dockerfile'],4*1024*1024)==read_file(TRUSTED_ROOT,recipe['dockerfile'],4*1024*1024)):
+                    if base not in observed_bases:
+                        observed_bases[base]=observe_base(builder,base,volume,shared_budget)
+                    base_targets[identity]=observed_bases[base]
                 descriptor = _build_recipe(root, recipe, volume, layout, builder)
                 reference = 'getzilla.local/build-' + identity + '@' + descriptor['digest']
                 roots[reference] = descriptor
@@ -279,20 +282,22 @@ def produce(root, source, run, volume, builder):
     profile = dict(active_limits(), images=sorted(roots), platform='linux/amd64')
     # Validate the ORIGINAL catalog against independently recollected raw source
     # before any declaration projection. No producer success bypasses OCI checks.
-    with import_layouts(catalog, inventory, profile, volume, measure_entries=True):
-        pass
-    from .public_security_context import selection_document, project_catalog
-    from .security_cli import _clock
-    selection = selection_document(inventory, source, run, _clock().isoformat())
-    declared = declared_inventory(root, selection)
-    catalog = project_catalog(catalog, declared['digest'])
-    _LIVE = dict(source=source, run=run, builds=completed)
-    try:
-        require_builds(declared, source, run)
-        yield selection, catalog
-    finally:
-        _LIVE = None
-
+    with ExitStack() as verified:
+        imported=verified.enter_context(import_layouts(catalog, inventory, profile, volume,_budget=shared_budget,measure_entries=True))
+        from .public_security_context import selection_document, project_catalog
+        from .public_security_context import _clock
+        selection = selection_document(inventory, source, run, _clock().isoformat())
+        declared = declared_inventory(root, selection)
+        catalog = project_catalog(catalog, declared['digest'])
+        authority._LIVE = dict(source=source, run=run, builds=completed,native_guard=authority._GUARD,
+            build_inputs=json.loads(json.dumps(declared['builds'])),base_targets=base_targets,
+            root=root,declared_inventory=json.loads(json.dumps(declared)),
+            images={image.reference:image for image in imported})
+        try:
+            require_builds(declared, source, run)
+            yield selection, catalog
+        finally:
+            authority._LIVE = None
 
 def _event(stage):
     global _PHASE
@@ -303,8 +308,7 @@ def _event(stage):
 
 def _pipeline_tools(request, volume):
     if active_limits()['max_storage_bytes'] > LIMITS['max_storage_bytes']:
-        from . import security_image_backend as native
-        if Path(volume) != native._GUARD[0]:
+        if Path(volume) != authority._GUARD[0]:
             raise BackendUnavailable('CI tools root differs from held image volume')
         return Path(volume) / 'tools'
     return Path(request['tools'])
@@ -317,12 +321,11 @@ def _postdrop_preflight(request, volume, builder):
     import _ssl
     import _socket
     import zlib
-    from . import security_image_backend as native
     from .security_image_registry import BoundedHTTP, RegistryError
     check = 'postdrop-volume'
     try:
         volume = Path(volume)
-        if native._GUARD is None or native._GUARD[0] != volume or os.geteuid() == 0:
+        if authority._GUARD is None or authority._GUARD[0] != volume or os.geteuid() == 0:
             raise ValueError('owned dropped controller required')
         tools = _pipeline_tools(request, volume)
         check = 'postdrop-resolver'
@@ -390,6 +393,9 @@ def _pipeline(request, volume, builder):
     root = Path(request['root'])
     database, artifacts = (Path(request[key]) for key in ('database', 'artifacts'))
     tools = _pipeline_tools(request, volume)
+    with cli._preparation_step('package-target'):
+        from .security_python_target import observe_target
+        package_target = observe_target()
     with tempfile.TemporaryDirectory(prefix='source-', dir=volume) as directory:
         source = cli.source_binding(root, cli.TRUSTED_ROOT, Path(directory))
         cli.validate_selection_authority(source, request['run'])
@@ -397,9 +403,15 @@ def _pipeline(request, volume, builder):
             selection_path, catalog_path = volume / 'selection.json', volume / 'catalog.json'
             _write(volume, selection_path.name, canonical(selection))
             _write(volume, catalog_path.name, canonical(catalog))
-            options = dict(run=request['run'], image_artifacts=catalog_path, image_selection=selection_path)
+            options = dict(run=request['run'], image_artifacts=catalog_path, image_selection=selection_path,
+                           package_target=package_target)
             _event('declare')
             profile = cli.prepare_inputs(root, database, artifacts, tools, write_profile=True, **options)
+            from .security_license_scope import activate
+            with cli._preparation_step('license-run-scope'):
+                license_inputs=activate(root,profile,_entry=_LICENSE_ENTRY)
+            license_inputs.update(selection=selection,catalog=catalog)
+            cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))
             cli._atomic(Path(request['profile']), canonical(profile))
             _event('prepare')
             with cli._preparation_step('prepare-inputs'):
@@ -448,7 +460,7 @@ def _worker():
                 control_readback={name: (Path('/sys/fs/cgroup') / name).read_text(encoding='utf-8').strip()
                                   for name in ('memory.max', 'memory.swap.max', 'pids.max', 'cpu.max')},
                 owned_child_created=child > 1,
-                cgroup_root_identity=native._GUARD[3],
+                cgroup_root_identity=authority._GUARD[3],
                 ordinary_file_verified=read_file(volume, 'owned-control', 4096) == b'owned kernel control\n'))
         keys = {'kind', 'root', 'database', 'artifacts', 'tools', 'profile', 'preparation', 'report', 'pins', 'run', 'uid', 'gid'}
         if (set(request) != keys or request['kind'] != 'pipeline' or type(request['uid']) is not int
@@ -603,7 +615,7 @@ def _offline_tool_control(request, volume):
 def _fault(error):
     kind = type(error)
     from .security_oci import bound_fault
-    from .security_cli import _preparation_fault
+    from .public_security_context import _preparation_fault
     detail = dict(error.detail) if kind in (BackendUnavailable, RegistryError) else bound_fault(error)
     detail.pop('preparation', None)
     preparation = _preparation_fault(error)

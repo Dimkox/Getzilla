@@ -186,7 +186,9 @@ def _select(index: dict, dep: dict) -> dict:
 
 
 def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_digest: str,
-                 fetch=bounded_default, now: datetime | None = None, families: list[dict] | None = None) -> dict:
+                 fetch=bounded_default, now: datetime | None = None, families: list[dict] | None = None,
+                 target_binding: dict | None = None, byte_budget: int | None = None,
+                 family_preparation: dict | None = None) -> dict:
     """Save fixed-origin artifacts and commit manifest last; no dependency resolution.
 
     Failure before pointer replacement leaves an existing manifest unchanged.
@@ -201,6 +203,14 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
     if not isinstance(dependencies, list) or len(dependencies) > MAX_PACKAGES or not all(isinstance(dep, dict) for dep in dependencies):
         raise ArtifactError('artifact-inventory-binding', 'producer dependencies must be a bounded list')
     current = _clock(now)
+    byte_budget=MAX_BATCH_BYTES if byte_budget is None else byte_budget
+    if type(byte_budget) is not int or not 1<=byte_budget<=MAX_BATCH_BYTES:
+        raise ArtifactError('artifact-size','acquisition shared byte budget is invalid')
+    if target_binding is not None:
+        from .security_python_target import _binding
+        _binding(target_binding)
+        if target_binding['inventory_sha256'] != inventory_digest:
+            raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another inventory')
     descriptor = None
     try:
         destination = Path(destination)
@@ -211,6 +221,7 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
         records, gaps, seen = [], [], set()
         total = 0
         retained = []
+        retained_frontiers = []
         try:
             named = os.stat('manifest.json', dir_fd=descriptor, follow_symlinks=False)
         except FileNotFoundError:
@@ -220,12 +231,29 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             if not isinstance(previous, dict) or not isinstance(previous.get('records'), list):
                 raise ArtifactError('artifact-manifest', 'prior artifact catalog is malformed')
             retained = [record for record in previous['records'] if isinstance(record, dict) and 'kind' in record]
-            if retained and previous.get('inventory_digest') != inventory_digest:
+            retained_frontiers = previous.get('family_frontiers', [])
+            if (retained or retained_frontiers) and previous.get('inventory_digest') != inventory_digest:
                 raise ArtifactError('artifact-inventory-binding', 'cannot carry family evidence into another source inventory')
+        if any(record.get('kind') == 'image' and record.get('origin', {}).get('kind') == 'held-oci-components/v1'
+                for record in retained):
+            from .security_image_licenses import replace_retained
+            retained = replace_retained(destination, retained, families)
+        if family_preparation is not None:
+            from .security_family_inputs import publish
+            frontier = publish(destination, descriptor, family_preparation, inventory_digest=inventory_digest,
+                               now=current, byte_budget=byte_budget, records=[*retained, *(families or [])])
+        else:
+            from .security_family_inputs import validate_frontiers
+            frontier = validate_frontiers(destination, retained_frontiers, now=current, byte_budget=byte_budget,
+                                          inventory_digest=inventory_digest, records=[*retained, *(families or [])])
+        total += frontier['bound_bytes']
+        if total > byte_budget:
+            raise ArtifactError('artifact-size', 'release source frontiers exceed the shared catalog byte budget')
+        gaps.extend(frontier['gaps'])
         if families is not None and (not isinstance(families, list) or len(families) > MAX_PACKAGES
                                      or not all(isinstance(record, dict) and 'kind' in record for record in families)):
             raise ArtifactError('artifact-manifest', 'selected family records are malformed or unbounded')
-        for record in [*retained, *(families or [])]:
+        for record in [*retained, *(families or []), *frontier['records']]:
             key = artifact_identity(record)
             if key in seen:
                 if next(old for old in records if artifact_identity(old) == key) != record:
@@ -236,7 +264,7 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             if not 0 <= age <= MAX_AGE_SECONDS:
                 raise ArtifactError('artifact-stale', 'retained family source age is unavailable, future or stale')
             total += evidence['bound_bytes']
-            if total > MAX_BATCH_BYTES:
+            if total > byte_budget:
                 raise ArtifactError('artifact-size', 'selected catalog exceeds its aggregate byte budget')
             seen.add(key)
             records.append(record)
@@ -262,10 +290,14 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             else:
                 index_url = pypi_index_url(dep['name'], dep['version'])
                 index_bytes = _fetch(fetch, index_url, MAX_INDEX_BYTES)
-                selected = _select(_json(index_bytes), dep)
+                selected_dependency = dep
+                if target_binding is not None:
+                    from .security_python_target import select_dependency
+                    selected_dependency = select_dependency(_json(index_bytes), dep, target_binding)
+                selected = _select(_json(index_bytes), selected_dependency)
             payload = _fetch(fetch, selected['url'], MAX_ARTIFACT_BYTES)
             total += len(index_bytes) + len(payload)
-            if total > MAX_BATCH_BYTES:
+            if total > byte_budget:
                 raise ArtifactError('artifact-size', 'acquisition batch exceeds its total byte budget')
             digest = hashlib.sha256(payload).hexdigest()
             if ecosystem == 'PyPI' and digest != selected['digests']['sha256']:
@@ -279,7 +311,8 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
                                  'index_sha256': index_digest, 'artifact_url': selected['url']}}
             _write(descriptor, record['origin']['index_path'], index_bytes, immutable=True)
             binding = verify_origin(destination, record, payload)
-            metadata = package_metadata(archive_files(payload, filename), ecosystem, filename,
+            files = archive_files(payload, filename)
+            metadata = package_metadata(files, ecosystem, filename,
                                         **({'origin': binding} if ecosystem == 'Packagist' else {}))
             if package_key(ecosystem, metadata['name'], metadata['version']) != key:
                 raise ArtifactError('artifact-identity', 'artifact Name/Version differs from exact inventory')
@@ -287,6 +320,9 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
                     or dep.get('artifact_filename') is not None and dep['artifact_filename'] != filename
                     or dep.get('artifact_sha256') is not None and dep['artifact_sha256'] != digest):
                 raise ArtifactError('artifact-identity', 'artifact differs from observed target')
+            if ecosystem == 'PyPI' and target_binding is not None:
+                from .security_python_target import wheel_observation
+                record['python_target'] = wheel_observation(filename, files, target_binding, dependency=dep)
             _write(descriptor, record['path'], payload, immutable=True)
             if artifact_identity(record) not in {artifact_identity(old) for old in records}:
                 records.append(record)
@@ -295,6 +331,10 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
                   'last_verified_sync_utc': acquired.isoformat(),
                   'producer': 'getzilla-security-license-acquisition-v1', 'records': records, 'gaps': gaps,
                   'assurance': 'artifact-integrity-only'}
+        if frontier['frontiers']:
+            bundle['family_frontiers'] = frontier['frontiers']
+        if target_binding is not None:
+            bundle['python_target'] = target_binding['target']
         body = json.dumps(bundle, sort_keys=True, separators=(',', ':')).encode()
         if len(body) > MAX_INDEX_BYTES:
             raise ArtifactError('artifact-size', 'artifact manifest exceeds its byte budget')

@@ -166,6 +166,7 @@ class PreparationFaultControls(unittest.TestCase):
                 mock.patch.object(producer, '_pipeline_tools', return_value=self.root/'tools'), \
                 mock.patch.object(cli, 'source_binding', return_value={}), \
                 mock.patch.object(cli, 'validate_selection_authority'), \
+                mock.patch('getzilla.security_license_scope.activate',return_value={}), \
                 mock.patch.object(cli, 'prepare_inputs', side_effect=[{}, {'status': 'prepared'}]), \
                 mock.patch.object(cli, '_atomic', side_effect=atomic), redirect_stdout(events):
             with self.assertRaises(PermissionError) as caught:

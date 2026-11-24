@@ -1,6 +1,7 @@
 """Exact committed-source review planning; operational authority is never changed."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -9,7 +10,132 @@ from typing import Any
 
 from .diff_risk import ORDER, classify_diff, load_rules, parse_rules
 from .project_ingestion import _git
-from .util import git_head, tree_fingerprint, unique_ordered
+from .state import serialized_task
+from .util import git_head, tree_fingerprint, unique_ordered, load_json
+
+
+DEFAULT_ANALYSIS_CAP = 10
+
+
+DEFAULT_ROUTING: dict[str, Any] = {
+    'schema_version': 1,
+    'max_parallel_analysis': DEFAULT_ANALYSIS_CAP,
+    'write_roles': [
+        'ai_implementer',
+        'bitrix_implementer',
+        'data_implementer',
+        'frontend_implementer',
+        'general_implementer',
+        'integration_implementer',
+        'php_implementer',
+    ],
+    'analysis_floors': {
+        'always': ['repo_explorer'],
+        'feature_like': ['task_analyst'],
+        'standard': ['architect', 'docs_researcher'],
+    },
+    'analysis_domain_agents': {
+        'bitrix': ['bitrix_architect'],
+        'api': ['integration_architect'],
+        'event': ['integration_architect'],
+        'integration': ['integration_architect'],
+        'data': ['data_architect'],
+        'ai': ['ai_architect'],
+    },
+    'review_floors': {
+        'delivery': ['code_reviewer'],
+        'docs': ['code_reviewer'],
+        'review_intent': ['code_reviewer'],
+        'release': ['release_reviewer'],
+    },
+    'review_domain_agents': {
+        'bitrix': ['bitrix_reviewer'],
+        'data': ['data_reviewer'],
+        'security': ['security_reviewer'],
+        'ai': ['security_reviewer'],
+        'integration': ['security_reviewer'],
+    },
+    'review_risk_agents': {
+        'high': ['security_reviewer', 'release_reviewer'],
+    },
+}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _analysis_cap(config: dict[str, Any]) -> int:
+    raw = config.get('max_parallel_analysis', DEFAULT_ANALYSIS_CAP)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return DEFAULT_ANALYSIS_CAP
+    return raw
+
+
+def load_routing_config(root: Path) -> dict[str, Any]:
+    data = load_json(root / '.getzilla/config/routing.json', None)
+    merged = copy.deepcopy(DEFAULT_ROUTING)
+    if not isinstance(data, dict):
+        return merged
+    cap = data.get('max_parallel_analysis')
+    if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1:
+        merged['max_parallel_analysis'] = cap
+    roles = _string_list(data.get('write_roles'))
+    if roles:
+        merged['write_roles'] = roles
+    for key in (
+        'analysis_floors',
+        'analysis_domain_agents',
+        'review_floors',
+        'review_domain_agents',
+        'review_risk_agents',
+    ):
+        value = data.get(key)
+        if not isinstance(value, dict):
+            continue
+        base = merged.setdefault(key, {})
+        if not isinstance(base, dict):
+            merged[key] = value
+            continue
+        for sub, items in value.items():
+            if isinstance(items, list):
+                base[str(sub)] = _string_list(items)
+    return merged
+
+
+RISK_ORDER = {'low': 0, 'medium': 1, 'high': 2}
+
+
+REVIEW_EVIDENCE = {
+    'code_reviewer': 'code_review', 'test_reviewer': 'test_review', 'bitrix_reviewer': 'bitrix_review',
+    'security_reviewer': 'security_review', 'data_reviewer': 'data_review', 'release_reviewer': 'release_review',
+}
+
+
+def escalate_route(route: dict[str, object], risk: str, root: Path, *, force_full: bool = False) -> dict[str, object]:
+    """Reviewers and evidence a route needs at `risk`; only ever adds to the route, never removes.
+
+    The prompt decided the route's risk; the exact-head diff may show more. At high risk the route
+    gets the configured high-risk and release reviewers, exactly as if the prompt had said so.
+    """
+    route_risk = str(route.get('risk') or 'low')
+    effective = risk if RISK_ORDER.get(risk, 0) > RISK_ORDER.get(route_risk, 0) else route_risk
+    reviewers = [str(item) for item in route.get('review_agents') or []]
+    evidence = [str(item) for item in route.get('required_evidence') or []]
+    added_reviewers: list[str] = []
+    if route.get('delivery_lane') == 'light' and (force_full or effective != 'low'):
+        cfg = load_routing_config(root)
+        floors = cfg.get('review_floors') or {}
+        added_reviewers.extend(agent for agent in _string_list(floors.get('delivery')) if agent not in reviewers)
+    added_evidence = [REVIEW_EVIDENCE[agent] for agent in added_reviewers
+                      if agent in REVIEW_EVIDENCE and REVIEW_EVIDENCE[agent] not in evidence]
+    return {'route_risk': route_risk, 'effective_risk': effective,
+            'review_agents': unique_ordered([*reviewers, *added_reviewers]),
+            'required_evidence': unique_ordered([*evidence, *added_evidence]),
+            'added_reviewers': added_reviewers, 'added_evidence': added_evidence}
+
 
 RULE_PATH = '.getzilla/config/diff-risk-rules.json'
 DEFAULT_AUDITS = {
@@ -110,7 +236,6 @@ def _audits(rules: dict) -> dict:
 
 
 def _policy_review_floor(raw: bytes | None, route: dict | None, profile: str) -> list[str]:
-    from .router import REVIEW_EVIDENCE
     configured = json.loads(raw) if raw is not None else {}
     if not isinstance(configured, dict):
         raise ValueError('invalid routing policy')
@@ -136,7 +261,6 @@ def _policy_review_floor(raw: bytes | None, route: dict | None, profile: str) ->
 
 def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | None = None) -> dict:
     """Classify both baseline and candidate policy; an edited policy cannot lower itself."""
-    from .router import REVIEW_EVIDENCE
     head = git_head(root)
     entries = selection.bases
     # An accepted target can descend from this frozen HEAD. Its empty comparison
@@ -149,6 +273,7 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
     reasons, policies, risks, audit_categories = [], [], [], set()
     floor_reviewers: list[str] = []
     engine_sources, engine_members, engine_comparisons = {}, {}, []
+    historical_sources, historical_comparisons = {}, []
     fingerprint = fingerprint or tree_fingerprint(root)
     tree = None
     try:
@@ -194,12 +319,32 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                     engine_valid = True
                 except (ValueError, OSError, KeyError, TypeError):
                     gaps.extend(['BINARY_OR_UNKNOWN_INVENTORY', 'INVALID_MANAGED_ENGINE_SOURCE'])
+            # One closed historical source publication is data for inspection,
+            # never runtime code authority. Its full original tree and bounded
+            # member catalogue remain part of this exact-source assessment.
+            from .historical_data import SOURCE_PATH, issue170_source
+            historical_valid = False
+            if SOURCE_PATH in changed_paths:
+                try:
+                    for ref in (base, head):
+                        if ref not in historical_sources:
+                            historical_sources[ref] = issue170_source(root, ref)
+                    if historical_sources[head] is None:
+                        raise ValueError('HISTORICAL_SOURCE_MISSING')
+                    historical_comparisons.append({'base': base, 'head': head, 'path': SOURCE_PATH})
+                    reasons.append({'rule': 'HISTORICAL_SOURCE_DATA', 'path': SOURCE_PATH, 'risk': 'high'})
+                    audit_categories.update(DEFAULT_AUDITS)
+                    historical_valid = True
+                except (ValueError, OSError, KeyError, TypeError):
+                    gaps.extend(['BINARY_OR_UNKNOWN_INVENTORY', 'INVALID_HISTORICAL_SOURCE_DATA'])
             # A file Git itself calls binary (a PDF, an image) cannot be read line by line, so it takes
             # the full review profile; it no longer blocks delivery outright (#209). Any other
             # unreadable row, an executable or archive binary, or a binary that is not a regular
             # file stays an incomplete inventory.
             for name in binaries:
                 if name == '.getzilla/getzilla.zip' and engine_valid:
+                    continue
+                if name == SOURCE_PATH and historical_valid:
                     continue
                 # A binary with no extension is a program as often as not, whatever its mode (#215).
                 extensionless = '.' not in name.rsplit('/', 1)[-1].lstrip('.')
@@ -269,6 +414,10 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
     if engine_comparisons:
         assessment['engine_sources'] = {'containers': [engine_sources[ref] for ref in sorted(engine_sources)],
                                         'comparisons': engine_comparisons}
+    if historical_comparisons:
+        assessment['historical_data'] = {'catalogue_version': 1,
+            'sources': [{'ref': ref, 'catalogue': historical_sources[ref]} for ref in sorted(historical_sources)],
+            'comparisons': historical_comparisons}
     plan = {'schema_version': 1, 'assessment_digest': _digest(assessment), 'review_agents': reviewers, 'required_evidence': evidence}
     plan['digest'] = _digest(plan)
     return {'risk': risk_level, 'risk_assessment': assessment, 'review_plan': plan, 'explicit_review_agents': explicit,
@@ -278,11 +427,12 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                 *([route['write_agent']] if route and route.get('write_agent') else []), *reviewers])}
 
 
+@serialized_task
 def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | None = None,
                     additional_reviewers: tuple[str, ...] = ()) -> dict:
     from .state import get_active_route, update_route, task_transition
-    from .package_status import synchronize_accounting
-    from .verification import _git_range_selection
+    from .package_status import synchronize_review_accounting
+    from .git_ranges import _git_range_selection
     route = get_active_route(root)
     if not route:
         raise ValueError('no active route to reconcile')
@@ -293,7 +443,6 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
                 raise ValueError('route changed during reconciliation')
             assert_finishable(root, route, cancel=True)
             return route
-    from .router import REVIEW_EVIDENCE
     if any(name not in REVIEW_EVIDENCE for name in additional_reviewers):
         raise ValueError('unknown explicit reviewer')
     selected = dict(route)
@@ -312,23 +461,35 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
         if current != route or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint'] or git_head(root) != updates['risk_assessment']['head']:
             raise ValueError('route or source changed during reconciliation')
         from .state import _route_document, get_active_change, open_change_binding
+        from .workflow_storage import valid_package_path
+        package = get_active_change(root)
+        if (package is not None or route.get('change_id') is not None) and (
+                not isinstance(package, dict) or set(package) != {'change_id', 'path'}
+                or package['change_id'] != route.get('change_id')
+                or not valid_package_path(package['path'], package['change_id'])):
+            raise ValueError('selected accounting package does not match task')
         # Validate the closed state binding without requiring a cancelled draft
         # to have completed its spec or earned review receipts.
         open_change_binding(root)
-        package = get_active_change(root)
         if package and _route_document(root, root / package['path'] / 'state.json').get('status') == 'cancelled':
             raise ValueError('attached package is cancelled; use route --cancel, then --new-task to retry; cancellation is terminal')
-        synchronize_accounting(root, route, updates['required_evidence'])
+        check_package = synchronize_review_accounting(root, route, updates['required_evidence'])
         if (tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint']
                 or git_head(root) != updates['risk_assessment']['head']):
             raise ValueError('source changed during accounting synchronization')
-        return update_route(root, expected_route=route, **updates)
+        check_package()
+        published = update_route(root, expected_route=route, **updates)
+        if (get_active_route(root) != published or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint']
+                or git_head(root) != updates['risk_assessment']['head']):
+            raise ValueError('route or source changed during reconciliation publication')
+        check_package()
+        return published
 
 
 def validate_review_plan(root: Path, route: dict) -> list[str]:
     if 'risk_assessment' not in route:
         return []  # legacy records keep their original receipt contract
-    from .verification import _git_range_selection
+    from .git_ranges import _git_range_selection
     expected = assess(root, route, _git_range_selection(root, route, 'pr'))
     if expected['risk_assessment']['status'] != 'complete':
         return ['review plan has incomplete source assessment']

@@ -130,7 +130,10 @@ def _module_state(value: object, name: str) -> None:
         items = value[field]
         if type(items) is not list or len(items) > 32 or any(not scope(item) for item in items) or len(set(items)) != len(items):
             raise ComponentStateError(f'invalid module scopes: {name}')
-    if (set(value['grants']) != set(value['permissions']) if value['enabled'] else bool(value['grants'])):
+    selected = set(value['grants'])
+    declared = set(value['permissions'])
+    invalid_grants = (not selected or not selected <= declared) if value['schema_version'] == 2 else selected != declared
+    if (invalid_grants if value['enabled'] else bool(value['grants'])):
         raise ComponentStateError(f'invalid module activation: {name}')
     if value['schema_version'] == 2:
         runtime = value['runtime']
@@ -376,8 +379,7 @@ class ManifestState:
         return self.agents
 
 
-def mode_matches(actual: int, expected: int) -> bool:
-    return bool(actual & stat.S_IWRITE) == bool(expected & stat.S_IWUSR) if fsx.WINDOWS else stat.S_IMODE(actual) == expected
+from .fsx import mode_matches as mode_matches
 
 
 
@@ -458,16 +460,20 @@ class BoundRoot(fsx.ReadOnlyBoundRoot):
             try:
                 if self.read(relative) != expected:
                     raise ComponentStateError(f'file changed before publication: {relative}')
+                check()
                 descriptor = fsx.open_at(parent, temporary,
                                          os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
                 temporary_identity = _identity(os.fstat(descriptor))
+                check()
+                fsx.fchmod(descriptor, mode)
                 data = memoryview(content)
                 while data:
+                    check()
                     written = os.write(descriptor, data)
                     if written <= 0:
                         raise ComponentStateError(f'incomplete temporary write: {relative}')
                     data = data[written:]
-                fsx.fchmod(descriptor, mode)
+                check()
                 os.fsync(descriptor)
                 os.close(descriptor)
                 descriptor = None
@@ -495,6 +501,7 @@ class BoundRoot(fsx.ReadOnlyBoundRoot):
                     os.close(descriptor)
                 if temporary_identity is not None:
                     try:
+                        # The retained directory and inode identify our private staging file.
                         info = fsx.lstat_at(parent, temporary)
                         if _identity(info) == temporary_identity and not fsx.is_link(info):
                             fsx.unlink_at(parent, temporary)

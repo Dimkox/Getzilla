@@ -201,8 +201,9 @@ def node_release(fetch: Fetch, system: str, architecture: str) -> Target:
     platform = 'win' if system == 'windows' else system
     ext = 'zip' if platform == 'win' else 'tar.gz'
     filename = f'node-v{version}-{platform}-{architecture}.{ext}'
-    # Windows index describes a zip explicitly; Unix describes its platform/CPU.
-    variant = f'{platform}-{architecture}' + ('-zip' if platform == 'win' else '')
+    # The Node index calls macOS archives osx-*-tar, while filenames use darwin.
+    variant = {'darwin': f'osx-{architecture}-tar', 'win': f'win-{architecture}-zip'}.get(
+        platform, f'{platform}-{architecture}')
     if variant not in row.get('files', []):
         raise ValueError(f'Node {version}: newest stable has no {variant} asset')
     checksums = fetch(f'https://nodejs.org/dist/v{version}/SHASUMS256.txt')

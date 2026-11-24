@@ -25,20 +25,22 @@ import time
 import uuid
 
 from .security_oci import LIMITS, CI_BYTES, CI_MEMORY, _Root
+from . import security_image_authority as authority
+from .security_image_authority import (  # noqa: F401 compatibility aliases for immutable helpers/seal
+    BackendUnavailable,
+    _ACTIVE,
+    _CI_CONTROLS,
+    _ci_control_identity,
+    _filesystem,
+    _read_ci_control,
+    _readonly_control,
+    measured_ci_profile,
+)
 
-_ACTIVE = object()
-_GUARD = None
-_CI_CONTROLS = ('memory.max', 'memory.swap.max', 'pids.max', 'cgroup.procs', 'cpu.max')
 _ROOT = Path(__file__).resolve().parents[1]
 _BOOT = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
          'import sysconfig;sys.path.extend(sorted(set(sysconfig.get_paths()[k] for k in ("purelib","platlib"))));'
          'from getzilla.security_image_producer import _entry;raise SystemExit(_entry())')
-
-
-class BackendUnavailable(ValueError):
-    def __init__(self, message, *, detail=None):
-        super().__init__(message)
-        self.detail = dict(detail or {})
 
 
 def _diagnostic(raw):
@@ -57,14 +59,6 @@ def _diagnostic(raw):
         return value
     return {'captured_bytes': len(raw), 'captured_sha256': hashlib.sha256(raw).hexdigest(),
             'first': retain(safe[:512]), 'last': retain(safe[-512:], tail=True)}
-
-
-def _filesystem(path):
-    # Linux statfs has ample trailing space on all supported 64-bit Linux ABIs.
-    result = (ctypes.c_long * 32)()
-    if ctypes.CDLL(None, use_errno=True).statfs(os.fsencode(path), ctypes.byref(result)):
-        raise BackendUnavailable('cannot establish backend filesystem identity')
-    return result[0]
 
 
 def _fixed(command, *, timeout=10):
@@ -306,7 +300,7 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None, ci_corpus
     born = time.monotonic() if started is None else started
     if not 0 <= time.monotonic() - born <= LIMITS['deadline_seconds']:
         raise BackendUnavailable('image producer opening deadline expired')
-    if sys.platform != 'linux' or os.geteuid() != 0 or _filesystem('/sys/fs/cgroup') != 0x63677270:
+    if sys.platform != 'linux' or os.geteuid() != 0 or authority._filesystem('/sys/fs/cgroup') != 0x63677270:
         raise BackendUnavailable('ephemeral root with writable cgroup v2 is required')
     if len(payload) > 65536:
         raise BackendUnavailable('image worker request exceeds finite byte bound')
@@ -335,7 +329,7 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None, ci_corpus
         if (parent / 'cpu.max').read_text(encoding='utf-8').split()[0] != 'max':
             raise BackendUnavailable('finite supervisor CPU bound cannot be bypassed')
         parent = owned_root
-    if _filesystem(parent) != 0x63677270:
+    if authority._filesystem(parent) != 0x63677270:
         raise BackendUnavailable('current image cgroup parent is not a measured cgroup v2 mount')
     if ci_corpus:
         from .security_image_job import _memory_admission
@@ -400,16 +394,6 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None, ci_corpus
         library.prctl(36, previous.value, 0, 0, 0)
 
 
-def _ci_control_identity(info):
-    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_nlink
-
-
-def _readonly_control(fd):
-    import fcntl
-    if fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY or os.get_inheritable(fd):
-        raise ValueError('control descriptor is not read-only close-on-exec')
-
-
 def _close_ci_controls(controls):
     failure = None
     for name in _CI_CONTROLS:
@@ -440,10 +424,10 @@ def _open_ci_controls(cgroup):
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=cgroup)
             try:
                 info = os.fstat(fd)
-                _readonly_control(fd)
+                authority._readonly_control(fd)
                 if not stat.S_ISREG(info.st_mode) or info.st_dev != device:
                     raise ValueError('control is not on the held cgroup filesystem')
-                controls[name] = (fd, _ci_control_identity(info))
+                controls[name] = (fd, authority._ci_control_identity(info))
             except BaseException:
                 os.close(fd)
                 raise
@@ -457,66 +441,6 @@ def _open_ci_controls(cgroup):
                     'phase': 'ci-control-open', 'command_id': 'ci-control-' + name,
                     'errno': getattr(error, 'errno', None)}) from error
         raise
-
-
-def _read_ci_control(controls, name):
-    if name not in _CI_CONTROLS:
-        raise ValueError('unknown CI control')
-    fd, identity = controls[name]
-    if type(fd) is not int or _ci_control_identity(os.fstat(fd)) != identity:
-        raise ValueError('held control identity differs')
-    _readonly_control(fd)
-    raw = os.pread(fd, 4097, 0)
-    if len(raw) > 4096:
-        raise ValueError('kernel control exceeds bound')
-    return raw.decode('ascii').strip()
-
-
-def measured_ci_profile():
-    """Recheck inherited held kernel proof; a dictionary or environment is insufficient."""
-    if (_GUARD is None or len(_GUARD) != 4 or not isinstance(_GUARD[3], dict)
-            or _GUARD[3].get('ci_corpus') is not True):
-        return False
-    check = 'ci-proof-identities'
-    try:
-        path, _nonce, _mounted, proof = _GUARD
-        volume, cgroup = proof['volume_fd'], proof['cgroup_fd']
-        if type(volume) is not int or type(cgroup) is not int:
-            raise ValueError('missing held descriptors')
-        info, group = os.fstat(volume), os.fstat(cgroup)
-        current = os.stat(path, follow_symlinks=False)
-        mounted = os.stat('/sys/fs/cgroup', follow_symlinks=False)
-        if (not stat.S_ISDIR(info.st_mode) or not stat.S_ISDIR(group.st_mode)
-                or (info.st_dev, info.st_ino) != proof['volume_identity']
-                or (current.st_dev, current.st_ino) != proof['volume_identity']
-                or (group.st_dev, group.st_ino) != (proof['cgroup_root_device'], proof['cgroup_root_inode'])
-                or (mounted.st_dev, mounted.st_ino) != (group.st_dev, group.st_ino)
-                or _filesystem(path) != 0x01021994 or _filesystem('/sys/fs/cgroup') != 0x63677270):
-            raise ValueError('held kernel identity differs')
-        check = 'ci-proof-volume'
-        size = os.fstatvfs(volume)
-        if size.f_blocks * size.f_frsize != CI_BYTES or size.f_flag & (os.ST_NOSUID | os.ST_NODEV) != os.ST_NOSUID | os.ST_NODEV:
-            raise ValueError('held volume bound differs')
-        check = 'ci-proof-controls'
-        controls = proof['controls']
-        if set(controls) != set(_CI_CONTROLS):
-            raise ValueError('closed control set differs')
-        def control(name):
-            nonlocal check
-            check = 'ci-control-' + name
-            return _read_ci_control(controls, name)
-        if (control('memory.max') != str(CI_MEMORY) or control('memory.swap.max') != '0'
-                or control('pids.max') != '256' or str(os.getpid()) not in control('cgroup.procs').split()):
-            raise ValueError('held resource controls differ')
-        quota, period = control('cpu.max').split()
-        check = 'ci-proof-cpu'
-        if not 0 < int(quota) <= 6 * int(period) or not 0 < len(os.sched_getaffinity(0)) <= 6:
-            raise ValueError('held CPU controls differ')
-        return True
-    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
-        raise BackendUnavailable('live CI image kernel proof unavailable', detail={
-            'phase': 'ci-kernel-proof', 'command_id': check, 'errno': getattr(error, 'errno', None),
-            'cause': 'os-error' if isinstance(error, OSError) else 'identity-or-value'}) from error
 
 
 def _install_resolver(path, resolver):
@@ -551,9 +475,8 @@ def _install_resolver(path, resolver):
 @contextmanager
 def namespace_volume(path, cgroup, *, ci_corpus=False):
     """Called only by the fixed worker after unshare; mount proof is measured."""
-    global _GUARD
     path, cgroup = Path(path), Path(cgroup)
-    if _GUARD is not None:
+    if authority._GUARD is not None:
         raise BackendUnavailable('nested image namespace is forbidden')
     # Refuse system temporary roots; the owned volume must be elsewhere.
     if any(path.is_relative_to(base) for base in map(Path, ('/run', '/tmp', '/var/tmp'))):  # nosec B108
@@ -577,7 +500,7 @@ def namespace_volume(path, cgroup, *, ci_corpus=False):
             flags = os.fstatvfs(actual.fd).f_flag
             required = os.ST_NOSUID | os.ST_NODEV | os.ST_NOEXEC
             if ((observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino)
-                    or _filesystem('/sys/fs/cgroup') != 0x63677270 or flags & required != required):
+                    or authority._filesystem('/sys/fs/cgroup') != 0x63677270 or flags & required != required):
                 raise BackendUnavailable('mounted cgroup root differs from held owned subtree')
         finally:
             actual.close()
@@ -596,7 +519,7 @@ def namespace_volume(path, cgroup, *, ci_corpus=False):
             f'size={storage},mode=0700,nosuid,nodev', 'getzilla-images', str(path)])
     try:
         info = os.statvfs(path)
-        if _filesystem(path) != 0x01021994 or info.f_blocks * info.f_frsize != storage:
+        if authority._filesystem(path) != 0x01021994 or info.f_blocks * info.f_frsize != storage:
             raise BackendUnavailable('image volume is not the exact hard-bounded tmpfs')
         # runc's ordinary /run state and helpers which ignore TMPDIR must share
         # this same volume. No second tmpfs or host daemon storage is available.
@@ -623,15 +546,15 @@ def namespace_volume(path, cgroup, *, ci_corpus=False):
                 proof_cleanup.callback(proof_cgroup.close)
                 controls = _open_ci_controls(proof_cgroup.fd)
                 proof_cleanup.callback(_close_ci_controls, controls)
-            _GUARD = (path, object(), mounted, {'cgroup_root_device': expected.st_dev,
+            authority._GUARD = (path, object(), mounted, {'cgroup_root_device': expected.st_dev,
                         'cgroup_root_inode': expected.st_ino, 'cgroup_mount_flags': flags})
             if ci_corpus:
-                _GUARD[3].update(ci_corpus=True, volume_fd=proof_volume.fd, cgroup_fd=proof_cgroup.fd,
+                authority._GUARD[3].update(ci_corpus=True, volume_fd=proof_volume.fd, cgroup_fd=proof_cgroup.fd,
                     volume_identity=(os.fstat(proof_volume.fd).st_dev, os.fstat(proof_volume.fd).st_ino),
                     controls=controls)
             yield path
         finally:
-            _GUARD = None
+            authority._GUARD = None
             try:
                 proof_cleanup.close()
             finally:
@@ -657,9 +580,9 @@ class BuildKit:
         self.volume, self.deadline, self.process, self.log = Path(volume), deadline, None, None
         self.owner_pid, self.pidfd = os.getpid(), None
         self._in_build, self.last_prune_usage = False, {}
-        if _GUARD is None or _GUARD[0] != self.volume:
+        if authority._GUARD is None or authority._GUARD[0] != self.volume:
             raise BackendUnavailable('BuildKit requires a measured live namespace volume')
-        self.guard = _GUARD
+        self.guard = authority._GUARD
         from .security_image_provision import archive_bytes, extract_tools
         # Open/identity-check a finite archive, verify the SOURCE distribution
         # pin, and copy its held bytes. Caller JSON hashes grant no authority.
@@ -728,13 +651,13 @@ class BuildKit:
 
     def _volume_usage(self):
         """Diagnostic integers only; CI capacity still requires the live native proof."""
-        if self.guard is not _GUARD:
+        if self.guard is not authority._GUARD:
             raise BackendUnavailable('owned volume diagnostic lifetime ended')
         if not (isinstance(self.guard, tuple) and len(self.guard) > 3
                 and self.guard[3].get('ci_corpus')):
             return {}  # Default/local controls have no held CI proof descriptor.
         proof = self.guard[3]
-        if not measured_ci_profile():
+        if not authority.measured_ci_profile():
             raise BackendUnavailable('owned volume diagnostic proof unavailable')
         fd = proof['volume_fd']
         identity = os.fstat(fd)
@@ -750,7 +673,7 @@ class BuildKit:
     def prune(self):
         """Retire this private daemon's unused cache after its export is retained."""
         from .architecture_diff import _run_capped, ArchitectureError
-        if self.guard is not _GUARD or not self._daemon_alive() or self._in_build:
+        if self.guard is not authority._GUARD or not self._daemon_alive() or self._in_build:
             raise BackendUnavailable('owned idle BuildKit required for cache retirement')
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
@@ -770,7 +693,7 @@ class BuildKit:
 
     def build(self, recipe, context, output, *, offline_control=False):
         from .architecture_diff import _run_capped, ArchitectureError
-        if self.guard is not _GUARD or not self._daemon_alive() or getattr(self, '_in_build', False):
+        if self.guard is not authority._GUARD or not self._daemon_alive() or getattr(self, '_in_build', False):
             raise BackendUnavailable('owned BuildKit lifetime ended')
         arguments = [self.client, '--addr', self.address, 'build', '--frontend', 'dockerfile.v0',
                      '--local', 'context=' + str(context), '--local', 'dockerfile=' + str(context),
@@ -829,7 +752,7 @@ def _socket_alias(volume):
             a, b = os.fstat(expected.fd), os.fstat(alias.fd)
             if ((a.st_dev, a.st_ino) != (b.st_dev, b.st_ino) or b.st_mode & 0o077
                     # Filesystem identity rejects non-tmpfs aliases; this creates nothing.
-                    or _filesystem('/tmp') != 0x01021994):  # nosec B108
+                    or authority._filesystem('/tmp') != 0x01021994):  # nosec B108
                 raise BackendUnavailable('short socket alias differs from owned private volume')
             # Fixed socket alias is returned only after held inode/device, 0700 and tmpfs proof.
             return Path('/tmp/getzilla-buildkit.sock')  # nosec B108

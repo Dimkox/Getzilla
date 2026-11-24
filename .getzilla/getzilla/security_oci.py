@@ -10,13 +10,14 @@ from a hostile process with the same operating-system identity.
 from contextlib import contextmanager, nullcontext
 import gzip
 import hashlib
+from . import security_image_authority as authority
+from .security_image_authority import CI_BYTES as CI_BYTES, CI_MEMORY as CI_MEMORY
 import json
 import os
 from pathlib import Path, PurePosixPath
 import posixpath
 import re
 import stat
-import sys
 import tarfile
 import tempfile
 import time
@@ -37,8 +38,6 @@ OPAQUE_ATTESTATION = 'application/vnd.in-toto+json'
 LIMITS = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
           'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
           'max_manifest_bytes': 16 * 1024 * 1024, 'max_layers': 10000, 'deadline_seconds': 900}
-CI_BYTES = 8 * 1024 ** 3
-CI_MEMORY = 12 * 1024 ** 3
 _MAX_TAR_ENTRIES = 100000
 _MEASUREMENT_CEILING = 1_000_000
 
@@ -46,8 +45,7 @@ _MEASUREMENT_CEILING = 1_000_000
 def active_limits():
     """JSON is a declaration; only the existing measured native job raises bounds."""
     limits = dict(LIMITS)
-    native = sys.modules.get(__package__ + '.security_image_backend')
-    if native is not None and native.measured_ci_profile():
+    if authority.measured_ci_profile():
         for key in ('max_compressed_bytes', 'max_unpacked_bytes', 'max_storage_bytes'):
             limits[key] = CI_BYTES
     return limits
@@ -69,7 +67,7 @@ class OCIError(ValueError):
 _BOUND_LIMITS = {'compressed': 'max_compressed_bytes', 'unpacked': 'max_unpacked_bytes',
                  'storage': 'max_storage_bytes', 'layers': 'max_layers',
                  'expanded': 'max_unpacked_bytes', 'entries': 'max_tar_entries'}
-_BOUND_PHASES = {'compressed': {'budget-charge', 'layout-json', 'blob-compressed'},
+_BOUND_PHASES = {'compressed': {'budget-charge', 'layout-json', 'blob-compressed', 'member-read', 'component-read'},
                  'unpacked': {'budget-charge', 'layer-decoded', 'attestation-bytes', 'layer-cached-unpacked'},
                  'storage': {'budget-charge', 'blob-storage', 'scanner-entrypoint'},
                  'layers': {'budget-charge', 'layer-count', 'attestation-count'},
@@ -169,12 +167,13 @@ class _Budget:
         self._native = None
         self._guard = None
         if any(profile[key] > LIMITS[key] for key in LIMITS):
-            self._native = sys.modules[__package__ + '.security_image_backend']
+            self._native = authority
             self._guard = self._native._GUARD
         self.entry_measurement = None
         self.entry_refusal = None
         self.image_ordinal = -1
         self._layer_facts = {}
+        self._component_proof_bytes = 0
         self.deadline = time.monotonic() + profile['deadline_seconds']
         self.totals = dict(compressed=0, unpacked=0, storage=0, layers=0, entries=0, expanded=0)
 
@@ -298,14 +297,14 @@ class _Decoded:
     def __init__(self, stream, budget):
         self.stream, self.budget = stream, budget
         self.digest = hashlib.sha256()
-        self.bytes = 0
+        self._decoded_bytes = 0
 
     def read(self, size=-1):
         # tarfile streaming requests are bounded; never accept an unbounded read.
         size = 65536 if size < 0 else min(size, 65536)
         value = self.stream.read(size)
         self.budget.charge('unpacked', len(value), phase='layer-decoded')
-        self.bytes += len(value)
+        self._decoded_bytes += len(value)
         self.digest.update(value)
         return value
 
@@ -357,7 +356,7 @@ def _layer(path, media, expected, budget):
         budget._layer_facts[key] = complete
 
 
-def _parse_layer(raw, media, expected, budget):
+def _parse_layer(raw, media, expected, budget, *, visit=None):
     declared, entries = 0, 0
     with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else nullcontext(raw)) as decoded:
         stream = _Decoded(decoded, budget)
@@ -381,11 +380,13 @@ def _parse_layer(raw, media, expected, budget):
                     raise OCIError('OCI logical layer size exceeds bound')
                 budget.charge('expanded', member.size, phase='tar-expanded')
                 declared += member.size
+                if visit is not None:
+                    visit(member, archive)
         while stream.read(65536):
             pass
         if 'sha256:' + stream.digest.hexdigest() != expected:
             raise OCIError('OCI uncompressed layer digest differs')
-    return stream.bytes, declared, entries
+    return stream._decoded_bytes, declared, entries
 
 
 class VerifiedOCIImage:
@@ -405,6 +406,225 @@ class VerifiedOCIImage:
             raise OCIError('OCI import lifetime ended')
         self._budget.tick()
         return self._budget.deadline - time.monotonic()
+
+
+def read_members(image, paths, *, member_limit=2 * 1024 * 1024, total_limit=16 * 1024 * 1024):
+    """Read only requested regular installation evidence from a live verified image.
+
+    No root filesystem is extracted. Selected links refuse instead of resolving
+    arbitrary image paths. Every additional layer read retains the same ledger.
+    """
+    if (type(image) is not VerifiedOCIImage or image._proof is not _PROOF
+            or type(paths) is not list or not 1 <= len(paths) <= 1024
+            or any(type(p) is not str or not p or p.startswith('/') or '\\' in p
+                   or any(v in {'', '.', '..'} for v in p.split('/')) for p in paths)
+            or len(set(paths)) != len(paths)
+            or type(member_limit) is not int or not 0 < member_limit <= 2 * 1024 * 1024
+            or type(total_limit) is not int or not 0 < total_limit <= 16 * 1024 * 1024):
+        raise OCIError('Invalid requested OCI installation evidence')
+    image._budget.tick()
+    selected, retained = {}, 0
+    root = _Root(image.layout)
+    @contextmanager
+    def verified(digest):
+        name = 'blobs/sha256/' + digest[7:]
+        expected, size = image._files[name]
+        with root.file(name, size) as (stream, actual):
+            measured, count = hashlib.sha256(), 0
+            while chunk := stream.read(65536):
+                image._budget.tick()
+                count += len(chunk)
+                measured.update(chunk)
+            if count != actual or actual != size or measured.hexdigest() != expected:
+                raise OCIError('Verified OCI evidence blob changed')
+            stream.seek(0)
+            yield stream, size
+    def blob(digest):
+        with verified(digest) as (stream, size):
+            if size > image._budget.profile['max_manifest_bytes']:
+                raise OCIError('Requested OCI metadata exceeds bound')
+            return stream.read(size + 1)
+    try:
+        manifest = document(blob(image.manifest_digest))
+        config = document(blob(image.config_digest))
+        for layer, diff in zip(manifest['layers'], config['rootfs']['diff_ids']):
+            changes, removed, seen = {}, set(), set()
+            def visit(member, archive):
+                nonlocal retained
+                name = member.name.removeprefix('./').rstrip('/')
+                parent, _, leaf = name.rpartition('/')
+                if leaf.startswith('.wh.'):
+                    if not member.isfile() or member.size:
+                        raise OCIError('Invalid OCI evidence whiteout')
+                    target = parent if leaf == '.wh..wh..opq' else (parent + '/' if parent else '') + leaf[4:]
+                    removed.update(p for p in paths if p == target or p.startswith(target + '/') or not target)
+                    return
+                relevant = [p for p in paths if p == name or p.startswith(name + '/')]
+                if not relevant:
+                    return
+                if member.issym() or member.islnk():
+                    raise OCIError('Selected OCI installation evidence has a link')
+                if member.isdir():
+                    return
+                if name not in paths:
+                    raise OCIError('Requested OCI evidence ancestor is not a directory')
+                removed.update(p for p in relevant if p != name)
+                if name in seen or not member.isfile() or member.size > member_limit:
+                    raise OCIError('Duplicate or oversized requested OCI member')
+                seen.add(name)
+                retained += member.size
+                if retained > total_limit:
+                    raise OCIError('Requested OCI evidence exceeds aggregate bound')
+                stream = archive.extractfile(member)
+                body = stream.read(member_limit + 1) if stream is not None else None
+                if body is None or len(body) != member.size:
+                    raise OCIError('Requested OCI evidence is truncated')
+                changes[name] = body
+            with verified(layer['digest']) as (stream, size):
+                image._budget.charge('compressed', size, phase='member-read')
+                _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
+            for path in removed:
+                selected.pop(path, None)
+            selected.update(changes)
+        if set(selected) != set(paths):
+            raise OCIError('Requested OCI installation evidence is missing')
+        image._budget.tick()
+        return selected
+    except (OSError, KeyError, TypeError, EOFError, tarfile.TarError, gzip.BadGzipFile):
+        raise OCIError('Requested OCI installation evidence unavailable') from None
+    finally:
+        root.close()
+
+
+def observe_final_files(image, retain):
+    """Visit final installed files in a LIVE graph; retain only bounded data.
+
+    This is component inventory, not extraction or runtime integrity. File bodies
+    are hashed while streaming, links remain image data, and historical paths
+    removed by whiteouts do not become installed software. All layer reads use
+    the importer's existing shared ledger and verify the retained blob anew.
+    """
+    if type(image) is not VerifiedOCIImage or image._proof is not _PROOF or not callable(retain):
+        raise OCIError('Component observation requires a live verified OCI image')
+    image._budget.tick()
+    root, final, retained = _Root(image.layout), {}, 0
+    @contextmanager
+    def verified(digest):
+        name = 'blobs/sha256/' + digest[7:]
+        expected, size = image._files[name]
+        with root.file(name, size) as (stream, actual):
+            measured, count = hashlib.sha256(), 0
+            while chunk := stream.read(65536):
+                image._budget.tick()
+                count += len(chunk)
+                measured.update(chunk)
+            if count != actual or actual != size or measured.hexdigest() != expected:
+                raise OCIError('Component observation blob changed')
+            stream.seek(0)
+            yield stream, size
+    def blob(digest):
+        with verified(digest) as (stream, size):
+            if size > image._budget.profile['max_manifest_bytes']:
+                raise OCIError('Component observation metadata exceeds bound')
+            return document(stream.read(size + 1))
+    try:
+        manifest, config = blob(image.manifest_digest), blob(image.config_digest)
+        if len(manifest['layers']) != len(config['rootfs']['diff_ids']):
+            raise OCIError('Component observation layer identity differs')
+        for layer, diff in zip(manifest['layers'], config['rootfs']['diff_ids']):
+            changes, removals = {}, []
+            def visit(member, archive):
+                nonlocal retained
+                name = member.name.removeprefix('./').rstrip('/')
+                parent, _, leaf = name.rpartition('/')
+                if leaf.startswith('.wh.'):
+                    if not member.isfile() or member.size:
+                        raise OCIError('Invalid component observation whiteout')
+                    target = parent if leaf == '.wh..wh..opq' else (parent + '/' if parent else '') + leaf[4:]
+                    removals.append((target, leaf == '.wh..wh..opq'))
+                    return
+                if name in changes:
+                    raise OCIError('Duplicate component observation member')
+                row = dict(path=name, layer=layer['digest'], mode=member.mode, bytes=member.size)
+                if member.isdir():
+                    row['kind'] = 'directory'
+                elif member.islnk():
+                    # TAR hardlinks name an already materialized inode, not a
+                    # future dynamic path alias. A later overwrite of that path
+                    # must not replace this link's component/license bytes.
+                    target = posixpath.normpath(member.linkname)
+                    source = changes.get(target, final.get(target))
+                    if target.startswith(('/', '../')) or source is None or source['kind'] != 'file':
+                        raise OCIError('Unproved component hardlink target')
+                    row = dict(source, path=name, layer=layer['digest'], hardlink_source=dict(
+                        path=target, layer=source['layer'], sha256=source['sha256'], from_lower=target not in changes))
+                elif member.issym():
+                    row.update(kind='symlink', target=member.linkname)
+                else:
+                    row['kind'] = 'file'
+                    selected, chunks, measured, count, head = bool(retain(name)), [], hashlib.sha256(), 0, b''
+                    window, go_binary = b'', False
+                    if selected and (member.size > 8 * 1024 * 1024 or image._budget._component_proof_bytes + member.size > 512 * 1024 * 1024):
+                        raise OCIError('Component package proof exceeds bound')
+                    if selected:
+                        image._budget._component_proof_bytes += member.size
+                    with archive.extractfile(member) as source:
+                        while chunk := source.read(65536):
+                            image._budget.tick()
+                            measured.update(chunk)
+                            count += len(chunk)
+                            if len(head) < 4:
+                                head = (head + chunk)[:4]
+                            window = window[-16:] + chunk
+                            go_binary = go_binary or b'\xff Go buildinf:' in window
+                            if selected:
+                                chunks.append(chunk)
+                    if count != member.size:
+                        raise OCIError('Component observation member truncated')
+                    row.update(sha256=measured.hexdigest(), elf=head == b'\x7fELF', executable=bool(member.mode & 0o111), go_binary=go_binary)
+                    if selected:
+                        row['body'] = b''.join(chunks)
+                        retained += count
+                changes[name] = row
+            with verified(layer['digest']) as (stream, size):
+                image._budget.charge('compressed', size, phase='component-read')
+                _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
+            removed_paths = {path for path, opaque in removals if not opaque}
+            opaque_paths = {path for path, opaque in removals if opaque}
+            for row in changes.values():
+                source = row.get('hardlink_source', {})
+                if source.get('from_lower'):
+                    parts = source['path'].split('/')
+                    ancestors = ['/'.join(parts[:i]) for i in range(1, len(parts))]
+                    if ('' in opaque_paths or source['path'] in removed_paths or
+                            any(p in removed_paths or p in opaque_paths for p in ancestors)):
+                        raise OCIError('Whiteout removed component hardlink source before layer application')
+            for path in list(final):
+                image._budget.tick()
+                parts = path.split('/')
+                ancestors = ['/'.join(parts[:i]) for i in range(1, len(parts))]
+                if ('' in opaque_paths or path in removed_paths or
+                        any(p in removed_paths or p in opaque_paths for p in ancestors)):
+                    final.pop(path)
+            blocked = {path for path, row in changes.items() if row['kind'] != 'directory'}
+            for old in list(final):
+                parts = old.split('/')
+                if any('/'.join(parts[:i]) in blocked for i in range(1, len(parts))):
+                    final.pop(old)
+            final.update(changes)
+        for path in final:
+            image._budget.tick()
+            parts = path.split('/')
+            for i in range(1, len(parts)):
+                ancestor = final.get('/'.join(parts[:i]))
+                if ancestor and ancestor['kind'] != 'directory':
+                    raise OCIError('Component overlay has an unsupported non-directory ancestor')
+        image._budget.tick()
+        return final
+    except (OSError, KeyError, TypeError, EOFError, tarfile.TarError, gzip.BadGzipFile):
+        raise OCIError('Component observation bytes unavailable') from None
+    finally:
+        root.close()
 
 
 def scanner_identity(report, image):
@@ -696,13 +916,16 @@ def validate_selection(catalog, inventory, profile):
 
 
 @contextmanager
-def import_layouts(catalog, inventory, profile, workspace, *, measure_entries=False):
+def import_layouts(catalog, inventory, profile, workspace, *, _budget=None, measure_entries=False):
     """Import every selected image under ONE shared aggregate ledger.
 
     All returned paths exist only during this context. Inputs are revalidated
     per consumption; a retained JSON declaration never grants scan credit.
     """
-    budget = _Budget(profile)
+    if _budget is not None and (type(_budget) is not _Budget or any(
+            _budget.profile[key] != profile[key] for key in (*LIMITS, 'platform'))):
+        raise OCIError('Shared OCI ledger differs from selected profile')
+    budget = _Budget(profile) if _budget is None else _budget
     if budget._guard is not None:
         # The caller's tools/scratch directory can be outside the namespace
         # volume. CI image copies must share the measured physical store.
