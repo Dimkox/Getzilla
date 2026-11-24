@@ -595,7 +595,7 @@ class CIImageTargetBindingTests(unittest.TestCase):
                          'lock-profiles.json', 'requirements-runtime.txt', 'requirements-test.txt', 'requirements-runner.txt'):
                 shutil.copyfile(source / 'trust-ci' / name, root / 'trust-ci' / name)
             inventory = collect_inventory(root)
-            row = dict(dockerfile=recipe, recipe_sha256=hashlib.sha256((root / recipe).read_bytes()).hexdigest(),
+            row = dict(dockerfile=recipe, recipe_sha256=consumer["recipe_sha256"], dockerfile_sha256=hashlib.sha256((root / recipe).read_bytes()).hexdigest(),
                 build_sha256=consumer["build_sha256"], manifest="trust-ci/compose.build.yaml",
                 line=1, source_reference="${IMAGE}")
             inventory.update(builds=[row], images=[dict(manifest=row["manifest"], line=1,

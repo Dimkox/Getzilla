@@ -98,8 +98,11 @@ class RetrievalTraceTests(unittest.TestCase):
 
     def test_repeated_query_has_distinct_attempt_and_real_cache_hit(self):
         self.enroll()
-        first, _ = self.query()
-        second, second_packet = self.query()
+        # Exercise two real journal deliveries without making cache semantics
+        # depend on the scheduler meeting the production 50 ms delivery window.
+        with patch.object(sprint_lifecycle, 'DELIVERY_SECONDS', 1.0):
+            first, _ = self.query()
+            second, second_packet = self.query()
         self.assertNotEqual(first['trace_operation_id'], second['trace_operation_id'])
         rows = load_local(self.root)['events']
         report = reconstruct(rows, second['trace_operation_id'], '2099-01-01T00:00:00Z')
@@ -108,6 +111,7 @@ class RetrievalTraceTests(unittest.TestCase):
                     'packet_status': second_packet.get('status'),
                     'trace_status': second_packet.get('trace_observation_status'),
                     'outcome': report.get('outcome'), 'stages': report.get('stages')}
+        self.assertTrue(second['trace_observation_delivered'], observed)
         self.assertEqual(report['stages']['cache_lookup'], 'cache_hit', observed)
         self.assertEqual(len({row['attempt_id'] for row in rows if row.get('event') == 'operation'}), 2)
         self.assertFalse(state.get_active_route(self.root).get('task_budget'))
