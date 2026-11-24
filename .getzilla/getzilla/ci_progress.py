@@ -343,16 +343,27 @@ def _prune(state, now):
             del state[table][key]
 
 
-def _bound(state, table, limit):
-    rows = state[table]
-    while len(rows) > limit:
-        if table == 'runs':
-            referenced = {block['run'] for block in state['blocks'].values()}
-            harmless = [(row['at'], key) for key, row in rows.items() if key not in referenced]
-        else:
-            harmless = [(row['at'], key) for key, row in rows.items() if row['cls'] == 'poll' and row['count'] < POLL_LIMIT]
-        victim = min(harmless or [(row['at'], key) for key, row in rows.items()])[1]
-        del rows[victim]
+_FULL = 'Getzilla: CI observation unrecorded because all available slots are protected.'
+
+
+def _reserve(state, *, block=None, run=None):
+    """Make room for a whole operation before removing any existing rows."""
+    victims = []
+    if block is not None and block not in state['blocks'] and len(state['blocks']) >= MAX_BLOCKS:
+        harmless = [(row['at'], key) for key, row in state['blocks'].items()
+                    if row['cls'] == 'poll' and row['count'] < POLL_LIMIT]
+        if not harmless:
+            return False
+        victims.append(('blocks', min(harmless)[1]))
+    if run is not None and run not in state['runs'] and len(state['runs']) >= MAX_RUNS:
+        referenced = {row['run'] for row in state['blocks'].values()}
+        harmless = [(row['at'], key) for key, row in state['runs'].items() if key not in referenced]
+        if not harmless:
+            return False
+        victims.append(('runs', min(harmless)[1]))
+    for table, victim in victims:
+        del state[table][victim]
+    return True
 
 
 def _new_run(scope, interaction, now):
@@ -378,6 +389,8 @@ def _historical(run, row, head):
 
 def _record(state, scope, interaction, run, now):
     key = _run_key(scope, interaction.repo, run.ident)
+    if not _reserve(state, run=key):
+        return False
     row = state['runs'].get(key) or {**_new_run(scope, interaction, now), 'ident': run.ident}
     row.update(max_attempt=max(row['max_attempt'], run.attempt or 0), head=run.head or row['head'],
                status=run.status or row['status'], conclusion=run.conclusion, updated=run.updated or row['updated'],
@@ -388,7 +401,12 @@ def _record(state, scope, interaction, run, now):
     elif run.status == 'completed' and run.attempt and run.conclusion in CONCLUSIONS - FAILED:
         row['failures'] = [item for item in row['failures'] if item[0] > run.attempt]
     state['runs'][key] = row
-    return key
+    if run.status == 'completed':
+        for op, pending in list(state['blocks'].items()):
+            if (pending['cls'] == 'external-pending' and pending['run'] == key
+                    and run.attempt >= (pending['need'] or 1) and now > pending['at']):
+                del state['blocks'][op]
+    return True
 
 
 def _wait_advice(interaction):
@@ -422,7 +440,9 @@ def observe(root, scope, inputs, response, head, *, now=None) -> str:
         if code == 0 and block and block['cls'] in {'transient', 'transient-exhausted'}:
             del state['blocks'][key]  # a success ends the transient budget
             block = None
-        if transient:
+        if transient and not (block and block['cls'] == 'external-pending' and interaction.kind == 'mutation'):
+            if not _reserve(state, block=key):
+                return _FULL
             schedule = RATE_BACKOFF if _RATE.search(sample) else BACKOFF
             count = (block['count'] + 1) if block and block['cls'] == 'transient' else 1
             if count > len(schedule):
@@ -437,12 +457,17 @@ def observe(root, scope, inputs, response, head, *, now=None) -> str:
                 del state['blocks'][poll]
         elif interaction.kind == 'mutation':
             run_key = _run_key(scope, interaction.repo, interaction.ident)
+            if not _reserve(state, block=key, run=run_key):
+                return _FULL
             row = state['runs'].get(run_key) or _new_run(scope, interaction, now)
             if code == 0 and interaction.op == 'rerun':
                 row.update(max_attempt=max(row['max_attempt'], 1) + 1, status='queued', conclusion=None, seen=None, at=now)
             row['at'] = now
             state['runs'][run_key] = row
-            state['blocks'][key] = _block(scope, 'external-pending', now, run=run_key, need=max(row['max_attempt'], 1))
+            pending = _block(scope, 'external-pending', now, run=run_key, need=max(row['max_attempt'], 1))
+            if code and block:
+                pending['recoveries'] = block['recoveries']
+            state['blocks'][key] = pending
         elif code == 0 and interaction.kind == 'log':
             row = state['runs'].get(_run_key(scope, interaction.repo, interaction.ident))
             if row is None:
@@ -458,13 +483,23 @@ def observe(root, scope, inputs, response, head, *, now=None) -> str:
             fresh = []
             for run in parse_runs(text):
                 row = state['runs'].get(_run_key(scope, interaction.repo, run.ident))
+                if interaction.attempt is not None and (run.attempt != interaction.attempt
+                        or row and interaction.attempt < row['max_attempt']):
+                    hints.append('Getzilla: historical or unbound attempt-specific CI poll; not counted.')
+                    continue
                 reason = _historical(run, row, head)
                 if reason:
                     hints.append(f'Getzilla: historical CI evidence: run {run.ident} {reason}; not counted.')
                     continue
-                _record(state, scope, interaction, run, now)
+                if run.head == head and run.attempt is not None and run.status is not None:
+                    if not _record(state, scope, interaction, run, now):
+                        if _FULL not in hints:
+                            hints.append(_FULL)
+                        continue
                 fresh.append(run)
-            if fresh:
+            if fresh and not _reserve(state, block=key):
+                hints.append(_FULL)
+            elif fresh:
                 token = progress._digest('ci-state', sorted([run.ident, run.attempt, run.head, run.status, run.conclusion]
                                                             for run in fresh))
                 terminal = all(run.status == 'completed' for run in fresh)
@@ -473,15 +508,7 @@ def observe(root, scope, inputs, response, head, *, now=None) -> str:
                 if count >= POLL_LIMIT:
                     hints.append(f'Getzilla: {count} unchanged CI state polls; the next unchanged poll is stopped. '
                                  + _wait_advice(interaction))
-        _bound(state, 'runs', MAX_RUNS)
-        _bound(state, 'blocks', MAX_BLOCKS)
     return '\n'.join(hints)
-
-
-def _met(state, block):
-    row = state['runs'].get(block['run'])
-    return bool(row and row['status'] == 'completed' and row['max_attempt'] >= (block['need'] or 1)
-                and row['seen'] is not None and row['seen'] > block['at'])
 
 
 def _consume(block, now):
@@ -515,9 +542,7 @@ def refusal(root, scope, inputs, head, *, now=None) -> str | None:
                 f'Getzilla: unchanged CI state after {block["count"]} polls; this poll cannot show progress. '
                 + _wait_advice(interaction) + ' ' + _recovery(key, block))
         if block and block['cls'] == 'external-pending':
-            if _met(state, block):
-                del state['blocks'][key]
-            elif not _consume(block, now):
+            if not _consume(block, now):
                 condition = f'gh-run:{interaction.repo}:{interaction.ident}:attempt>={block["need"]}:completed'
                 return (f'Getzilla: the last `{interaction.op}` of run {interaction.ident} is unresolved; an identical '
                         f'request cannot give a different result. Resume condition: {condition}. '
@@ -532,6 +557,8 @@ def refusal(root, scope, inputs, head, *, now=None) -> str | None:
                     and failures[1][0] == row['max_attempt'] and failures[0][0] == failures[1][0] - 1):
                 block = state['blocks'].get(key)
                 if not block or block['cls'] != 'deterministic':
+                    if not _reserve(state, block=key):
+                        return 'Getzilla: repeat failure; recovery is unavailable while the observation ledger is full.'
                     block = state['blocks'][key] = _block(scope, 'deterministic', now, run=_run_key(scope, interaction.repo,
                                                                                                    interaction.ident))
                 if _consume(block, now):

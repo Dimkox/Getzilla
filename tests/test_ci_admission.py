@@ -29,6 +29,7 @@ def unit_fixture(*, include_skip=False):
         contents["factory/tests/test_postgres_integration.py"] = b"class PostgresFactoryTests:\n def test_public_fixture_skip(self): pass\n"
     identifiers = declared_ids(Path("/owned-fixture"), contents=contents)
     context = {"unit_database_bindings": "scrubbed", "host_supported": False,
+               "linux_kernel": True, "posix_source_custody": True, "unix_peer_credentials": True,
                "procfs_descriptor_reopen": False, "pypdf_version": None, "jsonschema_cli": None}
     expected_source = {"source_inventory": {name: hashlib.sha256(raw).hexdigest() for name, raw in contents.items()},
                        "declared_ids": identifiers, "engine_sha256": "f" * 64}
@@ -53,6 +54,22 @@ class CiSchema3RepairTests(unittest.TestCase):
         from getzilla.ci_admission import _factory_unit_valid
         unit, source = unit_fixture(include_skip=True)
         self.assertTrue(_factory_unit_valid(unit, source))
+
+    def test_factory_linux_report_requires_current_platform_evidence(self):
+        from getzilla.ci_admission import _factory_unit_valid
+        for field in ("linux_kernel", "posix_source_custody", "unix_peer_credentials"):
+            for invalid in (None, False, 1, "true"):
+                with self.subTest(field=field, invalid=invalid):
+                    unit, source = unit_fixture()
+                    context = unit["binding"]["context"]
+                    if invalid is None:
+                        del context[field]
+                    else:
+                        context[field] = invalid
+                    self.assertFalse(_factory_unit_valid(unit, source))
+        unit, source = unit_fixture()
+        unit["binding"]["context"]["extra"] = True
+        self.assertFalse(_factory_unit_valid(unit, source))
 
     def test_owned_accounting_and_skip_provenance_refuse(self):
         from getzilla.ci_admission import _factory_unit_valid

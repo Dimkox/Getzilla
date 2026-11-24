@@ -206,6 +206,42 @@ class GuardTests(unittest.TestCase):
         self.assertIn('historical', self.observe('gh run view 7 --log-failed', output='x', now=T0 + 4, head=OLD))
         self.assertEqual([row for row in ci.inspect(self.root, SCOPE, now=T0 + 5) if row['status'] == 'blocked'], [])
 
+    def test_partial_poll_cannot_complete_a_pending_attempt(self):
+        command = 'gh run rerun 7'
+        self.observe(command)
+        for fields in ({}, {'attempt': 2}, {'headSha': HEAD}):
+            partial = dict(databaseId=7, status='completed', **fields)
+            selection = ','.join(partial)
+            self.observe('gh run view 7 --attempt 1 --json ' + selection, output=json.dumps(partial), now=T0 + 1)
+            self.observe('gh run view 7 --json ' + selection, output=json.dumps(partial), now=T0 + 2)
+            self.assertIsNotNone(self.refuse(command, now=T0 + 3), fields)
+        self.observe('gh run view 7 --json databaseId,attempt,headSha,status', output=run_json(attempt=2), now=T0 + 4)
+        self.assertIsNone(self.refuse(command, now=T0 + 5))
+
+    def test_failed_mutation_preserves_consumed_recovery(self):
+        command = 'gh run rerun 7'
+        self.observe(command, code=1)
+        block, = ci.inspect(self.root, SCOPE, now=T0 + 1)
+        ci.recover(self.root, SCOPE, block['loop_id'], block['revision'], 'new-evidence', 'checked status', now=T0 + 2)
+        self.assertIsNone(self.refuse(command, now=T0 + 3))
+        self.observe(command, code=1, now=T0 + 4)
+        block, = ci.inspect(self.root, SCOPE, now=T0 + 5)
+        with self.assertRaisesRegex(ValueError, 'reused-recovery'):
+            ci.recover(self.root, SCOPE, block['loop_id'], block['revision'], 'new-evidence', 'checked status', now=T0 + 6)
+
+    def test_full_ledger_keeps_every_pending_mutation_and_its_run(self):
+        for number in range(1, ci.MAX_BLOCKS + 1):
+            self.observe(f'gh run rerun {number}', now=T0 + number)
+        runtime = self.root / '.getzilla/runtime' / ci.STATE_NAME
+        before = runtime.read_bytes()
+        note = self.observe('gh run rerun 999', now=T0 + 100)
+        self.assertIn('unrecorded', note)
+        self.assertEqual(runtime.read_bytes(), before)
+        self.assertIsNotNone(self.refuse('gh run rerun 1', now=T0 + 101))
+        self.observe('gh run view 1 --json databaseId,attempt,headSha,status', output=run_json(run_id=1, attempt=2),
+                     now=T0 + 102)
+        self.assertIsNone(self.refuse('gh run rerun 1', now=T0 + 103))
+
     def test_state_file_is_separate_and_bounded(self):
         self.observe('gh run rerun 7', code=1, output='refused', now=T0)
         runtime = self.root / '.getzilla/runtime'

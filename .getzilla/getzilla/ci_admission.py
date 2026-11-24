@@ -188,8 +188,10 @@ def _factory_unit_valid(unit, expected_source):
                 or set(binding["source_bindings"]) != {"ancestry", "directories", "files"}):
             return False
         context = binding["context"]
+        linux_capabilities = {"linux_kernel", "posix_source_custody", "unix_peer_credentials"}
         if (type(context) is not dict or set(context) != {"unit_database_bindings", "host_supported",
-                "procfs_descriptor_reopen", "pypdf_version", "jsonschema_cli"}
+                "procfs_descriptor_reopen", "pypdf_version", "jsonschema_cli"} | linux_capabilities
+                or any(context[key] is not True for key in linux_capabilities)
                 or context["unit_database_bindings"] != "scrubbed"
                 or type(context["host_supported"]) is not bool
                 or type(context["procfs_descriptor_reopen"]) is not bool
