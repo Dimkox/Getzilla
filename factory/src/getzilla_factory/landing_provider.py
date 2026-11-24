@@ -4,7 +4,7 @@ from .landing_observation import LandingProviderObservation
 
 import base64
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import os
@@ -47,6 +47,9 @@ EXECUTOR_CODE_CATEGORIES = {
     "executor_transport": "transport",
     "executor_usage": "accounting",
     "http_usage": "accounting",
+    "factory_stop_binding_required": "policy",
+    "factory_stop_authority_unavailable": "policy",
+    "factory_stop_changed": "policy",
 }
 FAILURE_CATEGORIES = frozenset({
     "accounting", "authentication", "deadline", "permission", "policy", "protocol", "rate_limit",
@@ -61,10 +64,11 @@ class LandingProviderError(RuntimeError):
 class HttpProviderFailure(LandingProviderError):
     """Allowlisted local classification; never carries an upstream error body."""
 
-    def __init__(self, code: str, category: str, http_status: int | None = None):
+    def __init__(self, code: str, category: str, http_status: int | None = None, *, dispatched: bool = True):
         super().__init__(code)
         self.category = category
         self.http_status = http_status
+        self.dispatched = dispatched
 
 
 def _provider_error(error: LandingContractError) -> LandingProviderError:
@@ -239,6 +243,7 @@ def unavailable_landing_profile() -> LandingProviderProfile:
 class LandingNormalizationRequest:
     source: LandingInputV1
     profile_digest: str
+    stop_capability: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, LandingInputV1) or not HEX64.fullmatch(
@@ -350,9 +355,14 @@ class FixedCommandLandingProvider:
         profile: LandingProviderProfile,
         *,
         clock: Callable[[], datetime] | None = None,
+        admission=None,
     ) -> None:
         if not profile.available:
             raise LandingProviderError("provider_unavailable")
+        from .paid_admission import PaidExecutionAdmission
+        if admission is not None and type(admission) is not PaidExecutionAdmission:
+            raise LandingProviderError("paid_authority_invalid")
+        self._admission = admission
         self._profile = profile
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
@@ -380,9 +390,22 @@ class FixedCommandLandingProvider:
         }
         request_bytes = canonical_json(body)
         started = self._clock()
-        stdout = self._run(request_bytes)
-        completed = self._clock()
-        spec, usage_input, usage_output = self._decode(stdout)
+        if self._admission is None:
+            raise LandingProviderError("paid_authority_required")
+        input_ceiling=self._admission.input_ceiling(self._profile.provider_id,self._profile.model_id,
+            request.source.media_kind,len(request_bytes))
+        # Fixed-command V1 has no provider output token ceiling. Reserve its
+        # byte cap conservatively; unknown usage keeps the full reservation.
+        reservation=self._admission.reserve(self._profile.provider_id,self._profile.model_id,
+            "paid-inference",hashlib.sha256(request_bytes).hexdigest(),input_ceiling,self._profile.max_stdout_bytes)
+        try:
+            stdout = self._run(request_bytes, reservation=reservation, input_digest=request.source.input_digest)
+            completed = self._clock()
+            spec, usage_input, usage_output = self._decode(stdout)
+        except BaseException:
+            self._admission.unknown_if_dispatched(reservation)
+            raise
+        self._admission.finish(reservation,(usage_input,usage_output))
         evidence = _evidence(
             request,
             self._profile,
@@ -420,7 +443,9 @@ class FixedCommandLandingProvider:
         if digest.hexdigest() != self._profile.executable_sha256:
             raise LandingProviderError("executable_digest_mismatch")
 
-    def _run(self, request_bytes: bytes) -> bytes:
+    def _run(self, request_bytes: bytes, *, reservation=None, input_digest=None) -> bytes:
+        if self._admission is None or reservation is None:
+            raise LandingProviderError("paid_authority_required")
         executable = self._profile.executable
         if executable is None:
             raise LandingProviderError("profile_executable")
@@ -430,6 +455,9 @@ class FixedCommandLandingProvider:
         with tempfile.TemporaryFile() as input_stream:
             input_stream.write(request_bytes)
             input_stream.seek(0)
+            timeout_seconds = min(self._profile.timeout_seconds,
+                self._admission.dispatch(reservation,input_digest,hashlib.sha256(request_bytes).hexdigest(),
+                    self._profile.provider_id,self._profile.model_id))
             try:
                 process = subprocess.Popen(
                     [executable, *self._profile.argv],
@@ -461,7 +489,7 @@ class FixedCommandLandingProvider:
                 reader.start()
             timed_out = False
             try:
-                process.wait(timeout=self._profile.timeout_seconds)
+                process.wait(timeout=timeout_seconds if timeout_seconds is not None else self._profile.timeout_seconds)
             except subprocess.TimeoutExpired:
                 timed_out = True
                 _kill_process_group(process)

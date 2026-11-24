@@ -5,6 +5,8 @@ description: Use whenever tests, review, CI evidence, or completion claims must 
 
 # Verification and evidence
 
+Classify the final product inventory and select exactly one qualifying verifier. Use `--mode focused-static-seo-landing` for the single landing admitted by the static landing contract in AGENTS.md. For full delivery use `--mode pr` and for release work use `--mode release`. For an admitted landing, do not run a full PR gate before a focused gate.
+
 Follow `.agents/skills/getzilla-delivery/SKILL.md`. Run bounded controls, commit source, reconcile the route, collect selected independent reviews, save reports outside Git, then run one final qualifying local gate. A complete clean low-risk diff of at most 50 added plus deleted code lines may use the light lane with one ordinary code review and any configured or explicitly retained additional reviews; unknown or sensitive inventories retain full gates. Use `--mode fast` for measured light admission, `--mode pr` for full delivery or its existing qualifying scope selector, and `--mode release` for release work. Fast can still run full test discovery; named `--no-record --test` smoke is only an observation. Full CI and external exact-head merge checks remain required.
 
 Save new state, startup, analyses and reports under `.getzilla/runtime`. New packages use `.getzilla/runtime/changes/<id>/`; package-free reviews use `.getzilla/runtime/reviews/<route-id>/`. Do not create report-only or workflow freeze commits. At most one concise summary per change may be tracked. Preserve historical tracked packages and their existing source bindings.

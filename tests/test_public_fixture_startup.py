@@ -10,25 +10,35 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'factory/src'))
 
 from factory.tests.public_fixture_startup import observe_fixture_startup
+from factory.tests.paid_fixture import PaidProtocolTestCase
 from factory.tests.test_landing_provider import clock, landing_input, profile
 from getzilla_factory.landing_provider import FixedCommandLandingProvider, LandingNormalizationRequest
 
 
-class PublicFixtureStartupTests(unittest.TestCase):
+class PublicFixtureStartupTests(PaidProtocolTestCase):
+    def setUp(self):
+        # The isolated macOS probe has no site packages or live HTTP executor.
+        # Its wire capture still uses genuine finite SQLite paid authority.
+        super().setUp(patch_executors=False)
+
     def _request(self):
         configured = profile()
-        provider = FixedCommandLandingProvider(configured, clock=clock())
+        source = landing_input()
+        provider = FixedCommandLandingProvider(configured, clock=clock(), admission=self.admission(
+            configured.provider_id, configured.model_id, source.input_digest))
         requests = []
 
         class RequestCaptured(Exception):
             pass
 
-        def capture(request_bytes):
+        def capture(request_bytes, *, reservation, input_digest):
+            self.assertIsNotNone(reservation)
+            self.assertEqual(input_digest, source.input_digest)
             requests.append(request_bytes)
             raise RequestCaptured()
 
         with patch.object(provider, '_run', side_effect=capture), self.assertRaises(RequestCaptured):
-            provider.normalize(LandingNormalizationRequest(landing_input(), configured.profile_digest),
+            provider.normalize(LandingNormalizationRequest(source, configured.profile_digest),
                                lambda: b'same semantic request')
         self.assertEqual(len(requests), 1)
         return configured, requests[0]
@@ -44,7 +54,7 @@ class PublicFixtureStartupTests(unittest.TestCase):
 
         with patch('subprocess.Popen', side_effect=start):
             observed = observe_fixture_startup(Path(configured.executable), request_bytes)
-        # This direct Core test reaches the existing native CI core-tests.log.
+        # This direct Core test reaches the native CI core-tests.log of its linux-core-tests shard.
         # It does not depend on nested Factory exception-message serialization.
         print('public-fixture-startup ' + json.dumps(observed, sort_keys=True), flush=True)
         self.assertEqual(set(observed), {'cases', 'canonical_body_exact', 'resources_removed'})

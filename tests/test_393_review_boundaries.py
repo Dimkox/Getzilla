@@ -15,9 +15,12 @@ W = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(W / '.getzilla'))
 from getzilla import architecture_fitness as fitness
 from getzilla import expanded_security as expanded
+from getzilla import public_security_context
 from getzilla import security_cli as cli
+from getzilla import security_corresponding_source  # noqa: F401 preload before the I/O guard
 from getzilla import security_inventory as inventory
 from getzilla import security_tools as tools
+from getzilla import verification_journal
 
 ACTIVE = False
 OWNED = None
@@ -42,7 +45,8 @@ def guarded(root=None):
     global ACTIVE, OWNED
     ACTIVE, OWNED = True, root
     try:
-        yield
+        with verification_journal.bind_sink(None, None):
+            yield
     finally:
         ACTIVE, OWNED = False, None
 
@@ -95,7 +99,7 @@ class ReviewBoundaries(unittest.TestCase):
 
             def consume(selection, environment=env):
                 with patch.object(expanded, 'read_image_selection', return_value=selection), \
-                        patch.object(cli, 'source_binding', return_value=source), \
+                        patch.object(public_security_context, 'source_binding', return_value=source), \
                         patch.object(expanded.tempfile, 'TemporaryDirectory', return_value=contextlib.nullcontext(str(root/'authority'))), \
                         patch.object(inventory, '_tracked_files', return_value=['Dockerfile']), \
                         patch.object(expanded, '_clock', return_value=now), \

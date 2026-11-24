@@ -174,7 +174,7 @@ class OperationsTests(unittest.TestCase):
         profile = (ROOT / 'trust-ci/requirements-runner.txt').read_text(encoding='utf-8')
         self.assertIn('--require-hashes', runner)
         self.assertIn('-r requirements-runner.txt', runner)
-        self.assertIn('--no-deps --no-build-isolation .', runner)
+        self.assertIn('--no-deps --no-compile --no-build-isolation .', runner)
         for pin in ('coverage==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
                     'pytest-cov==7.1.0', 'ruff==0.16.3', 'bandit==1.9.4', 'tomli==2.5.0'):
             self.assertIn(pin, profile)

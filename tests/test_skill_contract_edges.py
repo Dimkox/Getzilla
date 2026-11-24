@@ -110,7 +110,7 @@ class EdgeContracts(unittest.TestCase):
                     calls.append(name)
             return original(parent, name, flags, *args, **kwargs)
 
-        with mock.patch.object(fsx, 'open_at', side_effect=count), ThreadPoolExecutor(max_workers=2) as pool:
+        with mock.patch.object(fsx, 'open_at', new=count), ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: fixture.install(), range(2)))
         self.assertTrue(all(result['status'] == 'staged' for result in results))
         self.assertCountEqual(calls, ['SKILL.md', 'getzilla-skill.json'])

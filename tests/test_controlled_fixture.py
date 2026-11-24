@@ -98,13 +98,66 @@ def _cleanup_owned_fixture(root, binding, *, required=False):
         for name in volumes:
             controlled_fixture._command(['/usr/bin/docker', 'volume', 'rm', name])
         for image in images:
+            contract, _ = controlled_fixture._image_contract()
+            controlled_fixture._bound_image('/usr/bin/docker', image, contract)
             controlled_fixture._command(['/usr/bin/docker', 'image', 'rm', image])
     except controlled_fixture.FixtureError:
         if required:
             raise
 
 
+def _change_owned_workspace(docker, image, volumes):
+    """Fault injection stays non-root and mounts only this test's owned workspace."""
+    owner = fenced_fixture._volume_owner(docker, volumes)
+    args = [docker, 'create', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+            '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m', '--cpus', '2',
+            '--cpuset-cpus', controlled_fixture._cpu_set(), '--user', '65534:65534',
+            '--label', 'getzilla.owner='+owner, '--mount', 'type=volume,src='+volumes[1]+',dst=/work',
+            '--entrypoint', 'python', image, '-c', "from pathlib import Path; Path('/work/partial').write_text('synthetic')"]
+    ident = controlled_fixture._command(args)
+    if not re.fullmatch(r'[a-f0-9]{64}', ident):
+        raise AssertionError('invalid owned fault container')
+    try:
+        controlled_fixture._command([docker, 'start', '-a', ident])
+    finally:
+        controlled_fixture._command([docker, 'rm', '-fv', ident])
+
+
 class ControlledFixtureTest(unittest.TestCase):
+    def image_commands(self, hashes):
+        calls = []
+        labels = {}
+        image = 'sha256:' + 'b'*64
+
+        def command(args, timeout=60):
+            calls.append(args)
+            if args[1:3] == ['image', 'inspect']:
+                if args[3].startswith('python@'):
+                    return json.dumps([{'Id': controlled_fixture.IMAGE, 'RepoDigests': [args[3]],
+                                        'Os': 'linux', 'Architecture': 'amd64'}])
+                return json.dumps([{'Id': image, 'Os': 'linux', 'Architecture': 'amd64',
+                                    'Config': {'Labels': labels}}])
+            if args[1] == 'build':
+                for index, item in enumerate(args):
+                    if item == '--label':
+                        key, value = args[index+1].split('=', 1)
+                        labels[key] = value
+                Path(args[args.index('--iidfile')+1]).write_text(image)
+                self.assertEqual({p.name for p in Path(args[-1]).iterdir()},
+                                 {'Dockerfile', 'fixture.py', 'fixture-codex', 'fixture-contract.json'})
+            if args[1] == 'create':
+                return 'a'*64
+            if args[1] == 'start':
+                return '\n'.join(hashes)
+            return ''
+
+        return calls, command
+
+    @staticmethod
+    def copy_image_input(source, destination, expected, error):
+        # Only the Docker protocol is mocked here; native input qualification is separate.
+        destination.write_bytes(b'unit Docker protocol input')
+
     def test_host_request_requires_exact_fixture_model_and_path(self):
         frame = {'type': 'model_request', 'version': 1, 'nonce': 'n', 'model': 'fixture-a',
                  'path': '/v1/responses', 'stream': True, 'tool_types': ['function']}
@@ -201,7 +254,16 @@ class ControlledFixtureTest(unittest.TestCase):
     def test_docker_errors_distinguish_timeout_without_exposing_output(self):
         for error, reason in ((subprocess.TimeoutExpired(['docker'], 1), 'container_timeout'),
                               (subprocess.CalledProcessError(1, ['docker'], stderr='private'), 'container_command_failed')):
-            with self.subTest(reason=reason), patch.object(controlled_fixture.subprocess, 'run', side_effect=error):
+            from unittest.mock import Mock
+            process = Mock(pid=424242,returncode=0)
+            process.communicate.side_effect = error
+            process.poll.return_value = process.wait.return_value = 0
+
+            def popen(argv,**kwargs):
+                process.args = argv
+                return process
+
+            with self.subTest(reason=reason), patch.object(controlled_fixture.subprocess, 'Popen', side_effect=popen):
                 with self.assertRaisesRegex(controlled_fixture.FixtureError, '^' + reason + '$'):
                     controlled_fixture._command(['docker', 'inspect', 'synthetic'])
 
@@ -405,8 +467,7 @@ class ControlledFixtureTest(unittest.TestCase):
                 volumes_seen = True
                 count += 1
                 if count == 2:
-                    fenced_fixture._helper(docker, image, volumes,
-                        "import os; from pathlib import Path; os.chown('/work',0,0); Path('/work/partial').write_text('synthetic'); os.chown('/work',65534,65534)", root=True)
+                    _change_owned_workspace(docker, image, volumes)
                 return original(docker, image, volumes)
 
             try:
@@ -484,42 +545,22 @@ class ControlledFixtureTest(unittest.TestCase):
         image_id = 'sha256:' + 'b' * 64
         for hashes in (('wrong', controlled_fixture.CODEX_SHA256), (controlled_fixture.FIXTURE_SHA256, 'wrong')):
             with self.subTest(hashes=hashes):
-                calls = []
-
-                def command(args, timeout=15):
-                    calls.append(args)
-                    if args[1] == 'create':
-                        return container_id
-                    if args[1] == 'commit':
-                        return image_id
-                    if args[1] == 'start':
-                        return '\n'.join(hashes)
-                    return ''
-
-                with patch.object(controlled_fixture, '_command', side_effect=command):
+                calls, command = self.image_commands(('3.12.16', controlled_fixture.CONTRACT_SHA256, *hashes))
+                with patch.object(controlled_fixture, '_command', side_effect=command), \
+                        patch.object(controlled_fixture, '_copy_input', side_effect=self.copy_image_input):
                     with self.assertRaises(controlled_fixture.FixtureError):
                         controlled_fixture._immutable_image('docker', Path('/fixture'), '/codex')
                 self.assertIn(['docker', 'rm', '-fv', container_id], calls)
                 self.assertIn(['docker', 'image', 'rm', image_id], calls)
 
     def test_immutable_image_checks_both_hashes_and_returns_content_id(self):
-        staging, checker = 'a' * 64, 'c' * 64
+        checker = 'a' * 64
         image_id = 'sha256:' + 'b' * 64
-        calls = []
-
-        def command(args, timeout=15):
-            calls.append(args)
-            if args[1] == 'create':
-                return checker if '--entrypoint' in args else staging
-            if args[1] == 'commit':
-                return image_id
-            if args[1] == 'start':
-                return controlled_fixture.FIXTURE_SHA256 + '\n' + controlled_fixture.CODEX_SHA256
-            return ''
-
-        with patch.object(controlled_fixture, '_command', side_effect=command):
+        calls, command = self.image_commands(('3.12.16', controlled_fixture.CONTRACT_SHA256,
+                                              controlled_fixture.FIXTURE_SHA256, controlled_fixture.CODEX_SHA256))
+        with patch.object(controlled_fixture, '_command', side_effect=command), \
+                patch.object(controlled_fixture, '_copy_input', side_effect=self.copy_image_input):
             self.assertEqual(controlled_fixture._immutable_image('docker', Path('/fixture'), '/codex'), image_id)
-        self.assertIn(['docker', 'rm', '-fv', staging], calls)
         self.assertIn(['docker', 'rm', '-fv', checker], calls)
         self.assertNotIn(['docker', 'image', 'rm', image_id], calls)
 
@@ -537,11 +578,12 @@ class ControlledFixtureTest(unittest.TestCase):
                                       'fixture-session', 'a'*64, 'b'*64, 'c'*64)
             budget = journal.TaskBudget(2, 4, '1.5', int(time.time()) + 120)
             journal.create_controlled_chain(root, binding, journal.Usage(1, '0'), budget)
-            with patch.object(controlled_fixture.shutil, 'which', return_value=sys.executable), \
-                 patch.object(controlled_fixture.hashlib, 'file_digest') as digest, \
+            binary = root/'unit-codex'
+            binary.write_bytes(b'unit native admission')
+            with patch.object(controlled_fixture.shutil, 'which', return_value=str(binary)), \
+                 patch.object(controlled_fixture, 'CODEX_SHA256', hashlib.sha256(b'unit native admission').hexdigest()), \
                  patch.object(controlled_fixture, '_command') as command:
-                digest.return_value.hexdigest.return_value = controlled_fixture.CODEX_SHA256
-                with self.assertRaises(controlled_fixture.FixtureError):
+                with self.assertRaisesRegex(controlled_fixture.FixtureError, 'fixture_failed'):
                     controlled_fixture.run(root, binding, budget)
                 command.assert_not_called()
 
@@ -551,6 +593,7 @@ class ControlledFixtureTest(unittest.TestCase):
                 'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False,
                                'CapDrop': ['ALL'], 'SecurityOpt': ['no-new-privileges'], 'PidMode': '', 'IpcMode': 'private',
                                'PidsLimit': 64, 'Memory': 536870912, 'NanoCpus': 2000000000,
+                               'CpusetCpus': controlled_fixture._cpu_set(),
                                'Tmpfs': {'/tmp': 'rw,nosuid,nodev,size=64m,mode=1777',
                                          '/work': 'rw,nosuid,nodev,size=64m,mode=1777'}},
                 'Mounts': [{'Type': 'bind', 'Source': '/fixture.py', 'Destination': '/fixture.py', 'RW': False},
@@ -677,15 +720,15 @@ class ControlledFixtureTest(unittest.TestCase):
                                       'fixture-session', 'a'*64, 'b'*64, 'c'*64)
             budget = journal.TaskBudget(2, 4, '1.5', int(time.time()) + 600)
             original = controlled_fixture._command
-            removals = 0
 
             def uncertain_cleanup(args, timeout=60):
-                nonlocal removals
-                result = original(args, timeout=timeout)
+                native = False
                 if args[1] == 'rm':
-                    removals += 1
-                    if removals == 3:
-                        raise controlled_fixture.FixtureError('container_unavailable')
+                    info = json.loads(original([args[0], 'inspect', args[-1]]))[0]
+                    native = info['Config']['Cmd'] == ['python', '-u', '/fixture.py']
+                result = original(args, timeout=timeout)
+                if native:
+                    raise controlled_fixture.FixtureError('container_unavailable')
                 return result
 
             with patch.object(controlled_fixture, '_command', side_effect=uncertain_cleanup):

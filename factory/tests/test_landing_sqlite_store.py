@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+import asyncio
+from unittest.mock import patch
 
 from getzilla_factory.landing_contracts import LandingInputV1
 from getzilla_factory.contracts import canonical_json
@@ -87,6 +89,25 @@ class SQLiteLandingJobStoreTests(unittest.TestCase):
         path.chmod(0o600)
         return connection
 
+    def test_observation_interruptions_rollback_and_preserve_the_original_exception(self):
+        store = self.store()
+        request_source = source()
+        record = LandingJobRecord(request_source, 'accepted', None, None)
+        store.create_or_replay(record, command_key=request_source.job_id, request_digest=request_source.input_digest)
+        for interruption in (KeyboardInterrupt('fixture'), SystemExit('fixture'), asyncio.CancelledError()):
+            with self.subTest(interruption=type(interruption).__name__):
+                try:
+                    with patch.object(store, '_select_record', side_effect=interruption):
+                        with self.assertRaises(type(interruption)) as caught:
+                            store.observe_job(request_source.tenant_id, request_source.repository_id, request_source.job_id)
+                    self.assertIs(caught.exception, interruption)
+                    self.assertFalse(store._connection.in_transaction)
+                    self.assertEqual(store.observe_job(request_source.tenant_id, request_source.repository_id,
+                                                      request_source.job_id).source, request_source)
+                finally:
+                    if store._connection.in_transaction:
+                        store._connection.rollback()  # Fixture cleanup on the expected RED path.
+
     def test_initializes_private_wal_full_schema_and_rejects_unsafe_or_unknown_root(self):
         store = self.store()
         self.assertEqual(0o700, os.stat(self.root).st_mode & 0o777)
@@ -94,11 +115,11 @@ class SQLiteLandingJobStoreTests(unittest.TestCase):
         with sqlite3.connect(store.database_path) as connection:
             self.assertEqual("wal", connection.execute("PRAGMA journal_mode").fetchone()[0])
             self.assertEqual(2, connection.execute("PRAGMA synchronous").fetchone()[0])
-            self.assertEqual(2, connection.execute("PRAGMA user_version").fetchone()[0])
+            self.assertEqual(4, connection.execute("PRAGMA user_version").fetchone()[0])
         store.close()
 
         with sqlite3.connect(store.database_path) as connection:
-            connection.execute("PRAGMA user_version = 3")
+            connection.execute("PRAGMA user_version = 5")
         with self.assertRaisesRegex(LandingServiceError, "store_schema"):
             SQLiteLandingJobStore(
                 self.root,

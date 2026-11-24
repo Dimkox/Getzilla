@@ -1,0 +1,123 @@
+# Fixed public study source components
+
+These optional leaves implement computation and data-plane checks for the fixed
+issue162 public study. They do not enable study execution. Import and status do
+not import NumPy, ONNX Runtime, tokenizers or tiktoken, load models, create a
+process, or access the network. The existing experiment `execute` action remains
+unavailable. No retained-corpus ranks or native runtime qualification are supplied
+by the tiny fixture tests.
+
+`study_windows` preserves original function and window IDs, explicit overload
+exclusions, Protocol ellipsis rows, greedy254 windows and two-line overlap.
+Counts include the tokenizer's special tokens, matching the published
+`len(tokenizer.encode(text).ids)`. Truncation is reported only above256, including
+a single overlong line; truncation never changes retained source bytes.
+`study_tokenizer` disables automatic padding/truncation, counts actual specials,
+then applies the registered256-token bound preserving the inspected final special
+ID. A digest or special ID is data and grants no model access.
+
+`study_metrics` projects repeated known function IDs before R@5/MRR@10, as the
+published benchmark does. It retains the mapping to original positions. Each
+position outside the frozen function universe remains unjudged and receives no
+credit; it is not removed or replaced. Label0 is unjudged, not nonrelevant.
+Missing paired values make the registered sixteen-task slice INCONCLUSIVE,
+without reducing its denominator. Pure arithmetic does not enforce single use of
+the final holdout; that belongs to the existing execution owner.
+
+`study_context` matches published citation headers, source-line overlap removal,
+newlines and separators. The counter sees the complete accumulated context,
+including every header. It accepts only the registered2048/8192 limits, never
+refills beyond original top100, and reports unavailable/skipped original slots.
+Returned context contains source bytes and must remain behind current native
+source and operation fences. Hash validation here is not source authorization.
+
+`study_vectors` supplies scalar reference checks and fixed three-arm RRFk60 with
+original-ID ties. Its scalar floating point operations are not an FP32 model
+runtime or a claim of bitwise publisher parity. `study_onnx_worker` uses the
+published NumPy mean operations for actual MiniLM inference and first-token CLS
+for BGE, followed by L2 normalization and FP32 output. It binds inspected input
+and all output signatures, explicitly selects the raw rank3 output, fixes CPU
+provider and intra/inter thread counts1, and rejects unexpected dtype, shape or
+nonfinite output. BGE's separate rank2 output can remain symbolically shaped in
+the bound signature and is never used for pooling. Runtime conformance still
+requires the separately admitted real image and inspected artifacts.
+
+`study_resources` compares readback data against the fixed offline profile:
+two CPUs,6GiB,swap0,pids128,networknone,read-only root/model/software,nonprivileged
+UID,capdrop,no-new-privileges,seccomp,boundedtmpfs and no Docker log persistence.
+Passing dictionaries cannot mint a resource reference. `study_supervisor` accepts
+only the genuine operation owner's reference, uses the existing execution CAS
+and its original monotonic deadline, and owns the exact local-daemon container
+and attach process. Docker uses a pinned executable descriptor and private empty
+CLI configuration. Its stdlib PID1 controller owns exactly one separately
+killable native child; heartbeat loss, EOF, stage/global expiry or protocol faults
+retire that tree. Heartbeats never extend deadlines. Native code cannot block
+PID1's independent timers by holding the child's Python GIL.
+
+Only actual held image/process/channel, mount, kernel and artifact readback can
+issue a process-local live resource reference. Numeric Docker daemon PIDs are
+never treated as local PIDs without matching namespaces, starttime and argv.
+When direct host proc observation is unavailable, its gap and daemon PID scope
+remain explicit; fresh actual inside PID1 facts and owned Docker lifecycle stay
+mandatory. Same kernel boot/time namespace is required for absolute deadlines.
+Missing facts required by the selected profile refuse execution.
+
+The fixed worker export contains only its reviewed Python source closure, no
+bytecode, archive, runtime, credentials or corpus. The separately held software
+export preserves the entire pinned wheel union, including inert .pth, entrypoint
+metadata and .data members; isolated startup and direct paths never process
+those mechanisms. Source bytes cross only the admitted private pipe.
+
+`study_driver.run_fixed_study` accepts only a genuine current operation reference.
+It composes the fixed six arms, equal-weight RRF, original top100 and packing,
+240 queries and ten retained timing passes. It uses three fresh sequential cold
+processes per model, prepares both indices before warm scoring, and checks the
+same two fresh source cuts before encode, score and source-derived release.
+RANK reproduces the witnessed window and asset observations. Exact integer ratios
+decide the sixteen-task holdout boundary; missing observations stay INCONCLUSIVE.
+An owned query failure stops the attempt and remains a failed existing execution;
+it does not repeat the holdout or select a surviving subset.
+
+Private artifacts retain every timing pass and finite bounded phase samples.
+Cold/window/index/encoding/query wall times use the host monotonic clock;
+lexical/dense/RRF/packing phase times use the native child's monotonic clock.
+CPU observations use that child's process_time and exclude host/controller/daemon
+CPU. The summary uses the published median and default linear percentile95 rule.
+Peak RSS is the maximum observed sequential native-child lifetime RUSAGE_SELF
+value on Linux, converted from KiB to bytes. It is not whole-container peak RAM.
+The fixed storage owner supplies scoped logical disk observations and exact
+prewrite capacity checks. `StudyOutcome.measurements` includes actual driver
+wall/host CPU through cleanup and final storage; acquisition, operator review
+cost, monetary cost, unperformed updates and warm reload remain unknown or
+not_performed. Telemetry is excluded from scientific parity/rank determinism
+digests, while the original measured values stay in private artifacts.
+
+The one first quality pass also produces corpus/language/class/partition macro
+tables and each paired task's exact delta. Missing values keep the original
+group denominator and make the summary INCONCLUSIVE; no-answer groups remain
+separate from numeric recall. These tables reuse retained metrics and never
+evaluate the holdout a second time.
+
+The result port binds actual terminal execution and the existing captured
+diagnostic artifact. INSPECT scientific assembly uses only protected input ports
+and responses captured by the actual live owner. A supplied report dictionary
+cannot issue that result reference. A generic incomplete observation cannot
+qualify PhaseB; complete scientific facts still need actual native qualification,
+confirmed cleanup and independent reviews through the PhaseB owner. Marker,
+window mapping, ranks, timings and summary use the same immutable run folder,
+so the protected output reference retains the complete storage lineage. The
+separate fixed storage owner counts that folder and the approved retained roots.
+No real model/container execution is supplied by these inert source controls.
+
+Before any actual tokenizer/model or lexical/dense/fusion ranking, the native
+composition still needs genuine PhaseA/B, separately explicit current operation
+consent, the frozen concrete runtime/artifact registration, and an owned
+supervisor. That supervisor must verify actual executable/image/container and
+PID/starttime/cgroup identities, effective and ancestor limits, argv/mounts and
+host artifact custody; bound all IPC, logs and wall time; and cancel/reap/remove
+only its own complete childtree. Both fresh public source cuts and their complete
+derivative lineage must be checked after resource readback and before each
+encoder input and final release. Long compute ceilings never renew a two-second
+source or query deadline. Missing authority, policy, source, runtime, enforcement
+or currentness remains unavailable, with no host-venv fallback. These public-only
+components establish no private-corpus or enterprise ACL authority.

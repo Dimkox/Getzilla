@@ -277,6 +277,29 @@ class ProgressTests(unittest.TestCase):
                 self.assertEqual(self.observe(response=response), '')
                 self.assertEqual(self.rows(), [])
 
+    def test_normalized_volatile_text_keeps_one_streak(self):
+        outputs = (
+            'FAILED tests/test_x.py::test_a - AssertionError\n[ 42%] 1 failed in 0.51s (0:00:03) at 0x7f3a9c0d1e20\n'
+            '2026-11-23T14:22:56.7392417Z tmp /tmp/pytest-of-root/pytest-12/test_a0/data\n',
+            'FAILED tests/test_x.py::test_a - AssertionError\n[ 57%] 1 failed in 0.49s (0:00:04) at 0x55d0c2a1b3f0\n'
+            '2026-11-23 15:01:02 tmp /tmp/pytest-of-root/pytest-13/test_a0/data\n',
+            'FAILED tests/test_x.py::test_a - AssertionError\n[100%] 1 failed in 12.3 seconds (0:01:31) at 0x7fff0000aaaa\n'
+            '2026-11-24T01:00:00Z tmp /tmp/pytest-of-root/pytest-14/test_a0/data\n',
+        )
+        for number, output in enumerate(outputs, 1):
+            note = self.observe(number, response={'exit_code': 1, 'output': output})
+        self.assertIn('3 identical', note)
+        self.assertIn('progress-inspect', self.refuse())
+
+    def test_normalized_volatile_text_keeps_different_failures_apart(self):
+        self.observe(1, response={'exit_code': 1, 'output': 'FAILED tests/test_x.py::test_a in 0.5s'})
+        self.observe(2, response={'exit_code': 1, 'output': 'FAILED tests/test_x.py::test_b in 0.5s'})
+        self.observe(3, response={'exit_code': 1, 'output': 'FAILED tests/test_x.py::test_a in 0.5s'})
+        self.assertEqual(self.rows()[0]['count'], 1)
+        self.assertIsNone(self.refuse())
+        self.assertEqual(progress.normalize_output('expected 3 got 4 in 7s'), 'expected 3 got 4 in <duration>')
+        self.assertNotEqual(progress.normalize_output('line 41'), progress.normalize_output('line 42'))
+
     def test_exit_code_aliases_are_explicit_completed_results(self):
         for number, key in enumerate(('exit_code', 'exitCode', 'returncode'), 1):
             self.observe(number, response={key: 2, 'stderr': 'same compiler failure'})
@@ -442,7 +465,8 @@ class ProgressHookTests(unittest.TestCase):
                 results, stderr = [], io.StringIO()
                 with patch.object(progress, 'refusal', side_effect=RuntimeError('PRIVATE-OBSERVER')), \
                      patch.object(sys, 'stderr', stderr), \
-                     patch.dict(pre['main'].__globals__, {'read_payload': lambda: {**payload, 'tool_input': {'command': command}}, 'emit': results.append}):
+                     patch.object(sys, 'stdin', io.StringIO(json.dumps({**payload, 'tool_input': {'command': command}}))), \
+                     patch.dict(pre['main'].__globals__, {'emit': results.append}):
                     pre['main']()
                 self.assertEqual(results[-1]['decision'], decision, results[-1])
                 self.assertNotIn('PRIVATE', str(results) + stderr.getvalue())

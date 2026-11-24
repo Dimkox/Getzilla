@@ -24,7 +24,7 @@ class CommitMetadataBounds(unittest.TestCase):
             commit = b'tree ' + b'c' * 40 + b'\n\n' + b'm' * 103000
             pin = hashlib.sha1(b'commit ' + str(len(commit)).encode() + b'\0' + commit, usedforsecurity=False).hexdigest()
 
-            def transport(command, **kwargs):
+            def transport(root, command, **kwargs):
                 if 'rev-parse' in command:
                     output = str(root).encode() + b'\n'
                 elif 'commit' in command:
@@ -37,7 +37,7 @@ class CommitMetadataBounds(unittest.TestCase):
                     raise ArchitectureError('bounded output exceeded', code='limit')
                 return 0, output, b''
 
-            with mock.patch.object(pinned, '_run_capped', side_effect=transport):
+            with mock.patch.object(pinned, 'run_git_read', side_effect=transport):
                 result = pinned.read_pinned_tree(root, pin)
             self.assertEqual(result.files, (('skills/example/SKILL.md', content),))
 

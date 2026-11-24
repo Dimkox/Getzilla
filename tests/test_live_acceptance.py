@@ -18,9 +18,33 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / '.getzilla'), str(ROOT)]
 
+from getzilla import live_evidence
+
+
+class NestedSourceInventoryTests(unittest.TestCase):
+    def test_source_inventory_is_relative_to_selected_subtree(self):
+        import hashlib
+        from getzilla.live_contracts import source_inventory
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw)/'.getzilla/runtime/worktrees/owned'
+            source=root/'trust-ci/src/app.py'
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b'VALUE=1\n')
+            omitted=root/'trust-ci/runtime/private.py'
+            omitted.parent.mkdir()
+            omitted.write_bytes(b'private runtime')
+            self.assertEqual(source_inventory(root,'trust-ci'),
+                {'trust-ci/src/app.py':hashlib.sha256(source.read_bytes()).hexdigest()})
+            (root/'trust-ci/src/link.py').symlink_to(source)
+            with self.assertRaisesRegex(ValueError,'refuses links'):
+                source_inventory(root,'trust-ci')
+
 
 class LiveSourceTests(unittest.TestCase):
     def setUp(self):
+        # This class owns the image-observation port; exact image proof has its own controls.
+        self.enterContext(patch.object(self.module(), 'runtime_image_id',
+            side_effect=lambda _root, pin: pin['image_id']))
         for target in ('subprocess.Popen', 'socket.socket', 'socket.create_connection'):
             self.enterContext(patch(target, side_effect=AssertionError('unmocked transport forbidden')))
 
@@ -193,7 +217,7 @@ class LiveSourceTests(unittest.TestCase):
         module = self.module()
         self.assertTrue(callable(getattr(module, 'main', None)), 'live entrypoint missing')
         with tempfile.TemporaryDirectory() as raw, patch.object(module,'_run',side_effect=AssertionError('Git or transport before refusal')) as run:
-            with self.assertRaisesRegex(ValueError, 'Trust CI source'):
+            with self.assertRaisesRegex(ValueError, 'Trust CI complete source producer'):
                 module.main(['--root', raw, '--cell', 'trust-ci', '--output', str(Path(raw)/'output')])
             run.assert_not_called()
 
@@ -203,7 +227,7 @@ class LiveSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw, \
                 patch.object(module,'_run',side_effect=AssertionError('Git or transport before refusal')) as run, \
                 patch.object(resources,'OwnedDocker',side_effect=AssertionError('Allocation before refusal')) as owner:
-            with self.assertRaisesRegex(ValueError,'Trust CI source'):
+            with self.assertRaisesRegex(ValueError,'Trust CI complete source producer'):
                 try:
                     module._trust_ci(Path(raw),Path(raw),dict(self.binding(),cell='trust-ci'))
                 except KeyError:
@@ -224,6 +248,13 @@ class FactorySuiteGuardTests(unittest.TestCase):
         from unittest.mock import MagicMock
         from urllib.parse import urlsplit
         import os
+
+        def owned_image(root, pin):
+            self.assertEqual(root, ROOT)
+            self.assertEqual(pin, {'reference': PIN, 'image_id': IMAGE_ID})
+            return IMAGE_ID
+
+        self.enterContext(patch('getzilla.live_acceptance.runtime_image_id', side_effect=owned_image))
         cases = ('valid','missing-journal','wrong-endpoint','wrong-birth','wrong-cluster','same-container','same-cluster')
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as raw:
@@ -323,6 +354,14 @@ class ParserApplicabilityTests(unittest.TestCase):
                 target.parent.mkdir(parents=True)
                 target.write_text(ast.unparse(owned)+'\n')
                 (root/'factory/pyproject.toml').write_bytes(metadata)
+                owned_python=root/'owned-venv/bin/python3'
+                owned_python.parent.mkdir(parents=True)
+                owned_python.write_bytes(b'owned interpreter fixture, never executed')
+                wrong_alias=owned_python.with_name('python')
+                wrong_venv=root/'other-venv/bin/python3'
+                wrong_venv.parent.mkdir(parents=True)
+                for other in (wrong_alias,wrong_venv):
+                    other.hardlink_to(owned_python)
                 namespace=types.ModuleType('factory.tests.test_landing_pdf_worker')
                 namespace.__file__=str(target)
                 namespace.__dict__.update(unittest=unittest,CHILD_PYPDF_VERSION=version,owned_executed=[])
@@ -335,13 +374,17 @@ class ParserApplicabilityTests(unittest.TestCase):
                     return ProcessResult(command,0,stdout=json.dumps({'pypdf_version':version}))
                 with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
                         patch('socket.socket.connect',side_effect=AssertionError('unmocked network forbidden')), \
-                        patch.object(module,'execute',side_effect=probe), \
+                        patch.object(live_evidence,'execute',side_effect=probe), \
                         patch.dict(sys.modules,{namespace.__name__:namespace}):
-                    observation=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                    observation=module.observe_parser_applicability(root,binding,python=owned_python)
                     report=module.record_suite(suite,expected_ids=expected,required_ids=expected,loader_errors=(),
                         binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
-                    final=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                    final=module.observe_parser_applicability(root,binding,python=owned_python)
                     self.assertTrue(module.accepted_suite(report,binding,parser_observation=final))
+                    for other in (wrong_alias,wrong_venv):
+                        mismatched=module.observe_parser_applicability(root,binding,python=other)
+                        self.assertEqual(mismatched.data['python_identity'],final.data['python_identity'])
+                        self.assertFalse(module.accepted_suite(report,binding,parser_observation=mismatched),str(other))
                     self.assertEqual(len(report['expected_ids']),7)
                     self.assertEqual(len(report['started']),7)
                     self.assertEqual(len(report['executed']),actual)
@@ -360,6 +403,10 @@ class ParserApplicabilityTests(unittest.TestCase):
                         changed=copy.deepcopy(report)
                         changed['applicability']['observations'][1][dimension]=value
                         self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final),dimension)
+                    for identity in ('named','target'):
+                        changed=copy.deepcopy(report)
+                        changed['applicability']['observations'][1]['python_identity'][identity][1]+=1
+                        self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final),identity)
                     changed=copy.deepcopy(report)
                     changed['applicability']['policy']['canonical_policy_sha256']='0'*64
                     self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
@@ -371,13 +418,13 @@ class ParserApplicabilityTests(unittest.TestCase):
                             ProcessResult(['owned'],0,stdout=''),ProcessResult(['owned'],0,stdout='{}'),
                             ProcessResult(['owned'],0,stdout='{"pypdf_version":"foreign"}'),
                             ProcessResult(['owned'],0,stdout='{"pypdf_version":null}',cleanup_metadata=CleanupMetadata(unavailable=True))):
-                        with patch.object(module,'execute',return_value=invalid),self.assertRaises(ValueError):
-                            module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                        with patch.object(live_evidence,'execute',return_value=invalid),self.assertRaises(ValueError):
+                            module.observe_parser_applicability(root,binding,python=owned_python)
                     if version is None:
                         with self.assertRaises(ValueError):
-                            module.observe_parser_applicability(root,binding,python=Path(sys.executable),required=True)
+                            module.observe_parser_applicability(root,binding,python=owned_python,required=True)
                     else:
-                        required=module.observe_parser_applicability(root,binding,python=Path(sys.executable),required=True)
+                        required=module.observe_parser_applicability(root,binding,python=owned_python,required=True)
                         self.assertTrue(required.policy['required_parser'])
                     applicable=getattr(namespace,'PdfWorkerWithoutParser' if version is None else 'PdfWorkerWithPinnedParser')
                     method=next(name for name in vars(applicable) if name.startswith('test_'))
@@ -389,14 +436,14 @@ class ParserApplicabilityTests(unittest.TestCase):
                         repeated=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(namespace,cls.name)) for cls in classes)
                         refused=module.record_suite(repeated,expected_ids=expected,required_ids=expected,loader_errors=(),
                             binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
-                        latest=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                        latest=module.observe_parser_applicability(root,binding,python=owned_python)
                         self.assertFalse(module.accepted_suite(refused,binding,parser_observation=latest),'after-body module fact conflict')
                     namespace.CHILD_PYPDF_VERSION=version
                     with patch.object(applicable,method,side_effect=RuntimeError('owned body did not return')):
                         repeated=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(namespace,cls.name)) for cls in classes)
                         refused=module.record_suite(repeated,expected_ids=expected,required_ids=expected,loader_errors=(),
                             binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
-                        latest=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                        latest=module.observe_parser_applicability(root,binding,python=owned_python)
                         self.assertFalse(module.accepted_suite(refused,binding,parser_observation=latest))
 
     def test_required_database_skip_and_forged_allowance_never_become_na(self):
@@ -599,6 +646,13 @@ class FactoryControllerTests(unittest.TestCase):
         module=importlib.import_module('getzilla.live_acceptance')
         with tempfile.TemporaryDirectory() as raw:
             root=Path(raw)
+            records=[]
+            token=object()
+            def recorded(output,cell,binding,*,parser_observation):
+                self.assertEqual((output,cell,binding),(root,'factory',LiveSourceTests.binding(self)))
+                self.assertIs(parser_observation,token)
+                self.assertTrue(any(root.glob('factory-live-venv-*')))
+                records.append('intermediate')
             native=module._remove_factory_environment
             def observed(_command,**kwargs):
                 path=Path(kwargs['environment']['UV_PROJECT_ENVIRONMENT'])
@@ -613,11 +667,14 @@ class FactoryControllerTests(unittest.TestCase):
             with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
                     patch('socket.socket',side_effect=AssertionError('unmocked network forbidden')), \
                     patch.object(module,'observe',side_effect=observed), \
-                    patch.object(module,'observe_parser_applicability',return_value=object()), \
+                    patch.object(module,'observe_parser_applicability',return_value=token), \
+                    patch.object(module,'_record_controller',side_effect=recorded), \
                     patch.object(module,'validate_components',return_value=True), \
                     patch.object(module,'_remove_factory_environment',side_effect=swapped):
                 result=module._run_factory_cell(['owned'],root=root,output=root,environment={},
                     binding=LiveSourceTests.binding(self),timeout=1)
+            self.assertEqual(records,['intermediate'])
+            self.assertFalse((root/'controller-validation.json').exists())
             self.assertEqual(result['status'],'fail')
             self.assertEqual(result['venv_cleanup_outcome'],'unknown')
             self.assertEqual([p.read_text() for p in root.rglob('replacement')],['replacement'])
@@ -639,12 +696,12 @@ class FactoryControllerTests(unittest.TestCase):
                     self.assertTrue(path.is_dir())
                     paths.append(path)
                     (path/'bin').mkdir()
-                    (path/'bin/python').write_text('owned interpreter fixture, never executed')
+                    (path/'bin/python3').write_text('owned interpreter fixture, never executed')
                     order.append('observe')
                     return {'status':'pass' if primary=='passed' else 'fail','primary_outcome':primary,
                             'child_exit_confirmed':confirmed,'python':'/foreign/report-selected-python'}
                 def measured(_root,_binding,*,python,**kwargs):
-                    self.assertEqual(python,paths[0]/('Scripts/python.exe' if __import__('os').name=='nt' else 'bin/python'))
+                    self.assertEqual(python,paths[0]/('Scripts/python.exe' if __import__('os').name=='nt' else 'bin/python3'))
                     self.assertTrue(paths[0].is_dir())
                     order.append('final-measurement')
                     self.assertTrue(kwargs['required'])
@@ -654,6 +711,12 @@ class FactoryControllerTests(unittest.TestCase):
                     self.assertTrue(paths[0].is_dir())
                     order.append('validate')
                     return True
+                def recorded(output,cell,binding,*,parser_observation):
+                    self.assertEqual((output,cell,binding),(root,'factory',LiveSourceTests.binding(self)))
+                    self.assertIs(parser_observation,token)
+                    self.assertTrue(paths[0].is_dir())
+                    self.assertEqual(order[-1],'validate')
+                    order.append('intermediate-record')
                 native_remove=module._remove_factory_environment
                 def removed(path):
                     order.append('cleanup')
@@ -665,6 +728,7 @@ class FactoryControllerTests(unittest.TestCase):
                         patch.object(module,'observe',side_effect=observed), \
                         patch.object(module,'observe_parser_applicability',side_effect=measured), \
                         patch.object(module,'validate_components',side_effect=validated), \
+                        patch.object(module,'_record_controller',side_effect=recorded), \
                         patch.object(module,'_remove_factory_environment',side_effect=removed):
                     result=module._run_factory_cell(['owned'],root=root,output=root,environment={},
                         binding=LiveSourceTests.binding(self),timeout=1,required_parser=True)
@@ -673,7 +737,7 @@ class FactoryControllerTests(unittest.TestCase):
                 self.assertEqual(result['status'],'pass' if primary=='passed' and confirmed and not cleanup_failure else 'fail')
                 self.assertEqual(paths[0].exists(),cleanup_failure or not confirmed)
                 if primary=='passed' and confirmed:
-                    self.assertEqual(order,['observe','final-measurement','validate','cleanup'])
+                    self.assertEqual(order,['observe','final-measurement','validate','intermediate-record','cleanup'])
                 else:
                     self.assertNotIn('validate',order)
 

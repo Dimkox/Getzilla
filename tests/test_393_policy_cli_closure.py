@@ -19,25 +19,33 @@ class PolicyCliClosure(unittest.TestCase):
     def test_actual_loader_loop_hashes_security_cli_source(self):
         # Named static source read before the no-I/O AST boundary; never import
         # or execute policy_binding/current_required_plan/the implementation.
-        raw = (Path(__file__).resolve().parents[1] / '.getzilla/getzilla/verification_plan.py').read_bytes()
+        engine = Path(__file__).resolve().parents[1] / '.getzilla/getzilla'
+        plan = (engine / 'verification_plan.py').read_bytes()
+        provider = (engine / 'verification_policy_source.py').read_bytes()
         global ACTIVE
         ACTIVE = True
         try:
-            tree = ast.parse(raw)
-            function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'policy_binding')
-            loops = [node for node in function.body if isinstance(node, ast.For) and isinstance(node.iter, ast.Tuple)]
-            self.assertEqual(len(loops), 1)
-            loop = loops[0]
-            names = ast.literal_eval(loop.iter)
-            self.assertEqual(names.count('security_cli.py'), 1, 'shared CLI policy helper must be in actual implementation closure')
+            plan_function = next(node for node in ast.parse(plan).body
+                                 if isinstance(node, ast.FunctionDef) and node.name == 'policy_binding')
+            self.assertIn('implementation = implementation_source_binding()', ast.unparse(plan_function))
+            function = next(node for node in ast.parse(provider).body
+                            if isinstance(node, ast.FunctionDef) and node.name == 'implementation_source_binding')
+            loops = [node for node in function.body if isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+                     and isinstance(node.iter, ast.Tuple) and all(isinstance(item, ast.Constant)
+                     and isinstance(item.value, str) for item in node.iter.elts)]
+            names = [item.value for loop in loops for item in loop.iter.elts]
+            self.assertEqual(names.count('security_cli.py'), 1)
             self.assertEqual(len(names), len(set(names)))
+            loop = next(loop for loop in loops if 'security_cli.py' in ast.literal_eval(loop.iter))
             self.assertIsInstance(loop.target, ast.Name)
             target = loop.target.id
             assignments = [node for node in loop.body if isinstance(node, ast.Assign)]
             imports = [node for node in assignments if isinstance(node.value, ast.Call)
                        and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == 'import_module']
             self.assertEqual(len(imports), 1)
-            self.assertIn(target, {node.id for node in ast.walk(imports[0].value) if isinstance(node, ast.Name)})
+            derived = {node.targets[0].id for node in assignments if isinstance(node.targets[0], ast.Name)
+                       and any(isinstance(value, ast.Name) and value.id == target for value in ast.walk(node.value))}
+            self.assertTrue(derived & {node.id for node in ast.walk(imports[0].value) if isinstance(node, ast.Name)})
             module = imports[0].targets[0].id
             stores = [node for node in assignments if isinstance(node.targets[0], ast.Subscript)
                       and isinstance(node.targets[0].value, ast.Name) and node.targets[0].value.id == 'implementation']

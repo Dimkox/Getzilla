@@ -15,7 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 class CheckerAcquisitionArchitectureTests(unittest.TestCase):
     SOURCES = ('.getzilla/getzilla/security_acquisition.py',
                '.getzilla/getzilla/security_license_acquisition.py',
-               '.getzilla/getzilla/security_osv_snapshot.py')
+               '.getzilla/getzilla/security_osv_snapshot.py',
+               '.getzilla/getzilla/security_action_inputs.py',
+               '.getzilla/getzilla/security_action_npm_fetch.py',
+               '.getzilla/getzilla/security_release_tool_inputs.py')
 
     def test_only_optional_acquisition_modules_own_declared_public_endpoints(self):
         from getzilla.architecture import load_architecture
@@ -35,7 +38,7 @@ class CheckerAcquisitionArchitectureTests(unittest.TestCase):
         edges = [edge for edge in snapshot.system['edges'] if edge['from'] == owner['id']]
         self.assertEqual({edge['to'] for edge in edges}, {
             'NODE-OSV-API', 'NODE-OSV-ADVISORY-BUCKET', 'NODE-GITHUB',
-            'NODE-CISA-SECURITY-FEED', 'NODE-EPSS-SECURITY-FEED', 'NODE-PYPI-REGISTRY'})
+            'NODE-CISA-SECURITY-FEED', 'NODE-EPSS-SECURITY-FEED', 'NODE-PYPI-REGISTRY', 'NODE-NPM-REGISTRY'})
         for edge in edges:
             self.assertEqual((edge['protocol'], edge['authentication']), ('https', 'none'))
             self.assertEqual(edge['failure_behavior']['max_retries'], 0)

@@ -308,7 +308,7 @@ class CiAuditTests(unittest.TestCase):
             with mock.patch.dict(os.environ, env, clear=True):
                 yield private
 
-    def test_receipt_keeps_global_and_system_ignored_notes_but_not_source_changes(self):
+    def test_receipt_binds_untracked_changes_despite_global_and_system_excludes(self):
         from getzilla.util import tree_fingerprint
         for source in ('global', 'system'):
             with self.subTest(source=source), self.git_excludes('editor-note.fixture', source):
@@ -319,13 +319,14 @@ class CiAuditTests(unittest.TestCase):
                     'kind': 'verification', 'status': 'pass', 'tree_fingerprint': expected}))
                 self.assertEqual(mod.build(repo.root, repo.base)['release_decision'], 'eligible')
                 repo.write('editor-note.fixture', 'private ignored editor state\n')
-                self.assertEqual(tree_fingerprint(repo.root), expected)
+                with_note = tree_fingerprint(repo.root)
+                self.assertNotEqual(with_note, expected)
                 bundle = mod.build(repo.root, repo.base)
-                self.assertEqual(bundle['tree_fingerprint'], expected)
-                self.assertEqual(bundle['release_decision'], 'eligible', bundle['reasons'])
+                self.assertEqual(bundle['tree_fingerprint'], with_note)
+                self.assertEqual(bundle['release_decision'], 'blocked')
                 repo.write('untracked-source.py', 'VALUE = 1\n')
                 changed = tree_fingerprint(repo.root)
-                self.assertNotEqual(changed, expected)
+                self.assertNotEqual(changed, with_note)
                 bundle = mod.build(repo.root, repo.base)
                 self.assertEqual(bundle['tree_fingerprint'], changed)
                 self.assertEqual(bundle['release_decision'], 'blocked')

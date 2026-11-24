@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.architecture_diff import select_architecture_comparison_base
 from getzilla.architecture_diff import ArchitectureError, diff_architecture
-from getzilla import architecture_diff
+from getzilla import architecture_diff, verification_policy_source
 from getzilla.architecture import load_architecture
 from getzilla.architecture_fitness import _change_separation
 from getzilla import receipts, verification_plan
@@ -390,6 +390,7 @@ class DerivedComparisonTests(unittest.TestCase):
         sdk.mkdir(mode=0o700)
         (sdk / 'config').mkdir()
         (sdk / 'config/stacks.json').write_text('{}\n')
+        (sdk / 'config/toolchain.json').write_text('{}\n', encoding='utf-8', newline='\n')
         def owned(name, package):
             path = sdk / (name.lstrip('.') + '.py')
             if not path.exists():
@@ -400,7 +401,7 @@ class DerivedComparisonTests(unittest.TestCase):
             module.__loader__ = module.__spec__.loader
             return module
         library = SimpleNamespace(import_module=owned, machinery=importlib.machinery, util=importlib.util)
-        patches.enter_context(patch.object(verification_plan, 'importlib', library))
+        patches.enter_context(patch.object(verification_policy_source, 'importlib', library))
         patches.enter_context(patch.object(getzilla, 'STACK_DIR', sdk))
         self.policy_sdk = sdk
         plan = verification_plan.current_required_plan(self.root, mode='pr')
@@ -424,7 +425,8 @@ class DerivedComparisonTests(unittest.TestCase):
                      'summary': 'owned bounded provider observation', 'details': details}
             verification_plan.bind_result(plan, check)
             checks.append(check)
-        self.report = {'mode': 'pr', 'profiles': ['base'], 'status': 'pass', 'terminal_state': 'completed',
+        self.report = {'mode': 'pr', 'profiles': self.route.get('quality_profiles', ['base']),
+                       'requested_profiles': None, 'status': 'pass', 'terminal_state': 'completed',
                        'required_plan': plan, 'checks': checks}
         self.assertEqual(verification_plan.report_gaps(self.root, self.report), [])
         self.assertEqual(self.validated_sources, set(self.sources))
@@ -461,6 +463,32 @@ class DerivedComparisonTests(unittest.TestCase):
             with patch.object(verification_plan, 'current_required_plan', side_effect=AssertionError('recursive compiler')):
                 self.assertEqual(receipts._qualified_architecture_comparison(self.root, self.route, self.head).comparison_base_sha,
                                  self.target)
+
+    def test_accepted_comparison_preserves_inferred_profile_provenance(self):
+        self.route['quality_profiles'] = ['base', 'frontend']
+        proof = self.qualification_record()
+        self.assertFalse((self.root / 'package.json').exists())
+        self.assertIsNone(proof['details']['requested_profiles'])
+        self.assertEqual(proof['details']['profiles'], ['base', 'frontend'])
+        self.assertNotIn('package-json', {row['check_id'] for row in proof['details']['required_plan']['obligations']})
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        compile_plan = verification_plan._compile_required_plan
+        requested = []
+        def observed(*args, **kwargs):
+            requested.append(kwargs['profiles'])
+            return compile_plan(*args, **kwargs)
+        with patch.object(verification_plan, '_compile_required_plan', side_effect=observed):
+            selected = receipts._qualified_architecture_comparison(self.root, self.route, self.head)
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.comparison_base_sha, self.target)
+        self.assertEqual(requested, [None, None])
+        explicit = verification_plan._native_obligations(
+            self.root, 'pr', self.route, {}, files=[], profiles=['frontend'], bases=[], documents=None)
+        self.assertIn('package-json', {row['check_id'] for row in explicit if row['applicability'] == 'required'})
+        changed = copy.deepcopy(proof)
+        changed['details']['requested_profiles'] = ['frontend']
+        self.publish_qualification(changed)
+        self.assertIsNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
 
     def publish_qualification(self, proof):
         publication = receipts._publish_verification_report(self.root, 'owned393', proof, None)
@@ -785,6 +813,7 @@ class OwnedPolicyProviderTests(unittest.TestCase):
         sdk.mkdir(mode=0o700)
         (sdk / 'config').mkdir()
         (sdk / 'config/stacks.json').write_text('{}\n')
+        (sdk / 'config/toolchain.json').write_text('{}\n', encoding='utf-8', newline='\n')
         imported = []
         def owned(name, package):
             imported.append(name)
@@ -799,7 +828,7 @@ class OwnedPolicyProviderTests(unittest.TestCase):
         provider = sdk / 'process_limits.py'
         provider.write_text('OUTPUT_LIMIT = 1024\n')
         library = SimpleNamespace(import_module=owned, machinery=importlib.machinery, util=importlib.util)
-        with patch.object(verification_plan, 'importlib', library), patch.object(getzilla, 'STACK_DIR', sdk):
+        with patch.object(verification_policy_source, 'importlib', library), patch.object(getzilla, 'STACK_DIR', sdk):
             first = verification_plan.policy_binding(root)
             provider.write_text('OUTPUT_LIMIT = 512\n')
             second = verification_plan.policy_binding(root)

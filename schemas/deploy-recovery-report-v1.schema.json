@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getzilla.dev/schemas/deploy-recovery-report-v1.schema.json",
+  "title": "Public deployment recovery fixture observations; never operational authority",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile", "state", "algorithm_revision", "stage", "attempt_sha256", "source_binding_sha256", "operator_identity_sha256", "policy_sha256", "journal_sha256", "package", "registration", "admission", "recovery", "provenance", "connection", "delivery", "fixture_effect", "operational_grant", "dispatch_permitted", "dev_verified", "missing_condition", "diagnostics"],
+  "$defs": {
+    "optional_digest": {
+      "anyOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[0-9a-f]{64}$", "minLength": 64, "maxLength": 64}
+      ]
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "getzilla-deploy-recovery-report-v1"},
+    "profile": {"const": "public_fixture_only"},
+    "state": {"enum": ["initialized", "review_only", "fixture_verified", "fixture_rolled_back", "blocked", "unknown"]},
+    "algorithm_revision": {"const": "getzilla-deploy-recovery-journal-v1"},
+    "stage": {"enum": ["initialization", "inspection", "preflight", "lease", "effect", "verification", "rollback"]},
+    "attempt_sha256": {"$ref": "#/$defs/optional_digest"},
+    "source_binding_sha256": {"$ref": "#/$defs/optional_digest"},
+    "operator_identity_sha256": {"$ref": "#/$defs/optional_digest"},
+    "policy_sha256": {"$ref": "#/$defs/optional_digest"},
+    "journal_sha256": {"$ref": "#/$defs/optional_digest"},
+    "package": {"enum": ["matched", "not_evaluated"]},
+    "registration": {"enum": ["matched", "not_evaluated"]},
+    "admission": {"enum": ["fixture_only", "unavailable"]},
+    "recovery": {"enum": ["unavailable", "prepared", "effect_pending", "applied", "verified", "rollback_pending", "rolled_back", "unknown"]},
+    "provenance": {"const": "unverified"},
+    "connection": {"const": "not_attempted"},
+    "delivery": {"const": "not_attempted"},
+    "fixture_effect": {"enum": ["verified", "rolled_back", "not_verified"]},
+    "operational_grant": {"const": false},
+    "dispatch_permitted": {"const": false},
+    "dev_verified": {"const": false},
+    "missing_condition": {
+      "enum": ["coordinated_legacy_migration", "wait_for_shared_lease_then_recheck", "qualified_outcome_inspection", "preserve_state_and_inspect_journal", "qualify_exact_real_adapter_or_initialize_empty_public_fixture", "review_current_fixture_inputs", "inspect_target_without_overwrite", "review_exact_fixed_diagnostic"]
+    },
+    "diagnostics": {
+      "type": "array", "minItems": 1, "maxItems": 1,
+      "items": {"enum": ["INPUT_INVALID", "PATH_UNSAFE", "ROOT_UNSAFE", "ROOT_CHANGED", "MODE_UNSUPPORTED", "LEGACY_OWNER_UNKNOWN", "LEASE_BUSY", "LEASE_CHANGED", "FILE_UNSAFE", "FILE_CHANGED", "JOURNAL_INVALID", "JOURNAL_INCOMPLETE", "JOURNAL_LIMIT", "JOURNAL_IO", "READ_ONLY", "INTENT_CONFLICT", "INVALID_TRANSITION", "TARGET_CHANGED", "ATTEMPT_LIMIT", "OUTCOME_UNKNOWN", "CLOCK_UNCERTAIN", "BUDGET_EXCEEDED", "INTERNAL_ERROR", "ROOT_NOT_EMPTY", "PROFILE_UNAVAILABLE", "PROFILE_CHANGED", "PREFLIGHT_BLOCKED", "FIXTURE_INITIALIZED", "FIXTURE_ONLY", "FIXTURE_VERIFIED", "FIXTURE_ROLLED_BACK", "REVIEW_ONLY"]}
+    }
+  }
+}

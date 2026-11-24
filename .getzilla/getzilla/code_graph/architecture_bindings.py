@@ -60,26 +60,33 @@ def _match_length(path: str, declared: str) -> int | None:
     return None
 
 
-def bind_architecture(graph: GraphGeneration, architecture_model: Any) -> ArchitectureBindings:
+def bind_paths(paths: Any, architecture_model: Any) -> tuple[dict[str, str | None], dict[str, tuple[str, ...]]]:
+    """Share the existing longest declared path rule with committed-history evidence."""
     system, rules = _model(architecture_model)
     files: dict[str, str | None] = {}
     ambiguous: dict[str, tuple[str, ...]] = {}
-    for node in graph.files:
+    for path in paths:
         best: dict[int, set[str]] = {}
         for declared_node in system.get('nodes', []):
             for declared in declared_node.get('repository_paths', []):
-                length = _match_length(node.path, declared)
+                length = _match_length(path, declared)
                 if length is not None:
                     best.setdefault(length, set()).add(declared_node['id'])
         if not best:
-            files[node.path] = None
+            files[path] = None
             continue
         winners = best[max(best)]
         if len(winners) == 1:
-            files[node.path] = next(iter(winners))
+            files[path] = next(iter(winners))
         else:
-            files[node.path] = None
-            ambiguous[node.path] = tuple(sorted(winners))
+            files[path] = None
+            ambiguous[path] = tuple(sorted(winners))
+    return files, ambiguous
+
+
+def bind_architecture(graph: GraphGeneration, architecture_model: Any) -> ArchitectureBindings:
+    system, rules = _model(architecture_model)
+    files, ambiguous = bind_paths((node.path for node in graph.files), architecture_model)
     return ArchitectureBindings(system.get('architecture_id', ''), architecture_digest(system, rules),
                                 graph.generation_id, files, ambiguous)
 

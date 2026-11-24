@@ -54,8 +54,8 @@ class AnthropicLandingExecutor(OpenAICompatibleLandingExecutor):
             "output_config": {"format": {"type": "json_schema", "schema": structured_schema(self.provider_id)}},
         }
 
-    def _request_headers(self):
-        return {"x-api-key": self._api_key, "anthropic-version": "2023-06-01",
+    def _request_headers(self, api_key):
+        return {"x-api-key": api_key, "anthropic-version": "2023-06-01",
                 "Content-Type": "application/json", "Accept": "application/json", "Accept-Encoding": "identity"}
 
     def _decode_response(self, raw, started):
@@ -86,9 +86,9 @@ class AnthropicLandingExecutor(OpenAICompatibleLandingExecutor):
         return replace(result, response_digest=hashlib.sha256(raw).hexdigest())
 
 
-def landing_provider_executor(profile, *, api_key, transport=None):
+def landing_provider_executor(profile, *, api_key=None, credential_loader=None, transport=None, admission=None):
     executor = (AnthropicLandingExecutor if profile.provider_id == "anthropic"
                 else StructuredChatLandingExecutor if profile.provider_id in {"openai", "openrouter"}
                 else OpenAICompatibleLandingExecutor)
     return executor(provider_id=profile.provider_id, base_url=profile.base_url, model_id=profile.model_id,
-                    profile=profile, api_key=api_key, transport=transport)
+                    profile=profile, api_key=api_key, credential_loader=credential_loader, transport=transport, admission=admission)

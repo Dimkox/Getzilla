@@ -35,10 +35,11 @@ ORDINARY = (
 )
 
 
-def decision(root: Path, tool: str, tool_input: dict) -> str:
+def decision(root: Path, tool: str, tool_input: dict, *, bootstrap=False) -> str:
     code, data, stderr = run_hook(root, 'pre_tool_use.py', {'cwd': str(root), 'session_id': 'degraded',
                                                              'tool_name': tool, 'tool_input': tool_input})
-    assert code == 0, stderr
+    verdict = data.get('decision') or (data.get('hookSpecificOutput') or {}).get('permissionDecision') or 'allow'
+    assert code == (2 if bootstrap and verdict == 'deny' else 0), stderr
     return data.get('decision') or (data.get('hookSpecificOutput') or {}).get('permissionDecision') or 'allow'
 
 
@@ -72,10 +73,10 @@ class DegradedFailClosedTests(unittest.TestCase):
             (root / breakage).write_text(content, encoding='utf-8')
             for tool, tool_input in PROTECTED:
                 with self.subTest(breakage=breakage, tool=tool, tool_input=tool_input):
-                    self.assertEqual(decision(root, tool, tool_input), 'deny')
+                    self.assertEqual(decision(root, tool, tool_input, bootstrap=breakage.endswith('/fsx.py')), 'deny')
             for tool, tool_input in ORDINARY:
                 with self.subTest(breakage=breakage, tool=tool, tool_input=tool_input):
-                    self.assertEqual(decision(root, tool, tool_input), 'allow')
+                    self.assertEqual(decision(root, tool, tool_input, bootstrap=breakage.endswith('/fsx.py')), 'allow')
             events = [json.loads(line) for line in
                       (root / '.getzilla/runtime/hook-events.jsonl').read_text(encoding='utf-8').splitlines()]
             self.assertTrue(events and all(event['kind'] == 'HOOK_DEGRADED' for event in events))

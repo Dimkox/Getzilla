@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import sys
 
-if __name__ == '__main__' and sys.argv[1:3] == ['deploy', 'preflight']:
-    sys.dont_write_bytecode = True
+sys.dont_write_bytecode = True
 
 import os
 import subprocess
@@ -23,10 +22,14 @@ from getzilla.interpreter import project_python  # noqa: E402
 from getzilla import verification_journal as diagnostics  # noqa: E402
 
 COMMANDS: dict[str, tuple[str, str]] = {
+    'execution': ('getzilla_execution.py', 'owned bounded local execution: start, get, wait, cancel'),
+    'hook': ('getzilla_hook.py', 'run one native project hook with unchanged stdin and exit status'),
+    'reverse': ('getzilla_reverse.py', 'optional static ELF interface and dependency reconstruction'),
     'search': ('getzilla_search_gateway.py', 'optional bounded universal web search, HTTP and MCP stdio'),
     'design-reference': ('getzilla_design_reference.py', 'explicit optional local JSON/CSS token reference'),
     'duplicates': ('getzilla_duplicates.py', 'read-only source duplication analysis (optional jscpd)'),
     'doctor': ('getzilla_doctor.py', 'check this machine and the repository'),
+    'install-managed': ('getzilla_install_managed.py', 'resolve, install and verify current selected Getzilla-managed tools'),
     'cpu': ('getzilla_startup_cpu.py', 'startup CPU step zero: measure and record capacity'),
     'par': ('getzilla_par.py', 'run independent commands in parallel on the verified CPUs'),
     'route': ('getzilla_route.py', 'create or inspect the adaptive task route'),
@@ -53,6 +56,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'git': ('getzilla_git.py', 'Git platform capabilities and offline remote identity'),
     'entire': ('getzilla_entire.py', 'optional Entire transport and Trails (extra:entire)'),
     'trust-ci': ('getzilla_trust_ci.py', 'set up and check the self-hosted Trust CI host (init, status)'),
+    'trust': ('getzilla_trust.py', 'audit existing public source trust declarations offline'),
     'deploy': ('getzilla_deploy.py', 'prepare publish commands or observe a local package with preflight'),
     'harness': ('getzilla_harness.py', 'check or regenerate the selected agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
@@ -64,7 +68,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'risk-terms': ('getzilla_risk_terms.py', 'risk vocabulary language packs: check, scaffold, languages'),
     'adopt': ('adopt_existing.py', 'adopt a folder without Git into a new local workspace (Zero-Git)'),
     'branches': ('branch_lifecycle.py', 'branch retention report and guarded delete (dry-run by default)'),
-    'graph': ('getzilla_graph.py', 'Python code graph: build, status, impact, export (read-only)'),
+    'context': ('getzilla_context.py', 'optional shared source context and explicit plaintext client transport'),
+    'graph': ('getzilla_graph.py', 'Python code graph: build, status, impact, export, history (read-only)'),
     'demo': ('getzilla_demo.py', 'open the local read-only demo dashboard'),
 }
 
@@ -89,14 +94,26 @@ def script_path(name: str, cwd: Path | None = None) -> Path:
     return HOME / 'scripts' / name
 
 
+def test_cpu_reserve() -> int:
+    """CPUs `getzilla test` leaves free: the owner's n-2 reserve unless GETZILLA_TEST_CPU_RESERVE names 0-64.
+
+    A dedicated CI runner sets 0 to use all measured CPUs. Any other value keeps the default reserve.
+    """
+    value = os.environ.get('GETZILLA_TEST_CPU_RESERVE', '')
+    if value.isascii() and value.isdecimal() and len(value) <= 2 and int(value) <= 64:
+        return int(value)
+    return 2
+
+
 def test_workers() -> int:
-    """Workers for `getzilla test`: measured capacity with the n-2 reserve, else a safe fallback."""
+    """Workers for `getzilla test`: measured capacity with the CPU reserve, else a safe fallback."""
+    reserve = test_cpu_reserve()
     try:
         from getzilla.startup_cpu import measure
 
-        return max(1, int(measure(reserve=2, probe=False)['chosen_capacity']))
+        return max(1, int(measure(reserve=reserve, probe=False)['chosen_capacity']))
     except Exception:  # unsupported platform or unreadable topology: never block the tests
-        return max(1, (os.cpu_count() or 1) - 2)
+        return max(1, (os.cpu_count() or 1) - reserve)
 
 
 def run_tests(args: list[str], *, require_parallel: bool = False) -> int:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Mandatory baseline: pinned Superpowers, BMAD and Spec Kit plus security data.
+"""Mandatory baseline: current verified Superpowers, BMAD and Spec Kit plus security data.
 
   getzilla baseline status [--project DIR] [--agent NAME]   what is installed and connected (exit 1 if incomplete)
-  getzilla baseline apply  --project DIR [--agent NAME]     connect the pinned baseline to a project
+  getzilla baseline apply  --project DIR [--agent NAME]     connect the current verified baseline to a project
 
 `apply` never overwrites an existing file. Installing the user-level part is
 `scripts/getzilla_update.py --only baseline`, which the installer always runs.
@@ -12,12 +12,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.baseline import AGENTS, apply_project, detect_agent, inspect  # noqa: E402
+from getzilla.baseline import AGENTS, detect_agent, inspect
+from getzilla.current_workflows import apply_latest  # noqa: E402
 from getzilla.updater import home_dir  # noqa: E402
 
 
@@ -38,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         if not project.is_dir():
             print(json.dumps({'ok': False, 'error': f'{project} is not a directory'}))
             return 2
-        steps = apply_project(project, agent, home_dir())
+        steps = apply_latest(project, agent, home_dir())
         for step in steps:
             print(f'{step.status.upper():4} {step.component}: {step.detail}')
         return 1 if any(step.status == 'fail' for step in steps) else 0

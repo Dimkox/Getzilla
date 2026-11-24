@@ -9,15 +9,15 @@ evaluator to validate their body schema, counts and publication dates.
 Each source has one atomically replaced manifest. It names an immutable object
 by digest, never by an input path. The legacy all.zip export is not authoritative.
 
-Snapshot I/O requires POSIX directory descriptors and a physical, non-symlink
+POSIX snapshot I/O requires directory descriptors and a physical, non-symlink
 database path. The updater/runner must exclusively control this directory tree;
 directories must belong to the current UID or root and forbid group/other writes
 (only sticky ancestors, such as /tmp, may be shared).
 Descriptors cannot stop another process with the same UID or root privilege
 from renaming an already opened directory. Every operation checks held directory
-and regular-file identities before/after use. Windows path/lstat fallbacks are
-not qualified for this boundary: I/O fails explicitly, while pure validation
-and structural no-source results remain available.
+and regular-file identities before/after use. Windows uses a separate native
+held-handle store on supported local NTFS volumes, never a path/lstat fallback.
+Pure validation and structural no-source results require neither backend.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ import math
 import os
 import re
 import stat
-import uuid
+import uuid as uuid
 import zipfile
 import zlib
 from dataclasses import dataclass
@@ -44,6 +44,9 @@ MAX_PAYLOAD_BYTES = 1024 * 1024 * 1024
 MAX_MANIFEST_BYTES = 65536
 MAX_MEMBER_BYTES = 16 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 1000000
+MAX_CENTRAL_DIRECTORY_BYTES = 128 * 1024 * 1024
+MAX_STORE_READ_BYTES = 2 * MAX_PAYLOAD_BYTES + 8 * MAX_MANIFEST_BYTES
 DESCRIPTOR_IO_AVAILABLE = (
     os.name == 'posix'
     and all(hasattr(os, name) for name in ('O_DIRECTORY', 'O_NOFOLLOW', 'O_CLOEXEC', 'O_NONBLOCK'))
@@ -53,8 +56,10 @@ DESCRIPTOR_IO_AVAILABLE = (
 )
 OSV_ECOSYSTEMS = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems', 'Maven')
 OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'
+OSV_QUERY_SOURCE = 'osv-query:native'
 SOURCE_URLS = {f'osv:{ecosystem}': f'{OSV_BUCKET}/{ecosystem}/all.zip' for ecosystem in OSV_ECOSYSTEMS}
 SOURCE_URLS.update({
+    OSV_QUERY_SOURCE: 'https://api.osv.dev/v1/querybatch',
     'kev': 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json',
     'epss': 'https://epss.empiricalsecurity.com/epss_scores-current.csv.gz',
     'malicious-packages': 'https://github.com/ossf/malicious-packages',
@@ -87,6 +92,8 @@ def _source_directory(database: Path, source_id: str) -> Path:
         raise SecurityDataError(f'unsupported security source: {source_id!r}')
     if source_id.startswith('osv:'):
         return Path(database) / source_id.removeprefix('osv:')
+    if source_id == OSV_QUERY_SOURCE:
+        return Path(database) / 'queries' / 'native'
     return Path(database) / 'feeds' / source_id
 
 
@@ -102,18 +109,21 @@ def _json(data: bytes) -> dict[str, Any]:
     def invalid_constant(value):
         raise ValueError(f'nonfinite JSON value: {value}')
 
-    result = json.loads(data.decode('utf-8'), object_pairs_hook=unique, parse_constant=invalid_constant)
+    try:
+        result = json.loads(data.decode('utf-8'), object_pairs_hook=unique, parse_constant=invalid_constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError('invalid bounded snapshot JSON') from None
     if not isinstance(result, dict):
         raise ValueError('expected a JSON object')
     return result
 
 
 def osv_aliases(record: dict[str, Any]) -> list[str]:
-    """Keep strict alias admission; rejected shape diagnostics contain hashes only."""
+    """Retain exact provider strings; transport shape is not decision authority."""
     from .security_osv_diagnostics import alias_rejection
     def rejected(index=None):
         detail = alias_rejection(record, index)
-        error = SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error = SecurityDataError('OSV aliases must be an array of strings' + '; ' + json.dumps(detail, sort_keys=True))
         error.osv_alias_detail = detail
         return error
     if not isinstance(record, dict):
@@ -124,9 +134,42 @@ def osv_aliases(record: dict[str, Any]) -> list[str]:
     if not isinstance(aliases, list):
         raise rejected()
     for index, alias in enumerate(aliases):
-        if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', alias):
+        if not isinstance(alias, str):
             raise rejected(index)
     return list(aliases)
+
+
+CVE_ID = re.compile(r'CVE-[0-9]{4}-[0-9]{4,19}\Z')
+
+
+def osv_decision_ids(record: dict[str, Any]) -> list[str]:
+    """Revalidate retained raw identities before any matched lookup or waiver.
+
+    Existing non-CVE identifier syntax remains supported. Other provider text
+    stays opaque. A caller-supplied safe projection cannot hide uncertain CVEs.
+    """
+    from .security_osv_diagnostics import alias_rejection
+    aliases = osv_aliases(record)
+    if 'raw_aliases' in record and not isinstance(record['raw_aliases'], list):
+        raise SecurityDataError('OSV retained raw aliases must be an array')
+    raw = osv_aliases({'aliases': record['raw_aliases']}) if 'raw_aliases' in record else aliases
+    primary = record.get('id')
+    if not isinstance(primary, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', primary):
+        raise SecurityDataError('OSV decision primary identifier is malformed')
+    for values in ([primary], raw, aliases):
+        for index, value in enumerate(values):
+            if re.search(r'(?i)(?<![A-Za-z0-9])cve(?=[^A-Za-z]|$)', value) and not CVE_ID.fullmatch(value):
+                detail = alias_rejection({'id': primary, 'aliases': values}, index)
+                error = SecurityDataError('OSV decision identifier is malformed; ' + json.dumps(detail, sort_keys=True))
+                error.osv_alias_detail = detail
+                raise error
+    return list(dict.fromkeys(value for values in ([primary], raw) for value in values
+                              if re.fullmatch(r'[A-Za-z0-9:_.-]+', value)))
+
+
+def osv_alias_text(aliases: list[str]) -> str:
+    """Only the human projection is bounded/escaped; retained raw data is exact."""
+    return json.dumps([value[:160] for value in aliases[:3]], ensure_ascii=True)
 
 
 def _https_repository(value: Any) -> bool:
@@ -175,17 +218,63 @@ def _git_supplement(item: dict) -> bool:
     return True
 
 
+def _archive_census(payload: bytes, *, max_members: int = MAX_ARCHIVE_MEMBERS,
+                    max_expanded: int = MAX_UNCOMPRESSED_BYTES,
+                    max_directory: int = MAX_CENTRAL_DIRECTORY_BYTES) -> None:
+    """Bound central-directory entries before ZipFile allocates its member list."""
+    try:
+        if any(type(value) is not int or value < 0 for value in (max_members, max_expanded, max_directory)):
+            raise ValueError('invalid archive census bound')
+        max_members = min(max_members, MAX_ARCHIVE_MEMBERS)
+        max_expanded = min(max_expanded, MAX_UNCOMPRESSED_BYTES)
+        max_directory = min(max_directory, MAX_CENTRAL_DIRECTORY_BYTES)
+        end = zipfile._EndRecData(io.BytesIO(payload))
+        if end is None:
+            raise ValueError('missing ZIP directory')
+        count, size = end[zipfile._ECD_ENTRIES_TOTAL], end[zipfile._ECD_SIZE]
+        if (end[zipfile._ECD_DISK_NUMBER] != 0 or end[zipfile._ECD_DISK_START] != 0
+                or count > max_members or size > max_directory):
+            raise ValueError('archive census exceeds bound')
+        start = end[zipfile._ECD_LOCATION] - size
+        # Newer Python versions point at the ZIP64 footer itself; older
+        # versions retain the following classic footer's location.
+        location = end[zipfile._ECD_LOCATION]
+        if (end[zipfile._ECD_SIGNATURE] == zipfile.stringEndArchive64
+                and payload[location:location + 4] != zipfile.stringEndArchive64):
+            start -= zipfile.sizeEndCentDir64 + zipfile.sizeEndCentDir64Locator
+        if start < 0 or start + size > len(payload):
+            raise ValueError('invalid ZIP directory extent')
+        position, observed, expanded = start, 0, 0
+        while position < start + size:
+            observed += 1
+            if observed > max_members:
+                raise ValueError('archive census exceeds bound')
+            header = payload[position:position + 46]
+            if len(header) != 46 or header[:4] != b'PK\x01\x02':
+                raise ValueError('invalid ZIP central record')
+            expanded += int.from_bytes(header[24:28], 'little')
+            if (int.from_bytes(header[24:28], 'little') > MAX_MEMBER_BYTES
+                    or expanded > max_expanded):
+                raise ValueError('archive expanded bytes exceed bound')
+            position += 46 + sum(int.from_bytes(header[a:a + 2], 'little') for a in (28, 30, 32))
+        if observed != count or position != start + size:
+            raise ValueError('incomplete ZIP directory census')
+    except (OSError, ValueError, IndexError, TypeError, zipfile.BadZipFile):
+        raise SecurityDataError('OSV archive central directory is invalid or exceeds bounds') from None
+
+
 def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
     """Derive OSV archive coverage from every complete JSON member and CRC."""
     if ecosystem not in OSV_ECOSYSTEMS:
         raise SecurityDataError(f'unsupported OSV ecosystem: {ecosystem!r}')
     if not isinstance(payload, bytes) or not payload or len(payload) > MAX_PAYLOAD_BYTES:
         raise SecurityDataError('OSV snapshot payload is empty or exceeds the size limit')
+    _archive_census(payload)
     current_member = current_id = None
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             members = archive.infolist()
-            if len(members) > 1000000 or sum(member.file_size for member in members) > MAX_UNCOMPRESSED_BYTES:
+            if len(members) > MAX_ARCHIVE_MEMBERS or sum(member.file_size for member in members) > MAX_UNCOMPRESSED_BYTES:
                 raise ValueError('OSV archive exceeds validation limits')
             names = set()
             record_ids = set()
@@ -238,8 +327,9 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                         raise ValueError('malformed OSV versions')
                     if not isinstance(ranges, list) or not all(isinstance(value, dict) for value in ranges):
                         raise ValueError('malformed OSV ranges')
-                    if not versions and not ranges and not record.get('withdrawn'):
-                        raise ValueError('OSV affected package has neither versions nor ranges')
+                    # OSV permits named rows without version bounds. Retain
+                    # them as unknown coverage; a matching query must refuse
+                    # rather than interpreting missing bounds as all or none.
                     exact = package['ecosystem'] == ecosystem
                     family = exact or (ecosystem == 'Packagist' and qualified_packagist(package['ecosystem']))
                     if package['ecosystem'].startswith('Packagist:') and not qualified_packagist(package['ecosystem']):
@@ -270,7 +360,8 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
             raise error from exc
         location = ''.join(f' {label}_sha256={hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()}'
                            for label, value in (('member', current_member), ('id', current_id)) if value is not None)
-        raise SecurityDataError(f'invalid OSV snapshot for {ecosystem}: {exc}{location}') from exc
+        category = 'OSV aliases' if isinstance(exc, SecurityDataError) and str(exc).startswith('OSV aliases') else 'OSV snapshot'
+        raise SecurityDataError(f'invalid {category} for {ecosystem}{location}') from None
     return {'scopes': [ecosystem], 'complete': True, 'record_count': len(record_ids), 'schema': 'osv-1'}
 
 
@@ -322,11 +413,7 @@ def _validate(document: dict[str, Any], payload: bytes, source_id: str, *, now: 
     if hashlib.sha256(payload).hexdigest() != digest:
         raise SecurityDataError('snapshot payload SHA-256 mismatch')
     acquisition = _acquisition(document['acquisition'])
-    age = (now - _timestamp(acquisition['last_verified_sync_utc'])).total_seconds()
-    if not math.isfinite(age) or age < 0:
-        raise SecurityDataError(f'{source_id} snapshot has a future or unknown verified sync; refresh the snapshot')
-    if age > MAX_AGE_SECONDS:
-        raise SecurityDataError(f'{source_id} snapshot is stale ({age:g}s > {MAX_AGE_SECONDS}s); refresh the snapshot')
+    age = _freshness(acquisition, source_id, now)
     coverage = _coverage(document['coverage'])
     if required_scope is not None and (
             not isinstance(required_scope, (set, frozenset)) or
@@ -339,8 +426,25 @@ def _validate(document: dict[str, Any], payload: bytes, source_id: str, *, now: 
         if actual != coverage:
             raise SecurityDataError('OSV payload coverage does not match its manifest')
         payload_validation = 'osv-archive'
+    elif source_id == OSV_QUERY_SOURCE:
+        from .security_osv_query import validate_transcript
+        replay = validate_transcript(payload)
+        if replay['coverage'] != coverage or replay['started_at_utc'] != acquisition['last_verified_sync_utc']:
+            raise SecurityDataError('query coverage or earliest request clock differs from its manifest')
+        if _timestamp(replay['completed_at_utc']) > now:
+            raise SecurityDataError('query completion clock is in the future')
+        payload_validation = 'osv-query-transcript'
     return {**document, 'acquisition': acquisition, 'coverage': coverage,
             'age_seconds': age, 'checked_at_utc': now.isoformat(), 'payload_validation': payload_validation}
+
+
+def _freshness(acquisition: dict[str, Any], source_id: str, now: datetime) -> float:
+    age = (now - _timestamp(acquisition['last_verified_sync_utc'])).total_seconds()
+    if not math.isfinite(age) or age < 0:
+        raise SecurityDataError(f'{source_id} snapshot has a future or unknown verified sync; refresh the snapshot')
+    if age > MAX_AGE_SECONDS:
+        raise SecurityDataError(f'{source_id} snapshot is stale; refresh the snapshot')
+    return age
 
 
 def _directory_identity(metadata: os.stat_result) -> tuple:
@@ -377,6 +481,10 @@ class _SnapshotStore:
         self.directories: list[_Directory] = []
         self.relative: dict[tuple[str, ...], _Directory] = {}
         self.files: dict[tuple[int, str], _File] = {}
+        self.absent: set[tuple[int, str]] = set()
+        self.read_bytes = 0
+        self.last_replaced: tuple[str, ...] | None = None
+        self.before_replace = None
 
     def __enter__(self):
         if not DESCRIPTOR_IO_AVAILABLE:
@@ -420,8 +528,16 @@ class _SnapshotStore:
             fsx.close_dir(node.descriptor)
         self.directories.clear()
         self.relative.clear()
+        self.absent.clear()
 
     def confirm(self):
+        for parent, name in self.absent:
+            try:
+                fsx.lstat_at(parent, name)
+            except FileNotFoundError:
+                pass
+            else:
+                raise SecurityDataError('snapshot commit_unknown; publication appeared during consumption')
         for node in self.directories:
             opened = os.fstat(node.descriptor)
             if not stat.S_ISDIR(opened.st_mode) or opened.st_nlink < 1 or _directory_identity(opened) != node.identity:
@@ -479,12 +595,19 @@ class _SnapshotStore:
                 self.relative[prefix] = self._open_directory(self.relative[prefix[:-1]], prefix[-1], create=create, owned=True)
         return self.relative[parts]
 
+
+    def expect_absent(self, parts: tuple[str, ...]) -> None:
+        parent = self.directory(parts[:-1])
+        self.absent.add((parent.descriptor, parts[-1]))
+        self.confirm()
+
     def _pin_file(self, parent: _Directory, name: str, maximum: int) -> _File:
         self.confirm()
         key = parent.descriptor, name
         if key not in self.files:
             before = fsx.lstat_at(parent.descriptor, name)
-            if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
+            if (not stat.S_ISREG(before.st_mode) or before.st_size > maximum or before.st_nlink != 1
+                    or before.st_uid not in {0, os.geteuid()} or before.st_mode & 0o022):
                 raise SecurityDataError('snapshot file is not a bounded regular file')
             descriptor = fsx.open_at(parent.descriptor, name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
             try:
@@ -503,6 +626,8 @@ class _SnapshotStore:
     def read(self, parts: tuple[str, ...], maximum: int) -> bytes:
         parent = self.directory(parts[:-1])
         file = self._pin_file(parent, parts[-1], maximum)
+        if self.read_bytes + os.fstat(file.descriptor).st_size > MAX_STORE_READ_BYTES:
+            raise SecurityDataError('snapshot remaining aggregate read budget is insufficient')
         os.lseek(file.descriptor, 0, os.SEEK_SET)
         chunks, remaining = [], maximum + 1
         while remaining:
@@ -510,129 +635,69 @@ class _SnapshotStore:
             if not chunk:
                 break
             chunks.append(chunk)
+            self.read_bytes += len(chunk)
+            if self.read_bytes > MAX_STORE_READ_BYTES:
+                raise SecurityDataError('snapshot aggregate read budget exceeded')
             remaining -= len(chunk)
         if not remaining:
             raise SecurityDataError('snapshot file exceeds the bounded read limit')
         self.confirm()
         return b''.join(chunks)
 
-    def write(self, parts: tuple[str, ...], payload: bytes):
-        parent = self.directory(parts[:-1], create=True)
-        name, key = parts[-1], (parent.descriptor, parts[-1])
-        try:
-            previous = self._pin_file(parent, name, MAX_PAYLOAD_BYTES)
-        except FileNotFoundError:
-            previous = None
-        temporary = f'.{name}.{uuid.uuid4().hex}.partial'
-        descriptor = fsx.open_at(parent.descriptor, temporary,
-            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
-        try:
-            self.confirm()
-            offset = 0
-            while offset < len(payload):
-                written = os.write(descriptor, memoryview(payload)[offset:offset + 1024 * 1024])
-                if written < 1:
-                    raise OSError('incomplete snapshot temporary write')
-                offset += written
-            os.fsync(descriptor)
-            before = os.fstat(descriptor)
-            if not stat.S_ISREG(before.st_mode) or before.st_size != len(payload):
-                raise SecurityDataError('snapshot temporary is not the expected regular file')
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            digest, size = hashlib.sha256(), 0
-            while chunk := os.read(descriptor, min(1024 * 1024, len(payload) + 1 - size)):
-                digest.update(chunk)
-                size += len(chunk)
-                if size > len(payload):
-                    break
-            named = fsx.lstat_at(parent.descriptor, temporary)
-            if (size != len(payload) or digest.digest() != hashlib.sha256(payload).digest()
-                    or _file_identity(os.fstat(descriptor)) != _file_identity(before)
-                    or _file_identity(named) != _file_identity(before)):
-                raise SecurityDataError('snapshot temporary changed before publication')
-            self.confirm()
-            if previous is None:
-                try:
-                    fsx.lstat_at(parent.descriptor, name)
-                except FileNotFoundError:
-                    pass
-                else:
-                    raise SecurityDataError('snapshot target appeared during publication')
-            fsx.replace_at(parent.descriptor, temporary, parent.descriptor, name)
-            temporary = None
-            if key in self.files:
-                os.close(self.files.pop(key).descriptor)
-            after = os.fstat(descriptor)
-            self.files[key] = _File(os.dup(descriptor), parent.descriptor, name, _file_identity(after))
-            self.confirm()
-            fsx.fsync_dir(parent.descriptor)
-        finally:
-            if temporary is not None:
-                with contextlib.suppress(OSError):
-                    named = fsx.lstat_at(parent.descriptor, temporary)
-                    opened = os.fstat(descriptor)
-                    if stat.S_ISREG(named.st_mode) and (named.st_dev, named.st_ino) == (opened.st_dev, opened.st_ino):
-                        fsx.unlink_at(parent.descriptor, temporary)
-            os.close(descriptor)
+
+
+
+def _snapshot_reader(database: Path):
+    if os.name == 'nt':
+        from .security_data_windows import SnapshotReader
+        return SnapshotReader(database)
+    return _SnapshotStore(database)
+
+
+def _snapshot_store(database: Path, *, create: bool = False):
+    if os.name == 'nt':
+        from .security_data_windows import SnapshotStore
+        return SnapshotStore(database, create=create)
+    from .security_publication import SnapshotWriter
+    return SnapshotWriter(database, create=create)
 
 
 def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisition: dict[str, Any],
-                     coverage: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+                     coverage: dict[str, Any], now: datetime | None = None, before_commit=None) -> dict[str, Any]:
     """Commit the authoritative pointer after its object; pre-commit failures keep the old pointer."""
-    folder = _source_directory(database, source_id)
-    current = _clock(now)
-    if not isinstance(payload, bytes):
-        raise SecurityDataError('snapshot payload must be bytes')
-    document = {'schema_version': 1, 'source_id': source_id, 'source_url': SOURCE_URLS[source_id],
-                'content_sha256': hashlib.sha256(payload).hexdigest(), 'payload_size': len(payload),
-                'acquisition': _acquisition(acquisition), 'coverage': _coverage(coverage)}
-    evidence = _validate(document, payload, source_id, now=current, required_scope=None)
-    serialized = (json.dumps(document, sort_keys=True) + '\n').encode('utf-8')
-    if len(serialized) > MAX_MANIFEST_BYTES:
-        raise SecurityDataError('snapshot manifest is too large')
-    source_parts = folder.relative_to(Path(database)).parts
-    target = ('.snapshots', 'sha256', document['content_sha256'])
-    try:
-        with _SnapshotStore(database, create=True) as store:
-            # Bind both trees before creating an object or committing a pointer.
-            store.directory(source_parts, create=True)
-            store.directory(target[:-1], create=True)
-            try:
-                existing = store.read(target, len(payload))
-            except FileNotFoundError:
-                store.write(target, payload)
-            else:
-                if existing != payload:
-                    raise SecurityDataError('existing immutable snapshot object differs; repair the cache')
-            store.write((*source_parts, 'snapshot.json'), serialized)
-            if source_id.startswith('osv:'):
-                # Non-authoritative compatibility export, after pointer commit.
-                # A safe I/O failure does not erase the committed snapshot.
-                try:
-                    store.write((*source_parts, 'all.zip'), payload)
-                except OSError as exc:
-                    store.confirm()
-                    evidence['compatibility_export_warning'] = str(exc)
-    except OSError as exc:
-        raise SecurityDataError(f'snapshot publication failed: {exc}') from exc
-    return evidence
+    from .security_publication import publish_snapshot as implementation
+    return implementation(database, source_id, payload, acquisition=acquisition, coverage=coverage, now=now, before_commit=before_commit)
 
 
 def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None,
                   required_scope: set[str] | None = None) -> tuple[bytes, dict[str, Any]]:
     """Return the exact validated bytes and evidence; never fall back to a raw ZIP."""
     folder = _source_directory(database, source_id)
-    current = _clock(now)
     source_parts = folder.relative_to(Path(database)).parts
     try:
-        with _SnapshotStore(database) as store:
+        with _snapshot_reader(database) as store:
+            pending = (*source_parts, '.publication-pending.json')
+            try:
+                store.read(pending, MAX_MANIFEST_BYTES)
+            except FileNotFoundError:
+                store.expect_absent(pending)
+            else:
+                raise SecurityDataError('snapshot commit_unknown; checked reconciliation is required')
             raw = store.read((*source_parts, 'snapshot.json'), MAX_MANIFEST_BYTES)
             document = _json(raw)
             digest = document.get('content_sha256')
             if not isinstance(digest, str) or re.fullmatch('[0-9a-f]{64}', digest) is None:
                 raise SecurityDataError('snapshot content digest is invalid')
             payload = store.read(('.snapshots', 'sha256', digest), MAX_PAYLOAD_BYTES)
-            evidence = _validate(document, payload, source_id, now=current, required_scope=required_scope)
+            # A real clock is sampled after the actual content read. An
+            # explicitly injected test instant retains its exact semantics.
+            evidence = _validate(document, payload, source_id, now=_clock(now), required_scope=required_scope)
+            checked = _clock(now)
+            evidence['age_seconds'] = _freshness(evidence['acquisition'], source_id, checked)
+            evidence['checked_at_utc'] = checked.isoformat()
+            store.confirm()
+            evidence['manifest_sha256'] = hashlib.sha256(raw).hexdigest()
+            evidence['custody_sha256'] = _custody_digest(store)
             return payload, evidence
     except (OSError, ValueError, KeyError, TypeError, SecurityDataError) as exc:
         legacy = f' (legacy {source_id.removeprefix("osv:")}/all.zip is insufficient)' if source_id.startswith('osv:') else ''
@@ -641,15 +706,106 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
         refresh = (f'declare current profile with {command} --write-input-profile PROFILE --json-out PROFILE_REPORT; '
                    f'refresh with {command} --input-profile PROFILE --prepare-inputs --refresh --json-out REPORT '
                    'on a network-enabled host, then copy the complete snapshot directory; '
-                   'preparation remains UNVERIFIED and may refuse incomplete inputs') if source_id.startswith('osv:') else (
+                   'preparation remains UNVERIFIED and may refuse incomplete inputs; '
+                   f'OSV-only alternative: python3 scripts/getzilla_vulns.py --download-db DIR --ecosystem {source_id.removeprefix("osv:")}') if source_id.startswith('osv:') else (
                        f'refresh {source_id} through its configured updater, then copy manifest and content objects')
+        if source_id in {'kev', 'epss'}:
+            refresh = f'refresh with {command} --refresh --json-out REPORT on a network-enabled host, then copy the complete snapshot directory'
+        if source_id == OSV_QUERY_SOURCE:
+            refresh = 'refresh with python3 scripts/getzilla_vulns.py --online --db DIR on the selected ROOT; retain the complete inventory-bound query snapshot'
         raise SecurityDataError(f'{source_id} snapshot unavailable or malformed{legacy}: {exc}; {refresh}') from exc
+
+
+def _custody_identity(identity: tuple) -> list:
+    """Serialize held stat/NTFS facts only; never alter their comparison identity."""
+    if type(identity) is tuple and len(identity) in {5, 9} and all(type(v) is int for v in identity):
+        return list(identity)  # Preserve the established POSIX JSON bytes.
+    def integer(value, minimum, maximum):
+        return type(value) is int and minimum <= value <= maximum
+    def sid(value):
+        return type(value) is str and 0 < len(value) <= 184
+    valid = type(identity) is tuple and len(identity) in {4, 8}
+    if valid:
+        file_id, attributes, directory, security = identity[:4]
+        valid = (type(file_id) is tuple and len(file_id) == 2
+                 and integer(file_id[0], 0, 2**64 - 1) and type(file_id[1]) is bytes
+                 and len(file_id[1]) == 16 and any(file_id[1])
+                 and integer(attributes, 0, 2**32 - 1) and type(directory) is bool
+                 and len(identity) == (4 if directory else 8)
+                 and type(security) is tuple and len(security) in {2, 3})
+    if valid:
+        owner, aces = security[:2]
+        valid = (sid(owner) and type(aces) is tuple and len(aces) <= 4096
+                 and (len(security) == 2 or type(security[2]) is bool)
+                 and all(type(ace) is tuple and len(ace) == 4
+                         and integer(ace[0], 0, 1) and integer(ace[1], 0, 255)
+                         and integer(ace[2], 0, 2**32 - 1) and sid(ace[3]) for ace in aces))
+        if not directory:
+            valid = valid and (identity[4] == 1 and type(identity[4]) is int
+                               and integer(identity[5], 0, 2**63 - 1)
+                               and all(integer(v, -(2**63), 2**63 - 1) for v in identity[6:]))
+    if not valid:
+        raise SecurityDataError('snapshot custody identity has an unsupported native shape')
+    return [['ntfs-file-id/v1', file_id[0], file_id[1].hex()], *identity[1:]]
+
+
+def _custody_digest(store: _SnapshotStore) -> str:
+    directory_ids = {getattr(node, 'descriptor', getattr(node, 'handle', None)): node.identity for node in store.directories}
+    custody = {'directories': [_custody_identity(node.identity) for node in store.directories],
+               'files': sorted((file.name, _custody_identity(directory_ids[file.parent]), _custody_identity(file.identity))
+                               for file in store.files.values())}
+    return hashlib.sha256(json.dumps(custody, sort_keys=True).encode('utf-8')).hexdigest()
+
+
+def confirm_snapshots(database: Path, evidence: list[dict[str, Any]], *, now: datetime | None = None) -> None:
+    """Jointly hold current manifest/object identities, then check every clock.
+
+    This final metadata fence supplements already validated exact payloads; it
+    does not qualify caller-supplied evidence or reread multi-gigabyte archives.
+    Only the fixed OSV source layout is consulted, never paths from a report.
+    """
+    if not isinstance(evidence, list) or not 0 < len(evidence) <= len(OSV_ECOSYSTEMS):
+        raise SecurityDataError('final snapshot evidence is missing or exceeds the source bound')
+    seen, held = set(), []
+    try:
+        with contextlib.ExitStack() as stack:
+            for proof in evidence:
+                if not isinstance(proof, dict):
+                    raise SecurityDataError('final snapshot evidence is invalid')
+                source_id = proof.get('source_id')
+                if source_id not in {OSV_QUERY_SOURCE, *(f'osv:{name}' for name in OSV_ECOSYSTEMS)} or source_id in seen:
+                    raise SecurityDataError('final snapshot source is invalid or repeated')
+                seen.add(source_id)
+                store = stack.enter_context(_snapshot_reader(database))
+                parts = _source_directory(database, source_id).relative_to(Path(database)).parts
+                try:
+                    store.read((*parts, '.publication-pending.json'), MAX_MANIFEST_BYTES)
+                except FileNotFoundError:
+                    store.expect_absent((*parts, '.publication-pending.json'))
+                else:
+                    raise SecurityDataError('snapshot commit_unknown; checked reconciliation is required')
+                raw = store.read((*parts, 'snapshot.json'), MAX_MANIFEST_BYTES)
+                document = _json(raw)
+                if (hashlib.sha256(raw).hexdigest() != proof.get('manifest_sha256')
+                        or any(document.get(key) != proof.get(key) for key in document)
+                        or re.fullmatch('[0-9a-f]{64}', str(document.get('content_sha256'))) is None):
+                    raise SecurityDataError('snapshot manifest changed before final consumption')
+                parent = store.directory(('.snapshots', 'sha256'))
+                store._pin_file(parent, document['content_sha256'], MAX_PAYLOAD_BYTES)
+                if _custody_digest(store) != proof.get('custody_sha256'):
+                    raise SecurityDataError('snapshot custody changed before final consumption')
+                held.append((store, source_id, _acquisition(document['acquisition'])))
+            for store, _, _ in held:
+                store.confirm()
+            checked = _clock(now)
+            for _, source_id, acquisition in held:
+                _freshness(acquisition, source_id, checked)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise SecurityDataError('snapshot unavailable during final consumption') from exc
 
 
 def copy_snapshot(source_database: Path, destination_database: Path, source_id: str, *,
                   now: datetime | None = None, required_scope: set[str] | None = None) -> dict[str, Any]:
     """Copy a valid snapshot without refreshing its original acquisition time."""
-    current = _clock(now)
-    payload, evidence = read_snapshot(source_database, source_id, now=current, required_scope=required_scope)
-    return publish_snapshot(destination_database, source_id, payload, acquisition=evidence['acquisition'],
-                            coverage=evidence['coverage'], now=current)
+    from .security_publication import copy_snapshot as implementation
+    return implementation(source_database, destination_database, source_id, now=now, required_scope=required_scope)

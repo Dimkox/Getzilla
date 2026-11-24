@@ -4,6 +4,7 @@
   getzilla graph status --root DIR [--cache FILE] [--config graph.json]
   getzilla graph impact --root DIR [--cache FILE] [--config graph.json] [--changed PATH ...]
   getzilla graph export --root DIR [--cache FILE]
+  getzilla graph history --root DIR [--base COMMIT] [--end COMMIT] [--history-window START END]
 
 The project is only read (Git with --no-optional-locks; links are not followed). The only write is
 the cache, by default `<root>/.getzilla/index/graph.sqlite`, which is local state outside any source
@@ -80,14 +81,49 @@ def _config(path: str | None) -> GraphConfig:
 
 def run(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
     parser = argparse.ArgumentParser(prog='getzilla graph', description='Python code graph (read-only)')
-    parser.add_argument('command', choices=('build', 'status', 'impact', 'export'))
+    parser.add_argument('command', choices=('build', 'status', 'impact', 'export', 'history'))
     parser.add_argument('--root', required=True)
     parser.add_argument('--cache')
     parser.add_argument('--config')
     parser.add_argument('--changed', nargs='*')
+    parser.add_argument('--base')
+    parser.add_argument('--end', default='HEAD')
+    parser.add_argument('--history-window', nargs=2, type=int, action='append', metavar=('START', 'END'))
+    parser.add_argument('--history-exclude', action='append', default=[])
+    parser.add_argument('--history-max-commits', type=int, default=1000)
+    parser.add_argument('--history-max-bytes', type=int, default=8 * 1024 * 1024)
+    parser.add_argument('--history-max-seconds', type=float, default=30)
+    parser.add_argument('--history-bulk-components', type=int, default=5)
+    parser.add_argument('--history-max-file-touches', type=int, default=50000)
+    parser.add_argument('--history-max-pair-observations', type=int, default=20000)
+    parser.add_argument('--history-max-line-comparisons', type=int, default=1000000)
+    parser.add_argument('--history-max-line-records', type=int, default=50000)
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
-    store = GraphStore(Path(args.cache) if args.cache else root / DEFAULT_CACHE)
+    if args.command == 'history':
+        from ..architecture import ArchitectureError, load_architecture
+        from .history import HistoryConfig, mine_history
+        architecture = None
+        try:
+            architecture = load_architecture(root)
+        except ArchitectureError:
+            pass  # reported as MAPPING_UNAVAILABLE, never an invented clean model
+        try:
+            config = HistoryConfig(windows=tuple(tuple(w) for w in args.history_window or []),
+                                   exclude_prefixes=tuple(args.history_exclude),
+                                   max_commits=args.history_max_commits, max_bytes=args.history_max_bytes,
+                                   max_seconds=args.history_max_seconds, bulk_components=args.history_bulk_components,
+                                   max_file_touches=args.history_max_file_touches,
+                                   max_pair_observations=args.history_max_pair_observations,
+                                   max_line_comparisons=args.history_max_line_comparisons,
+                                   max_line_records=args.history_max_line_records)
+        except ValueError:
+            raise GraphError('INVALID_HISTORY_CONFIG') from None
+        return 0, {'schema': 'getzilla-graph-cli-v1', 'command': 'history',
+                   'history': mine_history(root, architecture=architecture, config=config, base=args.base, end=args.end)}
+    baseline, scope, omitted = discover_scope(root)
+    current_input = make_graph_input(baseline, scope, _config(args.config), omitted=omitted)
+    store = GraphStore(Path(args.cache) if args.cache else root / DEFAULT_CACHE, readonly=args.command != 'build')
     try:
         envelope: dict[str, Any] = {'schema': 'getzilla-graph-cli-v1', 'command': args.command,
                                     'cache_rebuilt_reason': store.rebuilt_reason}
@@ -95,8 +131,6 @@ def run(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
         if args.command == 'export':
             envelope['export'] = None if previous is None else previous.export()
             return 0, envelope
-        baseline, scope, omitted = discover_scope(root)
-        current_input = make_graph_input(baseline, scope, _config(args.config), omitted=omitted)
         if args.command == 'status':
             state = 'missing' if previous is None else (
                 'current' if previous.input_identity == current_input.identity else 'stale')

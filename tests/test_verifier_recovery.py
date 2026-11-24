@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from getzilla import state
-from tests._support import write_current_verification
 
 import contextlib
 import hashlib
@@ -64,7 +63,7 @@ def routed_fixture(*, legacy=False, verification_fixture=False, test_result=None
                          'state_revision', 'workspace', 'context', 'handoff', 'risk_assessment'):
                 route.pop(name, None)
         activate_owned_route(root, route)
-        if verification_fixture and legacy:
+        if verification_fixture:
             from getzilla import state
             from getzilla.change import start_change
             from getzilla.spec import dump_canonical_spec
@@ -395,7 +394,8 @@ class VerifierRecoveryTests(unittest.TestCase):
         for error in (OSError('disk full'), RuntimeError('invalid receipt binding'),
                       ValueError('malformed report'), TypeError('invalid report field')):
             for verdict in ('pass', 'fail'):
-                with self.subTest(error=type(error).__name__, verdict=verdict), routed_fixture(test_result=verdict) as (root, _):
+                with self.subTest(error=type(error).__name__, verdict=verdict), routed_fixture(test_result=verdict, verification_fixture=True) as (root, _):
+                    prepare_review_source(root)
                     observed_checks = []
 
                     def publication_fault(*args, **kwargs):
@@ -1203,9 +1203,9 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
 
     def test_parent_contract_large_scope_metadata_roundtrips_through_bounded_report(self):
-        with routed_fixture(legacy=True) as (root, route):
-            verification_only_legacy_route(root, route)
-            report = write_current_verification(root)
+        with routed_fixture(legacy=True, verification_fixture=True) as (root, route):
+            report = owned_current_report(root)
+            route = state.get_active_route(root)
             fingerprint = report['tree_fingerprint']
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
             paths = [f'engineering/changes/20260918-historical-delivery-provenance-and-acceptance-123abc/evidence/historical-{index:05d}-source-contract.md' for index in range(1442)]
@@ -1227,9 +1227,9 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
 
     def test_parent_contract_large_verification_report_preserves_complete_logs_and_scope(self):
-        with routed_fixture(legacy=True) as (root, route):
-            verification_only_legacy_route(root, route)
-            report = write_current_verification(root)
+        with routed_fixture(legacy=True, verification_fixture=True) as (root, route):
+            report = owned_current_report(root)
+            route = state.get_active_route(root)
             fingerprint = report['tree_fingerprint']
             head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
             paths = [f'engineering/changes/example/evidence/checked-{index:05d}.md' for index in range(1500)]

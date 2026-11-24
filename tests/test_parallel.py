@@ -58,6 +58,9 @@ class BatchTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        config = self.root / '.getzilla/config'
+        config.mkdir(parents=True)
+        (config / 'policy.json').write_text('{"schema_version": 2}')
 
     def test_commands_run_concurrently_and_failures_keep_their_tail(self) -> None:
         commands = [f'sleep 0.6 && echo done-{index}' for index in range(4)] + ['echo boom && exit 3']
@@ -88,8 +91,7 @@ class BatchTests(unittest.TestCase):
 
     def test_scanner_policy_uses_the_same_directory_as_the_batch_runner(self) -> None:
         config = self.root / '.getzilla/config'
-        config.mkdir(parents=True)
-        (config / 'policy.json').write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        (config / 'policy.json').write_text('{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         directory = self.root / 'nested'
         directory.mkdir()
         # The injected runner records calls only: no scanner or fixture command executes.
@@ -113,8 +115,7 @@ class BatchTests(unittest.TestCase):
 
     def test_skipped_directory_join_refuses_the_entire_batch(self) -> None:
         config = self.root / '.getzilla/config'
-        config.mkdir(parents=True)
-        (config / 'policy.json').write_text('{"secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
+        (config / 'policy.json').write_text('{"schema_version": 2, "secret_read_paths": ["nested/fixture-sensitive.json"]}\n')
         directory = self.root / 'nested'
         (directory / 'deeper').mkdir(parents=True)
         for separator in ('; ', '\n', ' & '):

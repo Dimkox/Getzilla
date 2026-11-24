@@ -38,6 +38,11 @@ Check all finite owned Git inputs required by installation, including baseline
 blobs. Preparing only changed files missed inherited `0664` format refusals;
 admitted mode preparation preserves bytes and does not qualify a failed head.
 
+Stop dependent mutations when custody or scope acknowledgment fails. Await and
+check each result before a merge; a shell sequence can continue after an error.
+Preserve the failure and original history, then repair the same pending scope
+without inventing a receipt. See the [Windows batch incident](incidents/20261118-windows-installer-contract-joins.md).
+
 ## Execution fixtures must preserve Git and pathname boundaries
 
 Do not place no-Git execution fixtures under an existing checkout. Use the

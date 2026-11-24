@@ -5,6 +5,7 @@ import argparse
 import dataclasses
 import json
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from getzilla.architecture_diagrams import (  # noqa: E402
     render_diagrams,
 )
 from getzilla.architecture_fitness import diff_architecture, evaluate_fitness  # noqa: E402
+from getzilla import verification_journal as diagnostics  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -102,16 +104,27 @@ def main() -> int:
     as_json = bool(getattr(args, "json", False))
     try:
         root = Path(args.root).resolve(strict=True)
-        if args.command in {"diff", "fitness"}:
+        with diagnostics.session(root, 'architecture'):
+            return _dispatch(args, root, as_json)
+    except (ArchitectureError, OSError, ValueError) as exc:
+        payload = {"code": getattr(exc, "code", "io"), "error": str(exc), "ok": False}
+        _emit(payload, as_json=True)
+        return 2 if getattr(exc, "code", "") in {"git", "io", "missing", "usage"} else 1
+
+
+def _dispatch(args, root, as_json):
+    if args.command in {"diff", "fitness"}:
+        with diagnostics.span('arch-diff', stage='action'):
             diff = diff_architecture(
                 root,
                 base_sha=args.base,
                 head_sha=args.head,
                 worktree=bool(args.worktree),
             )
-            if args.command == "diff":
-                _emit(_diff_payload(diff), as_json=as_json)
-                return 0
+        if args.command == "diff":
+            _emit(_diff_payload(diff), as_json=as_json)
+            return 0
+        with diagnostics.span('arch-fitness', stage='action'):
             report = evaluate_fitness(
                 root,
                 diff._head_state.snapshot,
@@ -119,54 +132,50 @@ def main() -> int:
                 diff.changed_paths,
                 pre_risk=args.pre_risk,
             )
-            _emit(_fitness_payload(diff, report), as_json=as_json)
-            return 0 if report.status == "pass" else 1
+        _emit(_fitness_payload(diff, report), as_json=as_json)
+        return 0 if report.status == "pass" else 1
 
-        snapshot = load_architecture(root)
-        if args.command == "validate":
-            findings = validate_architecture(snapshot, root)
-            payload = {"findings": [dataclasses.asdict(item) for item in findings], "ok": not findings}
-            _emit(payload, as_json=as_json)
-            return 0 if not findings else 1
-        if args.command == "summary":
-            digests = architecture_digests(snapshot)
-            contracts = contract_inventory(root, snapshot)
-            payload = {
-                "architecture_id": snapshot.system["architecture_id"],
-                "contract_count": len(contracts),
-                "contract_inventory_digest": contract_inventory_digest(contracts),
-                "edge_count": len(snapshot.system["edges"]),
-                "node_count": len(snapshot.system["nodes"]),
-                "rule_count": sum(len(snapshot.rules[name]) for name in snapshot.rules if isinstance(snapshot.rules[name], list)),
-                "trust_domain_count": len(snapshot.system["trust_domains"]),
-                **digests,
-            }
-            _emit(payload, as_json=as_json)
-            return 0
-        if args.command == "diagram":
-            rendered = render_diagrams(snapshot)
-            mismatches = compare_generated(root, rendered) if args.check else ()
-            payload = {
-                "checked": bool(args.check),
-                "digests": artifact_digests(rendered),
-                "mismatches": list(mismatches),
-                "ok": not mismatches,
-            }
-            if not args.check:
-                payload["artifacts"] = rendered
-            _emit(payload, as_json=as_json)
-            return 0 if not mismatches else 1
-        if args.command == "drift":
-            findings = validate_repository_drift(root, snapshot)
-            payload = {"findings": [dataclasses.asdict(item) for item in findings], "ok": not findings}
-            _emit(payload, as_json=as_json)
-            return 0 if not findings else 1
+    snapshot = load_architecture(root)
+    if args.command == "validate":
+        findings = validate_architecture(snapshot, root)
+        payload = {"findings": [dataclasses.asdict(item) for item in findings], "ok": not findings}
+        _emit(payload, as_json=as_json)
+        return 0 if not findings else 1
+    if args.command == "summary":
+        digests = architecture_digests(snapshot)
+        contracts = contract_inventory(root, snapshot)
+        payload = {
+            "architecture_id": snapshot.system["architecture_id"],
+            "contract_count": len(contracts),
+            "contract_inventory_digest": contract_inventory_digest(contracts),
+            "edge_count": len(snapshot.system["edges"]),
+            "node_count": len(snapshot.system["nodes"]),
+            "rule_count": sum(len(snapshot.rules[name]) for name in snapshot.rules if isinstance(snapshot.rules[name], list)),
+            "trust_domain_count": len(snapshot.system["trust_domains"]),
+            **digests,
+        }
+        _emit(payload, as_json=as_json)
+        return 0
+    if args.command == "diagram":
+        rendered = render_diagrams(snapshot)
+        mismatches = compare_generated(root, rendered) if args.check else ()
+        payload = {
+            "checked": bool(args.check),
+            "digests": artifact_digests(rendered),
+            "mismatches": list(mismatches),
+            "ok": not mismatches,
+        }
+        if not args.check:
+            payload["artifacts"] = rendered
+        _emit(payload, as_json=as_json)
+        return 0 if not mismatches else 1
+    if args.command == "drift":
+        findings = validate_repository_drift(root, snapshot)
+        payload = {"findings": [dataclasses.asdict(item) for item in findings], "ok": not findings}
+        _emit(payload, as_json=as_json)
+        return 0 if not findings else 1
 
-        raise ArchitectureError("unsupported architecture command", code="usage")
-    except (ArchitectureError, OSError, ValueError) as exc:
-        payload = {"code": getattr(exc, "code", "io"), "error": str(exc), "ok": False}
-        _emit(payload, as_json=True)
-        return 2 if getattr(exc, "code", "") in {"git", "io", "missing", "usage"} else 1
+    raise ArchitectureError("unsupported architecture command", code="usage")
 
 
 if __name__ == "__main__":

@@ -16,10 +16,12 @@ import yaml
 W = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(W / '.getzilla'))
 from getzilla import architecture_fitness as fitness
+from getzilla import security_corresponding_source, security_license_scope, security_python_target  # noqa: F401 preloaded before the I/O guard
 from getzilla import security_inventory as inventory
 from getzilla import security_cli as cli
 from getzilla import security_tools as tools
 from getzilla import expanded_security as expanded
+from getzilla import verification_journal
 
 ACTIVE = False
 OWNED_ROOT = None
@@ -45,7 +47,8 @@ class Closed393InputTests(unittest.TestCase):
         global ACTIVE
         ACTIVE = True
         try:
-            return function()
+            with verification_journal.bind_sink(None, None):
+                return function()
         finally:
             ACTIVE = False
 

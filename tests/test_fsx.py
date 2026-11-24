@@ -31,6 +31,46 @@ def _read(parent: fsx.DirHandle, name: str) -> bytes:
 
 @unittest.skipIf(fsx.WINDOWS, 'POSIX process groups')
 class KillProcessTreeTests(unittest.TestCase):
+    def test_darwin_group_permission_error_requires_confirmed_absence(self):
+        from unittest import mock
+
+        process = mock.Mock(pid=12345)
+        for exit_code, groups, expected in (
+            (None, b'1', PermissionError), (0, b'12345', PermissionError),
+            (0, b'', PermissionError), (0, b'unavailable', PermissionError),
+            (0, b'1\n54321\n', ProcessLookupError),
+        ):
+            with self.subTest(exit_code=exit_code, groups=groups), mock.patch.object(sys, 'platform', 'darwin'), \
+                    mock.patch.object(os, 'killpg', side_effect=PermissionError), \
+                    mock.patch('subprocess.run', return_value=mock.Mock(stdout=groups)) as census:
+                process.poll.return_value = exit_code
+                with self.assertRaises(expected):
+                    fsx.signal_owned_group(process, 0)
+                self.assertEqual(census.call_count, int(exit_code is not None))
+
+    def test_darwin_permission_error_waits_briefly_for_an_exiting_leader(self):
+        from unittest import mock
+
+        process = mock.Mock(pid=12345)
+        process.poll.side_effect = [None, None, 0]
+        with mock.patch.object(sys, 'platform', 'darwin'), \
+                mock.patch.object(os, 'killpg', side_effect=PermissionError), \
+                mock.patch('subprocess.run', return_value=mock.Mock(stdout=b'1\n54321\n')) as census:
+            with self.assertRaises(ProcessLookupError):
+                fsx.signal_owned_group(process, 0)
+        self.assertEqual(process.poll.call_count, 3)
+        self.assertEqual(census.call_count, 1)
+
+        process = mock.Mock(pid=12345)
+        process.poll.return_value = None
+        with mock.patch.object(sys, 'platform', 'darwin'), \
+                mock.patch.object(fsx, '_DARWIN_EXIT_SETTLE_SECONDS', 0.02), \
+                mock.patch.object(os, 'killpg', side_effect=PermissionError), \
+                mock.patch('subprocess.run') as census:
+            with self.assertRaises(PermissionError):
+                fsx.signal_owned_group(process, 0)
+        census.assert_not_called()
+
     def test_a_group_that_already_exited_is_not_an_error(self) -> None:
         from unittest import mock
         with mock.patch.object(fsx.os, 'killpg', side_effect=ProcessLookupError), \
@@ -61,6 +101,23 @@ class KillProcessTreeTests(unittest.TestCase):
 
 
 class FsxTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform in {'linux', 'darwin'}, 'native held-directory backend')
+    def test_held_directory_address_survives_path_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / 'directory'
+            original.mkdir()
+            (original / 'value').write_bytes(b'original')
+            descriptor = os.open(original, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                address = fsx.held_directory_address(descriptor)
+                original.rename(root / 'moved')
+                original.mkdir()
+                (original / 'value').write_bytes(b'replacement')
+                self.assertEqual((address / 'value').read_bytes(), b'original')
+            finally:
+                os.close(descriptor)
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root_path = Path(self._tmp.name)
@@ -141,6 +198,21 @@ class FsxTests(unittest.TestCase):
             fsx.unlock_file(descriptor)
         finally:
             os.close(descriptor)
+
+    def test_fresh_directory_validation_binds_ancestors_and_rejects_escape(self) -> None:
+        fsx.validate_directory_path(self.root_path, 'sub', self.sub,
+                                    opened_ancestors=(self.root, self.sub))
+        for relative in ('../sub', '/sub', 'sub/..', 'sub//child'):
+            with self.subTest(relative=relative), self.assertRaises(OSError):
+                fsx.validate_directory_path(self.root_path, relative, self.sub)
+
+    def test_windows_path_handle_refuses_replacement_identity(self) -> None:
+        path = self.root_path / 'sub'
+        opened = fsx.WindowsDirectory(str(path), path.stat())
+        path.rename(self.root_path / 'old-sub')
+        path.mkdir()
+        with self.assertRaises(OSError):
+            fsx.validate_directory_path(self.root_path, 'sub', opened)
 
     def test_directory_identity_and_removal(self) -> None:
         before = fsx.fstat_dir(self.sub)

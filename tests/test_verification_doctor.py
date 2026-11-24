@@ -101,6 +101,30 @@ class ArchitectureFixtureBoundaryTests(unittest.TestCase):
                 raise ValueError('owned context exit')
         self.assertIs(verification_module._factory_unit, original_factory)
 
+    def test_copied_models_do_not_claim_the_original_repository_resource_profile(self):
+        policy = ROOT / 'architecture/queue-analysis-profile.json'
+        original_policy = policy.read_bytes()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            VerificationTests._adopt_architecture(root)
+            self.assertFalse((root / 'architecture/queue-analysis-profile.json').exists())
+            for relative in ('architecture/system.yaml', 'architecture/rules.yaml',
+                             'schemas/architecture-system.schema.json', 'schemas/architecture-rules.schema.json'):
+                self.assertEqual((root / relative).read_bytes(), (ROOT / relative).read_bytes())
+        self.assertEqual(policy.read_bytes(), original_policy)
+
+    def test_metadata_fixture_never_starts_the_unrelated_factory_suite(self):
+        # Execute the real metadata fixture under a tripwire; a Factory subprocess
+        # here used to recursively rerun its full suite inside Core discovery.
+        with patch.object(verification_module, '_factory_unit',
+                          side_effect=AssertionError('unrelated Factory suite reached')) as factory:
+            result = unittest.TestResult()
+            case = VerificationTests('test_verify_reports_architecture_metadata_without_exact_worktree_sha')
+            case.run(result)
+            self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+            factory.assert_not_called()
+            self.assertIs(verification_module._factory_unit, factory)
+
 
 _PASSING_UNITTEST = (
     'import unittest\n'
@@ -607,12 +631,19 @@ class VerificationTests(unittest.TestCase):
                 os.environ['GETZILLA_OSV_ONLINE'] = '1'
                 requests = []
 
-                def fetch(url, body):
+                from getzilla.security_acquisition import refresh_query
+                from getzilla.security_osv_query import QueryResponse
+                database = root / '.getzilla/runtime/fixture-osv'
+                os.environ['GETZILLA_OSV_DB'] = str(database)
+
+                def transport(method, url, body, deadline, remaining):
                     query = json.loads(body)
                     requests.append((url, query))
-                    return json.dumps({'results': [{} for _ in query['queries']]}).encode('utf-8')
+                    answer = json.dumps({'results': [{} for _ in query['queries']]}).encode()
+                    return QueryResponse(method, url, body, answer, 200, url)
 
-                self.assertEqual(scan(root, fetch=fetch)['status'], 'pass')
+                self.assertEqual(refresh_query(root, database, transport=transport)['status'], 'pass')
+                self.assertEqual(scan(root)['status'], 'pass')
                 self.assertEqual(len(requests), 1)
                 self.assertIn('fixture-package', {
                     query['package']['name'] for query in requests[0][1]['queries']
@@ -654,7 +685,10 @@ class VerificationTests(unittest.TestCase):
             target = root / rel
             if target.exists():
                 shutil.rmtree(target)
-            shutil.copytree(source, target)
+            # This fresh fixture has independent Git history. The self-source
+            # resource profile is repository authority, not portable model data.
+            ignored = shutil.ignore_patterns('queue-analysis-profile.json') if rel == 'architecture' else None
+            shutil.copytree(source, target, ignore=ignored)
         (root / 'architecture/adoption.json').write_text(_ADOPTION_MARKER, encoding='utf-8')
 
     @staticmethod
@@ -884,7 +918,7 @@ class VerificationTests(unittest.TestCase):
                 self.assertIn(repr(malformed), scope['rejected_files'])
 
     def test_focused_verification_runs_only_landing_contract_and_reports_scope(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             base = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
@@ -1416,6 +1450,7 @@ class VerificationTests(unittest.TestCase):
             receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertTrue(receipt.is_file())
 
+    @_architecture_fixture_factory_boundary()
     def test_governance_runs_after_spec_and_architecture_and_failure_is_not_receipted(self) -> None:
         with project_copy(git=True) as root:
             self._adopt_architecture(root)
@@ -1501,6 +1536,7 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertFalse(receipt.exists())
 
+    @_architecture_fixture_factory_boundary()
     def test_verify_reports_architecture_metadata_without_exact_worktree_sha(self) -> None:
         with project_copy(git=True) as root:
             self._adopt_architecture(root)
@@ -1553,6 +1589,7 @@ class VerificationTests(unittest.TestCase):
         }])
         self.assertTrue(any(item.get('code') == 'architecture-fitness' for item in result.details))
 
+    @_architecture_fixture_factory_boundary()
     def test_verify_unconfigured_is_compatible_but_adopted_deletion_fails(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
@@ -1567,6 +1604,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertEqual(_check(report, 'architecture')['status'], 'fail')
 
+    @_architecture_fixture_factory_boundary()
     def test_verify_fails_after_committed_deletion_of_both_adopted_models(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
@@ -1610,6 +1648,7 @@ class VerificationTests(unittest.TestCase):
                     self.assertEqual(_check(report, 'architecture')['status'], 'fail')
                     self.assertIn('missing', _check(report, 'architecture')['summary'])
 
+    @_architecture_fixture_factory_boundary()
     def test_adopted_deletion_remains_invalid_after_unrelated_descendants(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
@@ -1661,6 +1700,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['architecture']['status'], 'not_configured')
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX without O_NOFOLLOW; Windows reads through the fsx engine')
+    @_architecture_fixture_factory_boundary()
     def test_adoption_marker_read_fails_when_nofollow_is_unavailable(self) -> None:
         with project_copy(git=True) as root:
             self._adopt_architecture(root)
@@ -1742,6 +1782,7 @@ class VerificationTests(unittest.TestCase):
             self.assertTrue(created)
             self.assertTrue((architecture / 'adoption.json').is_file())
 
+    @_architecture_fixture_factory_boundary()
     def test_marker_backed_merge_deletion_fails_without_history_inference(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
@@ -1772,6 +1813,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertIn('missing', _check(report, 'architecture')['summary'])
 
+    @_architecture_fixture_factory_boundary()
     def test_marker_backed_shallow_deletion_fails_at_depth_one(self) -> None:
         with project_copy(git=True) as source, tempfile.TemporaryDirectory() as tmp:
             self._adopt_architecture(source)
@@ -1805,6 +1847,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertIn('missing', _check(report, 'architecture')['summary'])
 
+    @_architecture_fixture_factory_boundary()
     def test_shallow_descendant_cannot_hide_prior_adoption_from_legacy_route(self) -> None:
         with project_copy(git=True) as source, tempfile.TemporaryDirectory() as tmp:
             legacy = subprocess.check_output(
@@ -2038,7 +2081,7 @@ class VerificationTests(unittest.TestCase):
 
 
     def test_parent_contract_focused_verification_runs_only_landing_contract_and_reports_scope(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             base = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
@@ -2080,20 +2123,37 @@ class VerificationTests(unittest.TestCase):
 
 
     def test_parent_contract_verify_records_receipt_for_active_route(self) -> None:
-        with project_copy(git=True, source_only_runtime=True) as root:
+        with full_project_copy(git=True, source_only_runtime=True) as root:
+            (root/'owned_receipt_app.py').write_text('VALUE = 7\n', encoding='utf-8', newline='\n')
+            (root/'tests').mkdir(exist_ok=True)
+            (root/'tests/__init__.py').write_text('', encoding='utf-8', newline='\n')
+            (root/'tests/test_receipt_app.py').write_text(
+                'import unittest\nimport owned_receipt_app\nclass OwnedReceipt(unittest.TestCase):\n'
+                ' def test_value(self): self.assertEqual(owned_receipt_app.VALUE, 7)\n',
+                encoding='utf-8', newline='\n')
+            (root/'.coveragerc').write_text('[run]\nbranch=True\nsource=owned_receipt_app\n[report]\nfail_under=100\n',
+                                           encoding='utf-8', newline='\n')
+            subprocess.run(['git','add','.'], cwd=root, check=True)
+            subprocess.run(['git','commit','-qm','owned receipt application'], cwd=root, check=True)
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
             synchronize_fixture_scope(root)
-            report = verify(root, mode='pr', record=True)
+            with patch.dict(os.environ, {'GETZILLA_TEST_WORKERS':'1'}):
+                report = verify(root, mode='pr', record=True)
             self.assertEqual(report['status'], 'pass', report)
             receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertTrue(receipt.is_file())
             from getzilla.verification_plan import report_gaps
             self.assertEqual(report_gaps(root, report), [])
+            previous_receipt = receipt.read_bytes()
             fast = verify(root, mode='fast', record=False)
-            self.assertEqual(fast['status'], 'fail', 'a full task cannot qualify with fast evidence')
-            self.assertIn('required-qualifying-mode', {item['code'] for item in _check(fast, 'quality-gate')['details']})
+            self.assertIsInstance(fast['required_plan'], dict)
+            self.assertEqual(fast['mode'], 'fast')
+            # A fast observation can pass; it cannot qualify this full task.
+            self.assertEqual({item['code'] for item in report_gaps(root, fast)}, {'required-qualifying-mode'})
+            self.assertEqual(receipt.read_bytes(), previous_receipt)
+
 
 
     def test_parent_contract_factory_postgres_exit_outer_timeout_exceeds_bounded_inner_timeout(self) -> None:
@@ -3105,7 +3165,8 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
 
     def test_default_scan_cannot_borrow_ambient_but_inner_owned_sources_work(self):
         import zipfile
-        from getzilla import known_vulns
+        from getzilla import known_vulns, security_acquisition, security_osv_query
+        from tests.test_known_vulns import _mirror
 
         for minimal in (False, True):
             with self.subTest(minimal=minimal), tempfile.TemporaryDirectory() as directory:
@@ -3115,10 +3176,9 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
                     pass
                 ambient = {'GETZILLA_OSV_DB': str(ambient_mirror), 'GETZILLA_OSV_ONLINE': '1'}
                 with patch.dict(os.environ, ambient):
-                    with full_project_copy(minimal_runtime=minimal) as root:
+                    with full_project_copy(git=True, minimal_runtime=minimal, source_only_runtime=True) as root:
                         (root / 'requirements.txt').write_text('owned-fixture==1.0\n', encoding='utf-8')
-                        with patch.object(known_vulns, '_tracked_files', return_value=['requirements.txt']), \
-                                patch.object(known_vulns, 'query_offline', wraps=known_vulns.query_offline) as offline, \
+                        with patch.object(known_vulns, 'query_offline', wraps=known_vulns.query_offline) as offline, \
                                 patch.object(known_vulns, 'query_online', wraps=known_vulns.query_online) as online:
                             def forbidden_fetch(_url, _body):
                                 self.fail('default synthetic scan attempted online access')
@@ -3127,12 +3187,10 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
                             self.assertEqual((report['status'], report['dependencies']), ('skip', 1))
                             offline.assert_not_called()
                             online.assert_not_called()
-                            owned_mirror = root / 'owned-mirror'
-                            (owned_mirror / 'PyPI').mkdir(parents=True)
+                            owned_mirror = Path(directory) / 'owned-mirror'
                             record = {'id': 'OWNED-2026-1', 'aliases': [], 'affected': [{
                                 'package': {'ecosystem': 'PyPI', 'name': 'owned-fixture'}, 'versions': ['1.0']}]}
-                            with zipfile.ZipFile(owned_mirror / 'PyPI/all.zip', 'w') as archive:
-                                archive.writestr('OWNED-2026-1.json', json.dumps(record))
+                            _mirror(owned_mirror, 'PyPI', [record])
                             os.environ['GETZILLA_OSV_DB'] = str(owned_mirror)
                             report = known_vulns.scan(root, fetch=forbidden_fetch)
                             self.assertEqual(report['status'], 'fail')
@@ -3140,16 +3198,18 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
                             offline.assert_called_once()
                             self.assertEqual(offline.call_args.args[1], owned_mirror)
                             online.assert_not_called()
-                            os.environ.pop('GETZILLA_OSV_DB')
                             os.environ['GETZILLA_OSV_ONLINE'] = '1'
                             requests = []
 
-                            def fetch(_url, body):
+                            def transport(method, url, body, deadline, maximum):
                                 requests.append(json.loads(body))
-                                return json.dumps({'results': [{}]}).encode('utf-8')
+                                response = json.dumps({'results': [{}]}).encode()
+                                return security_osv_query.QueryResponse(method, url, body, response, 200, url)
 
-                            self.assertEqual(known_vulns.scan(root, fetch=fetch)['status'], 'pass')
-                            online.assert_called_once()
+                            refreshed = security_acquisition.refresh_query(root, owned_mirror, transport=transport)
+                            self.assertEqual(refreshed['status'], 'pass', refreshed)
+                            self.assertEqual(known_vulns.scan(root, fetch=forbidden_fetch)['status'], 'pass')
+                            online.assert_not_called()
                             self.assertEqual(len(requests), 1)
                             self.assertEqual(requests[0]['queries'][0]['package']['name'], 'owned-fixture')
                     self.assertEqual({key: os.environ.get(key) for key in ambient}, ambient)

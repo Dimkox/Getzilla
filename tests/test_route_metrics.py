@@ -1,8 +1,8 @@
 """O01: per-route overhead and caught-defect counters answer whether the ritual pays for itself."""
 from __future__ import annotations
+import os
 
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -24,6 +24,18 @@ def event(minutes: float, name: str, route_id: str, **fields) -> dict:
 
 
 class SummaryTests(unittest.TestCase):
+    def test_closed_v3_rows_are_readable_but_cannot_be_imported_as_authority(self):
+        from getzilla.metrics_journal import validate, import_observations
+        from tests.test_trace_contracts import observation
+        row = observation('task', 'selected', window_start='2026-11-05T00:00:00Z')
+        validate(row)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'.getzilla/runtime').mkdir(parents=True)
+            (root/'input.json').write_text(json.dumps([row]))
+            with self.assertRaises(ValueError):
+                import_observations(root, 'input.json')
+
     def test_one_route_counts_runs_reviews_and_caught_defects(self) -> None:
         summary = summarize([
             event(0, 'route', 'r1', intent='feature'),
@@ -59,8 +71,13 @@ class SummaryTests(unittest.TestCase):
 
 class RecordingTests(unittest.TestCase):
     def setUp(self) -> None:
+        previous_umask = os.umask(0o077)
+        self.addCleanup(os.umask, previous_umask)
+        saved = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, saved)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.fchdir, saved)
         self.root = Path(tmp.name)
         (self.root / '.getzilla').mkdir()
         previous = Path.cwd()

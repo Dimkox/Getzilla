@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import ast
-from collections import Counter, defaultdict, deque
+from collections import Counter as Counter, defaultdict as defaultdict, deque
 import hashlib
 import json
 import re
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field as _dataclass_field, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from types import MappingProxyType
+from types import MappingProxyType as MappingProxyType
 from typing import Any, Iterable, Mapping, NamedTuple
+
+from .queue_analysis_profile import (
+    CONSUMER_PROFILE as _CONSUMER_PROFILE, GETZILLA_SELF_PROFILE as _GETZILLA_SELF_PROFILE,
+    QueueAnalysisProfile as _QueueAnalysisProfile,
+    select_profile as _queue_analysis_profile,
+)
 
 from .architecture import (
     ArchitectureError,
@@ -33,15 +39,19 @@ from .architecture_diff import (
     ArchitectureChange,
     ArchitectureDiff,
     ChangedArtifact,
-    _committed_worktree_diff,
+    _committed_worktree_diff as _committed_worktree_diff,
     diff_architecture,
+    git_binding_scope,
     git_tree_paths,
     read_diff_file,
     read_diff_files,
 )
+from .queue_refusal import QUEUE_MODULE_LIMIT_CATEGORY
 from .queue_provenance import (QueueAnalysisLimit, analyze_queue_tree, literal_patch_members,
-                               QueueRefusalCapture as _QueueRefusalCapture, queue_refusal_text as _queue_limit_text)
-from .python_source_proof import binding_events, binding_owner, literal_import_reads, namespace_is_closed
+                               QueueRefusalCapture as _QueueRefusalCapture, queue_refusal_text as _queue_limit_text)  # noqa: F401 canonical scan patch point
+from .python_source_proof import binding_events, binding_owner as binding_owner, literal_import_reads, namespace_is_closed
+from . import verification_journal as diagnostics
+from .python_test_runner import check_cancellation
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -251,6 +261,173 @@ class _UnsupportedQueueCallbackError(ArchitectureError):
     """Unsupported callback semantics, distinct from acquisition or analysis faults."""
 
 
+_QUEUE_DEPTH_SEAL = object()
+_QUEUE_DEPTH_PREFIX = 'queue depth context v1: '
+_QUEUE_DEPTH_CONTEXT_LIMIT = 64
+
+
+@dataclass(frozen=True)
+class _QueueDepthContext:
+    boundary: str
+    side: str
+    attempted_module: str
+    active_count: int | None
+    active_modules: tuple[str, ...]
+    attempted_depth: int | None
+    limit: int
+    cached_height: int | None = None
+    cached_count: int | None = None
+    cached_modules: tuple[str, ...] = ()
+    redacted: bool = False
+    truncated: bool = False
+    unavailable: bool = False
+    _seal: object = _dataclass_field(default=None, repr=False, compare=False)
+
+
+def _queue_depth_token(value: object) -> tuple[str, bool]:
+    if (type(value) is str and 0 < len(value) <= 96
+            and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*', value)):
+        return value, False
+    return '<unavailable>', True
+
+
+def _queue_depth_modules(value: object, maximum: int) -> tuple[int | None, tuple[str, ...], bool, bool]:
+    if type(value) not in {set, frozenset}:
+        return None, (), True, False
+    count = len(value)
+    if count > maximum:
+        return count, (), False, True
+    tokens = [_queue_depth_token(item) for item in value]
+    return count, tuple(sorted({token for token, _invalid in tokens})), any(bad for _token, bad in tokens), False
+
+
+def _queue_depth_error(boundary: str, module: str, side: str, active: set[str], *,
+                       cached_height: int | None = None, cached_modules: frozenset[str] | None = None,
+                       budget=None) -> ArchitectureError:
+    error = ArchitectureError('queue adapter depth limit exceeded', code='limit')
+    try:
+        if (type(boundary) is not str or boundary not in {'live-depth', 'cached-height', 'declaration-depth'}
+                or type(side) is not str or side not in {'base', 'head'}):
+            return error
+        depth_limit = budget.depth_limit if budget is not None else MAX_QUEUE_ADAPTER_DEPTH
+        module_limit = budget.module_limit if budget is not None else MAX_QUEUE_ADAPTER_MODULES
+        token, redacted = _queue_depth_token(module)
+        count, names, bad, truncated = _queue_depth_modules(active, depth_limit)
+        height = None
+        cached_count, cached_names, cached_bad, cached_truncated = None, (), False, False
+        unavailable = count is None
+        if boundary == 'cached-height':
+            if type(cached_height) is int and 0 <= cached_height <= module_limit:
+                height = cached_height
+            else:
+                unavailable = True
+            cached_count, cached_names, cached_bad, cached_truncated = _queue_depth_modules(
+                cached_modules, module_limit)
+            unavailable = unavailable or cached_count is None
+        depth = count + (height if boundary == 'cached-height' else 1) if count is not None and (
+            boundary != 'cached-height' or height is not None) else None
+        error._queue_depth_context = _QueueDepthContext(boundary, side, token, count, names,
+            depth, depth_limit, height, cached_count, cached_names,
+            redacted or bad or cached_bad, truncated or cached_truncated, unavailable, _QUEUE_DEPTH_SEAL)
+    except Exception:
+        # Optional diagnostic failure must preserve the original refusal; interrupts propagate.
+        return error
+    return error
+
+
+def _queue_depth_context_valid(context: object, side: object) -> bool:
+    if type(context) is not _QueueDepthContext or context._seal is not _QUEUE_DEPTH_SEAL:
+        return False
+    if (type(side) is not str or side not in {'base', 'head'} or type(context.side) is not str
+            or context.side != side or type(context.boundary) is not str
+            or context.boundary not in {'live-depth', 'cached-height', 'declaration-depth'}
+            or type(context.limit) is not int or context.limit not in {MAX_QUEUE_ADAPTER_DEPTH, _GETZILLA_SELF_PROFILE.depth_limit}
+            or any(type(value) is not bool for value in (context.redacted, context.truncated, context.unavailable))):
+        return False
+    if type(context.attempted_module) is not str or (
+            context.attempted_module != '<unavailable>' and _queue_depth_token(context.attempted_module)[1]):
+        return False
+    if context.attempted_module == '<unavailable>' and not context.redacted:
+        return False
+    module_limit = (_GETZILLA_SELF_PROFILE.module_limit if context.limit == _GETZILLA_SELF_PROFILE.depth_limit
+                    else MAX_QUEUE_ADAPTER_MODULES)
+    for names, count, maximum in ((context.active_modules, context.active_count, context.limit),
+                                  (context.cached_modules, context.cached_count, module_limit)):
+        if (type(names) is not tuple or len(names) > maximum or
+                any(type(name) is not str or (name != '<unavailable>' and _queue_depth_token(name)[1]) for name in names)
+                or names != tuple(sorted(set(names)))):
+            return False
+        if count is None:
+            if names or ((maximum == context.limit or context.boundary == 'cached-height') and not context.unavailable):
+                return False
+        elif type(count) is not int or not 0 <= count <= sys.maxsize:
+            return False
+        elif count > maximum:
+            if names or not context.truncated:
+                return False
+        elif len(names) != count and not ('<unavailable>' in names and context.redacted and len(names) < count):
+            return False
+        if '<unavailable>' in names and not context.redacted:
+            return False
+    if context.cached_height is not None and (type(context.cached_height) is not int or
+            not 0 <= context.cached_height <= module_limit):
+        return False
+    if context.attempted_depth is not None and (type(context.attempted_depth) is not int or
+            not 0 <= context.attempted_depth <= sys.maxsize + module_limit):
+        return False
+    if context.boundary != 'cached-height' and (
+            context.cached_height is not None or context.cached_count is not None or context.cached_modules):
+        return False
+    increment = context.cached_height if context.boundary == 'cached-height' else 1
+    if context.active_count is not None and increment is not None:
+        if (context.attempted_depth != context.active_count + increment or
+                context.attempted_depth <= context.limit):
+            return False
+    elif context.attempted_depth is not None or not context.unavailable:
+        return False
+    return True
+
+
+def _queue_exception_depth_context(error: ArchitectureError, side: str) -> _QueueDepthContext | None:
+    try:
+        context = getattr(error, '_queue_depth_context', None) if type(error) is ArchitectureError else None
+        return context if _queue_depth_context_valid(context, side) else None
+    except Exception:
+        return None
+
+
+def _queue_depth_findings(provenance: _QueueProvenanceResult) -> tuple[str, ...]:
+    records: list[str] = []
+    try:
+        contexts = provenance.depth_contexts
+        if type(contexts) is not tuple or len(contexts) > _QUEUE_DEPTH_CONTEXT_LIMIT:
+            return ('queue depth contexts v1: {"unavailable":true}',)
+        for record in contexts:
+            if type(record) is not tuple or len(record) != 3:
+                continue
+            path, side, context = record
+            if not _queue_depth_context_valid(context, side):
+                continue
+            valid_path = (type(path) is str and 0 < len(path) <= 256 and not path.startswith('/')
+                and re.fullmatch(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*', path)
+                and not any(part in {'.', '..'} for part in path.split('/')))
+            value = {key: getattr(context, key) for key in _QueueDepthContext.__dataclass_fields__ if key != '_seal'}
+            value.update(version=1, importer=path if valid_path else '<unavailable>')
+            value['unavailable'] = value['unavailable'] or not valid_path
+            encoded = _QUEUE_DEPTH_PREFIX + json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+            if len(encoded.encode('ascii')) > 8192:
+                value.update(active_modules=(), cached_modules=(), truncated=True)
+                encoded = _QUEUE_DEPTH_PREFIX + json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+            if len(encoded.encode('ascii')) <= 8192:
+                records.append(encoded)
+        omitted = provenance.depth_contexts_omitted
+        if type(omitted) is int and 0 < omitted <= MAX_ANALYZED_PYTHON_FILES:
+            records.append('queue depth contexts omitted v1: ' + str(omitted))
+        return tuple(sorted(set(records)))
+    except Exception:
+        return ('queue depth contexts v1: {"unavailable":true}',)
+
+
 class _QueueProvenanceResult(NamedTuple):
     state: str
     reason: str
@@ -259,6 +436,8 @@ class _QueueProvenanceResult(NamedTuple):
     limits: tuple[tuple[str, str, str], ...] = ()
     causes: tuple[tuple[str, str, str, str, str], ...] = ()
     complete_empty: bool = False
+    depth_contexts: tuple[tuple[str, str, _QueueDepthContext], ...] = ()
+    depth_contexts_omitted: int = 0
 
 
 def _queue_diagnostic_code(code: object) -> str:
@@ -270,7 +449,7 @@ def _queue_diagnostic_findings(provenance: _QueueProvenanceResult) -> tuple[str,
     return tuple(
         f"queue analysis diagnostic ({side}/{stage}/{outcome}/{code}): {path}"
         for path, side, stage, outcome, code in provenance.causes
-    )
+    ) + _queue_depth_findings(provenance)
 
 
 class _QueueSourceFootprint(NamedTuple):
@@ -284,6 +463,7 @@ class _QueueFootprint(NamedTuple):
     side: str
     sources: tuple[_QueueSourceFootprint, ...] = ()
     work: tuple[tuple[str, int], ...] = ()
+    profile: tuple = _CONSUMER_PROFILE
 
 
 
@@ -291,14 +471,34 @@ class _QueueFootprint(NamedTuple):
 class _QueueBudget:
     """One importer/side ledger; cache reuse cannot remove logical charges."""
 
-    def __init__(self, side: str) -> None:
+    def __init__(self, side: str, *, profile=None) -> None:
         self.side = side
+        self.profile = profile if profile is not None else _CONSUMER_PROFILE
+        if (type(self.profile) is not _QueueAnalysisProfile
+                or self.profile._replace(binding='') not in {_CONSUMER_PROFILE, _GETZILLA_SELF_PROFILE}):
+            raise ArchitectureError("queue resource profile is unavailable", code="fitness")
         self.sources: dict[tuple[str, str], _QueueSourceFootprint] = {}
         self.work: dict[str, int] = {}
         self.frames: list[dict[str, Any]] = []
         self.source_bytes = self.ast_nodes = self.logical_work = self.actual_work = 0
         self.summary_work = 0
         self.root_steps = 0
+
+    @property
+    def module_limit(self):
+        return MAX_QUEUE_ADAPTER_MODULES if self.profile.name == "consumer-v1" else self.profile.module_limit
+
+    @property
+    def byte_limit(self):
+        return MAX_QUEUE_ANALYSIS_BYTES if self.profile.name == "consumer-v1" else self.profile.byte_limit
+
+    @property
+    def node_limit(self):
+        return MAX_QUEUE_ANALYSIS_AST_NODES if self.profile.name == "consumer-v1" else self.profile.node_limit
+
+    @property
+    def depth_limit(self):
+        return MAX_QUEUE_ADAPTER_DEPTH if self.profile.name == "consumer-v1" else self.profile.depth_limit
 
     def refusal(self, message: str, category: str, limit: int | None, observed: int | None,
                 *, site: str = 'budget', cached: tuple[str, ...] = ()) -> ArchitectureError:
@@ -324,30 +524,32 @@ class _QueueBudget:
         # compatibility sidecar. Its subsequent mutation is not provenance.
         error._queue_refusal_capture = _QueueRefusalCapture(
             error, message, json.dumps(detail, separators=(',', ':')))
+        diagnostics.queue_refusal(error)
         return error
 
     def check_depth(self, depth: int, *, site: str, cached: tuple[str, ...] = ()) -> None:
-        if depth > MAX_QUEUE_ADAPTER_DEPTH:
-            raise self.refusal('queue adapter depth limit exceeded', 'depth', MAX_QUEUE_ADAPTER_DEPTH,
+        if depth > self.depth_limit:
+            raise self.refusal('queue adapter depth limit exceeded', 'depth', self.depth_limit,
                                depth, site=site, cached=cached)
 
     def source(self, path: str, value: bytes, nodes: int = 0) -> None:
         self._source(_QueueSourceFootprint(path, hashlib.sha256(value).hexdigest(), len(value), nodes))
 
     def _source(self, item: _QueueSourceFootprint) -> None:
+        check_cancellation()
         key = (item.path, item.digest)
         previous = self.sources.get(key)
         # Every inspected source counts, including the importer, declarations
         # and transitive cache hits. Cache warmth cannot change admission.
-        if previous is None and len({source.path for source in self.sources.values()} | {item.path}) > MAX_QUEUE_ADAPTER_MODULES:
-            raise self.refusal('queue adapter module limit exceeded', 'modules', MAX_QUEUE_ADAPTER_MODULES,
+        if previous is None and len({source.path for source in self.sources.values()} | {item.path}) > self.module_limit:
+            raise self.refusal('queue adapter module limit exceeded', QUEUE_MODULE_LIMIT_CATEGORY, self.module_limit,
                                len({source.path for source in self.sources.values()} | {item.path}))
         byte_total = self.source_bytes + (0 if previous else item.size)
         node_total = self.ast_nodes + max(0, item.nodes - (previous.nodes if previous else 0))
-        if byte_total > MAX_QUEUE_ANALYSIS_BYTES:
-            raise self.refusal('queue aggregate source byte limit exceeded', 'bytes', MAX_QUEUE_ANALYSIS_BYTES, byte_total)
-        if node_total > MAX_QUEUE_ANALYSIS_AST_NODES:
-            raise self.refusal('queue aggregate AST node limit exceeded', 'nodes', MAX_QUEUE_ANALYSIS_AST_NODES, node_total)
+        if byte_total > self.byte_limit:
+            raise self.refusal('queue aggregate source byte limit exceeded', 'bytes', self.byte_limit, byte_total)
+        if node_total > self.node_limit:
+            raise self.refusal('queue aggregate AST node limit exceeded', 'nodes', self.node_limit, node_total)
         self.source_bytes, self.ast_nodes = byte_total, node_total
         self.sources[key] = item._replace(nodes=max(item.nodes, previous.nodes if previous else 0))
         for frame in self.frames:
@@ -364,6 +566,7 @@ class _QueueBudget:
             frame['work'][key] = max(cost, frame['work'].get(key, 0))
 
     def step(self, *, request: bool = False, cost: int = 1) -> None:
+        check_cancellation()
         self.actual_work += cost
         if not request:
             self.summary_work += cost
@@ -387,13 +590,15 @@ class _QueueBudget:
         if not self.frames or self.frames[-1] is not frame:
             raise ArchitectureError('queue work ledger scope mismatch', code='fitness')
         self.frames.pop()
-        return _QueueFootprint(self.side, tuple(sorted(frame['sources'].values())), tuple(sorted(frame['work'].items())))
+        return _QueueFootprint(self.side, tuple(sorted(frame['sources'].values())), tuple(sorted(frame['work'].items())), self.profile)
 
     def merge(self, footprint: _QueueFootprint | None) -> None:
         if footprint is None:
             return
         if footprint.side != self.side:
             raise ArchitectureError('queue source cache side mismatch', code='fitness')
+        if footprint.profile != self.profile:
+            raise ArchitectureError('queue source cache profile mismatch', code='fitness')
         for source in footprint.sources:
             self._source(source)
         for key, cost in footprint.work:
@@ -407,28 +612,65 @@ class _QueueAdapterResolution(NamedTuple):
     signals: tuple[str, ...] = ()
     declared_exports: tuple[str, ...] = ()
     sources: tuple[tuple[str, bytes, str], ...] = ()
-    modules: frozenset[str] = frozenset()
+    source_modules: frozenset[str] = frozenset()
     height: int = 1
     footprint: _QueueFootprint | None = None
     witness: tuple[str, ...] = ()
 
 
 class _QueueResolutionCache(NamedTuple):
-    modules: tuple[str, ...]
+    source_modules: tuple[str, ...]
     paths: tuple[str, ...]
     values: dict[str, _QueueAdapterResolution]
-    demands: dict[tuple[str, frozenset[str] | None, bool], _QueueAdapterResolution]
+    demands: dict[tuple, _QueueAdapterResolution]
+    profile: tuple = _CONSUMER_PROFILE
 
 
 class _QueueAdapterNamesResult(NamedTuple):
     names: frozenset[str]
     unsupported: bool
-    modules: frozenset[str] = frozenset()
+    source_modules: frozenset[str] = frozenset()
     height: int = 0
     unproved_queue_callback: bool = False
     witness: tuple[str, ...] = ()
 
 
+
+
+class _CallableUseProof(NamedTuple):
+    identity: frozenset[str]
+    returns: frozenset[str]
+    opaque: frozenset[str]
+    stable_imports: frozenset[str]
+
+
+class _CallUseInventory(NamedTuple):
+    tree: ast.AST
+    namespace_closed: bool
+    nodes: tuple[ast.AST, ...]
+    parents: Mapping
+    bindings: tuple
+    counts: Mapping
+    scope_counts: Mapping
+    owners: Mapping
+    declarations: Mapping
+    nonlocals: frozenset[str]
+    unknown_reads: frozenset[ast.AST]
+    reads: Mapping
+    attributes: Mapping
+    getters: Mapping
+    unknown_getter: bool
+    getter_values: Mapping
+    structural: frozenset[ast.AST]
+    stable_imports: frozenset[str]
+
+
+class _QueueSourcePreparation(NamedTuple):
+    tree: ast.Module
+    namespace_closed: bool
+    plain_callables: frozenset[str]
+    callable_uses: _CallableUseProof
+    inventory: _CallUseInventory
 
 
 class _OperationDependencies(NamedTuple):
@@ -1401,7 +1643,9 @@ def _migration_phase(path: str) -> tuple[str, str] | None:
         # Identity is counted even when its bytes are unreviewed and denied.
         return PurePosixPath(path).stem, "reviewed_bytes"
     match = _MIGRATION_PHASE.fullmatch(PurePosixPath(path).stem.lower()) or _MIGRATION_CANONICAL.fullmatch(PurePosixPath(path).stem.lower())
-    if match is None and path.startswith("factory/src/getzilla_factory/resources/"):
+    if match is None and path.startswith(("factory/src/getzilla_factory/resources/",
+                                       "factory/sqlite/",
+                                       "factory/src/getzilla_factory/landing_sqlite/migrations/")):
         match = re.fullmatch(r"(?P<group>[0-9]{3}_[a-z0-9_]+)", PurePosixPath(path).stem.lower())
     return None if match is None else (match.group("group"), match.groupdict().get("phase") or "legacy")
 
@@ -1754,189 +1998,53 @@ def _network_call_is_applicable(
     return bool(tokens & _NETWORK_APPLICABILITY_TOKENS)
 
 
-def _instrumentation_targets_closed(tree, parents, events, resolve, imported, protected):
-    """Admit only closed instrumentor uses, never arbitrary patch factories."""
-    roots = {'unittest', 'mock', 'pytest', '_pytest'}
-    modules = set()
-    instrumentors = []
-    for event in events:
-        node = event.node
-        if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-            if any(alias.name.split('.')[0] in roots and (alias.asname or alias.name.split('.')[0]) == event.name for alias in node.names):
-                instrumentors.append(event)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            modules.add(node.module)
-            if node.module.split('.')[0] in roots:
-                instrumentors.append(event)
-
-    def target_closed(node):
-        if not isinstance(node, ast.Constant) or type(node.value) is not str or len(node.value) > 4096:
-            return False
-        parts = node.value.split('.')
-        if not 2 <= len(parts) <= 32 or any(not p.isidentifier() or p.startswith('__') or p in protected | roots for p in parts):
-            return False
-        parent = '.'.join(parts[:-1])
-        # A flat imported module member, or a declared imported-module namespace.
-        if parent not in modules and not (len(parts) > 2 and '.'.join(parts[:-2]) in modules and parts[-2] in modules):
-            return False
-        try:
-            expression = ast.parse(node.value, mode='eval')
-        except SyntaxError:
-            return False
-        guard = ast.Module(body=[ast.Import(names=[ast.alias(name=parts[0])]), ast.Expr(value=expression.body)], type_ignores=[])
-        return namespace_is_closed(guard, allow_instrumentation=True)
-
-    for event in instrumentors:
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load) or node.id != event.name:
-                continue
-            if resolve(node) is not event.node:
-                return False
-            member = node
-            while isinstance(parents.get(member), ast.Attribute) and parents[member].value is member:
-                member = parents[member]
-            canonical = imported(member)
-            parent = parents.get(member)
-            if canonical == 'unittest.TestCase' and isinstance(parent, ast.ClassDef) and member in parent.bases:
-                continue
-            if canonical in {'unittest.mock.Mock', 'unittest.mock.MagicMock'} and isinstance(parent, ast.Call) and parent.func is member:
-                continue
-            if canonical != 'unittest.mock.patch' or not isinstance(parent, ast.Call) or parent.func is not member:
-                return False
-            use = parents.get(parent)
-            direct = isinstance(use, ast.withitem) and use.context_expr is parent
-            decorator = isinstance(use, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and parent in use.decorator_list
-            if (not (direct or decorator) or not parent.args or not target_closed(parent.args[0])
-                    or any(keyword.arg is None or keyword.arg == 'target' for keyword in parent.keywords)):
-                return False
-    return True
+from .architecture_metadata import _instrumentation_targets_closed as _instrumentation_targets_closed
 
 
-def _byte_only_http_imports(tree: ast.AST) -> set[str]:
-    """Prove response parsing only, not the behavior of arbitrary imported code."""
-    if not namespace_is_closed(tree, allow_instrumentation=True):
+from .architecture_metadata import _byte_only_http_imports as _byte_only_http_imports
+
+
+def _shutdown_constant_socket_imports(tree: ast.AST) -> set[str]:
+    """Prove one unchanged module binding supplies shutdown constants only."""
+    if not namespace_is_closed(tree):
+        return set()
+    events = [event for event in binding_events(tree) if event.name == 'socket']
+    if len(events) != 1 or events[0].node not in getattr(tree, 'body', ()):
+        return set()
+    declaration = events[0].node
+    if not isinstance(declaration, ast.Import):
+        return set()
+    imports = [alias for node in ast.walk(tree) if isinstance(node, ast.Import)
+               for alias in node.names if alias.name.split('.')[0] == 'socket']
+    if (len(imports) != 1 or imports[0].name != 'socket' or imports[0].asname is not None
+            or any(isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] == 'socket'
+                   for node in ast.walk(tree))):
         return set()
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
-    events = binding_events(tree)
-    bindings: dict[tuple[ast.AST | None, str], list[ast.AST]] = defaultdict(list)
-    for event in events:
-        bindings[(binding_owner(event.node, parents), event.name)].append(event.node)
-
-    def resolve(name: ast.Name) -> ast.AST | None:
-        scope = binding_owner(name, parents)
-        while True:
-            found = bindings.get((scope, name.id), ())
-            if found:
-                return found[0] if len(found) == 1 else None
-            if scope is None:
-                return None
-            scope = binding_owner(scope, parents)
-            # A method closes over enclosing functions/globals, never class locals.
-            while isinstance(scope, ast.ClassDef):
-                scope = binding_owner(scope, parents)
-
-    def imported(value: ast.AST) -> str | None:
-        parts = []
-        while isinstance(value, ast.Attribute):
-            if not isinstance(value.ctx, ast.Load):
-                return None
-            parts.append(value.attr)
-            value = value.value
-        if not isinstance(value, ast.Name):
-            return None
-        event = resolve(value)
-        if isinstance(event, ast.Import):
-            aliases = [a for a in event.names if (a.asname or a.name.split('.')[0]) == value.id]
-            prefix = aliases[0].name if aliases and aliases[0].asname else value.id
-        elif isinstance(event, ast.ImportFrom) and event.level == 0:
-            aliases = [a for a in event.names if (a.asname or a.name) == value.id]
-            prefix = event.module + '.' + aliases[0].name if aliases else ''
-        else:
-            return None
-        return '.'.join((prefix, *reversed(parts)))
-
-    http_events = []
-    for event in events:
-        node = event.node
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == 'http.client' and (alias.asname or alias.name.split('.')[0]) == event.name:
-                    http_events.append((event.name, node, alias.name))
-        elif isinstance(node, ast.ImportFrom) and node.module == 'http.client':
-            if node.level or any(a.name != 'HTTPResponse' for a in node.names):
-                return set()
-            http_events.extend((a.asname or a.name, node, 'http.client.' + a.name) for a in node.names)
-    if not http_events:
-        return set()
-    protected = {'http', 'client', 'HTTPResponse', 'io', 'BytesIO', 'makefile'}
-    protected.update(name for name, _, _ in http_events)
-    protected.update(node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
-    protected.update(node.id for node in ast.walk(tree)
-                     if isinstance(node, ast.Name) and imported(node) in {'io', 'io.BytesIO'})
-    if not _instrumentation_targets_closed(tree, parents, events, resolve, imported, protected):
-        return set()
-    # A module/class alias cannot escape or be mutated into another supplier.
+    used = False
     for node in ast.walk(tree):
-        if imported(node) == 'io.BytesIO' and isinstance(node, (ast.Name, ast.Attribute)):
-            parent = parents.get(node)
-            if not ((isinstance(parent, ast.Call) and parent.func is node)
-                    or (isinstance(parent, ast.ClassDef) and node in parent.bases)):
-                return set()
-        if isinstance(node, ast.Attribute) and not isinstance(node.ctx, ast.Load):
-            base = node
-            while isinstance(base, ast.Attribute):
-                base = base.value
-            if isinstance(base, ast.Name) and imported(base) in {'io', 'http', 'http.client'}:
-                return set()
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and imported(node) == 'io':
-            parent = parents.get(node)
-            if not isinstance(parent, ast.Attribute) or parent.attr not in {'BytesIO', 'StringIO'}:
-                return set()
-    calls = set()
-    for name, event, _ in http_events:
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load) or node.id != name:
-                continue
-            if resolve(node) is not event:
-                return set()
-            member = node
-            while isinstance(parents.get(member), ast.Attribute) and parents[member].value is member:
-                member = parents[member]
-            call = parents.get(member)
-            if imported(member) != 'http.client.HTTPResponse' or not isinstance(call, ast.Call) or call.func is not member:
-                return set()
-            statement = parents.get(call)
-            if not isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Return)) or statement.value is not call:
-                return set()
-            if len(call.args) != 1 or call.keywords:
-                return set()
-            supplier = call.args[0]
-            if not isinstance(supplier, ast.Call) or not isinstance(supplier.func, ast.Name) or supplier.args or supplier.keywords:
-                return set()
-            cls = resolve(supplier.func)
-            if (not isinstance(cls, ast.ClassDef) or cls.lineno >= call.lineno or cls.bases or cls.keywords or cls.decorator_list
-                    or getattr(cls, 'type_params', ()) or len(cls.body) != 1):
-                return set()
-            method = cls.body[0]
-            if (not isinstance(method, ast.FunctionDef) or method.name != 'makefile' or method.decorator_list or method.returns
-                    or method.args.vararg or method.args.kwarg or method.args.kwonlyargs or method.args.defaults
-                    or getattr(method, 'type_params', ())
-                    or len(method.args.posonlyargs + method.args.args) != 2
-                    or any(a.annotation for a in method.args.posonlyargs + method.args.args) or len(method.body) != 1
-                    or not isinstance(method.body[0], ast.Return)):
-                return set()
-            value = method.body[0].value
-            if (not isinstance(value, ast.Call) or imported(value.func) != 'io.BytesIO' or value.keywords
-                    or len(value.args) != 1 or not isinstance(value.args[0], ast.Constant)
-                    or type(value.args[0].value) is not bytes or len(value.args[0].value) > 65536):
-                return set()
-            uses = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-                    and n.id == cls.name and resolve(n) is cls]
-            if uses != [supplier.func]:
-                return set()
-            calls.add(call)
-    return {item[2] for item in http_events} if calls else set()
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and 'socket' in node.names:
+            return set()
+        if not isinstance(node, ast.Name) or node.id != 'socket':
+            continue
+        member = parents.get(node)
+        if (not isinstance(node.ctx, ast.Load) or not isinstance(member, ast.Attribute)
+                or member.value is not node or not isinstance(member.ctx, ast.Load)
+                or member.attr not in {'SHUT_RD', 'SHUT_WR', 'SHUT_RDWR'}):
+            return set()
+        parent = parents.get(member)
+        if isinstance(parent, ast.Call) and parent.func is member:
+            return set()
+        used = True
+    return {'socket'} if used else set()
+
+
+from .architecture_metadata import _constructor_only_urllib_imports as _constructor_only_urllib_imports
+
+
+def _non_client_imports(tree: ast.AST) -> set[str]:
+    return (_byte_only_http_imports(tree) | _shutdown_constant_socket_imports(tree)
+            | _constructor_only_urllib_imports(tree))
 
 
 def _network_clients(
@@ -1956,7 +2064,7 @@ def _network_clients(
         try:
             tree = python.tree(path)
             imports = _import_targets(tree)
-            byte_only = _byte_only_http_imports(tree)
+            byte_only = _non_client_imports(tree)
         except SyntaxError as exc:
             unsupported.append(f"{path}: {exc}")
             continue
@@ -2053,85 +2161,7 @@ def _production_imports(diff: ArchitectureDiff, python: _PythonInventory) -> Fit
     )
 
 
-def _component_metadata_head(diff: ArchitectureDiff, base: dict, head: dict, root: Path | None) -> tuple[dict, bool] | None:
-    """Closed source declarations only; network/secret/authority checks still run."""
-    old = {node['id']: node for node in base['nodes']}
-    added = {node['id']: node for node in head['nodes'] if node['id'] not in old}
-    if not added:
-        return head, False
-    if root is None or diff.head_kind == 'worktree':
-        return None
-    artifacts = {item.path: item for item in diff.artifacts}
-    domains = {d['id']: d['kind'] for d in base['trust_domains']}
-    data = {d['id'] for d in base['data_classifications'] if not d['contains_secret']}
-    secrets = {s['id'] for s in base['secret_classes']}
-    profiles = {}
-    source_paths = tuple(path for node in added.values() for path in node['repository_paths'])
-    if any(str(PurePosixPath(path)) != path or '..' in PurePosixPath(path).parts or any(c in path for c in '*?[]\\')
-           or not path.startswith('trust-ci/src/adaptive_trust_ci/') or not path.endswith('.py') for path in source_paths):
-        return None
-    try:
-        source_bytes = read_diff_files(root, diff, source_paths)
-        prior_bytes = read_diff_files(root, diff, source_paths, 'base')
-    except (ArchitectureError, OSError):
-        return None
-    for identity, node in added.items():
-        runtime = node['runtime']
-        if (node['type'] != 'local_component' or node['public_contracts'] or node['data_classification'] not in data
-                or runtime['kind'] != 'python_process' or runtime['lifecycle'] != 'on_demand'
-                or runtime['evidence'] != 'source_described' or not node['repository_paths']):
-            return None
-        local = domains.get(node['trust_domain']) == 'local_preflight' and not node['secrets'] and runtime['network'] == 'none'
-        observer = (domains.get(node['trust_domain']) == 'trust_ci_control' and runtime['network'] == 'declared_egress'
-                    and set(node['secrets']) <= secrets & {'SECRET-GITHUB-APP', 'SECRET-READ-TOKEN'})
-        if not local and not observer:
-            return None
-        profiles[identity] = 'local' if local else 'observer'
-        for path in node['repository_paths']:
-            item = artifacts.get(path)
-            if (str(PurePosixPath(path)) != path or '..' in PurePosixPath(path).parts or any(c in path for c in '*?[]\\')
-                    or not path.startswith('trust-ci/src/adaptive_trust_ci/') or not path.endswith('.py')
-                    or item is None or item.status != 'added' or item.base_digest is not None or item.base_size
-                    or item.head_digest is None or item.head_size <= 0
-                    or prior_bytes[path] is not None or source_bytes[path] is None
-                    or len(source_bytes[path]) != item.head_size or hashlib.sha256(source_bytes[path]).hexdigest() != item.head_digest
-                    or any(_matches(path, n['repository_paths']) for n in base['nodes'])
-                    or [n['id'] for n in head['nodes'] if _matches(path, n['repository_paths'])] != [identity]):
-                return None
-    old_edges = {e['id'] for e in base['edges']}
-    edges = [e for e in head['edges'] if e['id'] not in old_edges]
-    residual = {**head, 'nodes': [n for n in head['nodes'] if n['id'] not in added],
-                'edges': [e for e in head['edges'] if e['id'] in old_edges]}
-    if residual != base:
-        return None
-    all_nodes = {n['id']: n for n in head['nodes']}
-    observed = set()
-    for edge in edges:
-        failure = edge['failure_behavior']
-        if (edge['from'] not in added or edge['direction'] != 'from_to' or edge['sync_or_async'] != 'synchronous'
-                or not 1 <= len(edge['allowed_data']) <= 2 or not set(edge['allowed_data']) <= data
-                or failure['mode'] != 'fail_closed' or failure['terminal_action'] != 'reject' or failure['max_retries'] != 0
-                or not 0 <= failure['timeout_ms'] <= 20000
-                or failure['observable_signal'] not in {s['id'] for s in base['signals']} or 'secret_classes' in edge):
-            return None
-        dependency = (edge['type'] == 'dependency' and edge['protocol'] == 'python'
-                      and edge['network_policy'] == 'no_network' and edge['authentication'] == 'local_os'
-                      and all_nodes[edge['to']]['type'] == 'local_component'
-                      and all_nodes[edge['to']]['runtime']['kind'] == 'python_process'
-                      and all_nodes[edge['to']]['runtime']['lifecycle'] == 'on_demand')
-        endpoint = old.get(edge['to'], {})
-        observation = (profiles[edge['from']] == 'observer' and edge['to'] == 'NODE-GITHUB'
-                       and endpoint.get('type') == 'external_system' and domains.get(endpoint.get('trust_domain')) == 'external_platform'
-                       and edge['type'] == 'data_flow' and edge['protocol'] == 'https'
-                       and edge['network_policy'] == 'allowlisted_egress' and edge['authentication'] == 'github_app'
-                       and failure['timeout_ms'] > 0)
-        if not dependency and not observation:
-            return None
-        if observation:
-            observed.add(edge['from'])
-    if any(role == 'observer' and identity not in observed for identity, role in profiles.items()):
-        return None
-    return residual, True
+from .architecture_metadata import _component_metadata_head as _component_metadata_head
 
 
 def _paired_component_views(root: Path | None, diff: ArchitectureDiff) -> tuple[str, ...] | None:
@@ -2157,180 +2187,7 @@ def _paired_component_views(root: Path | None, diff: ArchitectureDiff) -> tuple[
         return None
 
 
-def _trust_ci_metadata_paths(diff: ArchitectureDiff, root: Path | None = None) -> tuple[str, ...]:
-    """Qualify source bindings, never runtime authority, from validated paired states."""
-    if diff._base_state is None or diff._head_state is None:
-        return ()
-    if diff.head_kind == 'worktree' and root is not None and (
-            {node['id'] for node in diff._head_state.snapshot.system['nodes']}
-            - {node['id'] for node in diff._base_state.snapshot.system['nodes']}):
-        equivalent = _committed_worktree_diff(root, diff)
-        if equivalent is None:
-            return ()
-        diff = equivalent
-    base = diff._base_state.snapshot.system
-    head = diff._head_state.snapshot.system
-    before = {node["id"]: node for node in base["nodes"]}
-    artifacts = {item.path: item for item in diff.artifacts}
-
-    def changed_bytes(path: str) -> bool:
-        item = artifacts.get(path)
-        return bool(item is not None and item.status in {"added", "modified"}
-                    and item.head_digest is not None and item.head_size > 0
-                    and item.head_digest != item.base_digest)
-
-    component = _component_metadata_head(diff, base, head, root)
-    if component is None:
-        return ()
-    head, new_components = component
-
-    # Remove only exact newly added public descriptors and owner memberships.
-    # The existing envelope comparison below then checks every surrounding field.
-    old_contracts = {item["id"]: item for item in base["contracts"]}
-    new_contracts = {item["id"]: item for item in head["contracts"]}
-    public_paths: list[str] = []
-    admitted: dict[str, str] = {}
-    for name, identity, owner, kind, role, compatibility, filenames in _PUBLIC_CONTRACT_BINDINGS:
-        if identity in old_contracts or identity not in new_contracts:
-            continue
-        path = f"engineering/contracts/schemas/{name}.v1.json"
-        descriptor = {"id": identity, "path": path, "version": "1", "kind": kind,
-                      "role": role, "compatibility": compatibility}
-        owners = [node for node in head["nodes"] if identity in node["public_contracts"]]
-        if (new_contracts[identity] != descriptor or not changed_bytes(path)
-                or len(owners) != 1 or owners[0]["id"] != owner or owner not in before):
-            return ()
-        paired = tuple(f"trust-ci/src/adaptive_trust_ci/{filename}" for filename in filenames)
-        if not any(
-            changed_bytes(source_path)
-            and source_path in owners[0]["repository_paths"]
-            and [node["id"] for node in head["nodes"] if source_path in node["repository_paths"]] == [owner]
-            for source_path in paired
-        ):
-            return ()
-        admitted[identity] = owner
-        public_paths.append(path)
-    if admitted:
-        head = {
-            **head,
-            "contracts": [item for item in head["contracts"] if item["id"] not in admitted],
-            "nodes": [{**node, "public_contracts": [identity for identity in node["public_contracts"]
-                        if admitted.get(identity) != node["id"]]} for node in head["nodes"]],
-        }
-    after = {node["id"]: node for node in head["nodes"]}
-    domains = {domain["id"] for domain in base["trust_domains"] if domain["kind"] == "trust_ci_control"}
-
-    def properties(node: dict[str, Any]) -> dict[str, Any]:
-        return {key: value for key, value in node.items() if key != "repository_paths"}
-
-    def source(path: str) -> bool:
-        return (
-            str(PurePosixPath(path)) == path
-            and ".." not in PurePosixPath(path).parts
-            and not any(character in path for character in "*?[]\\")
-            and path.startswith("trust-ci/src/adaptive_trust_ci/")
-            and path.endswith(".py")
-            and changed_bytes(path)
-        )
-
-    qualified: list[str] = []
-    same_envelope = (
-        {key: value for key, value in base.items() if key != "nodes"}
-        == {key: value for key, value in head.items() if key != "nodes"}
-        and before.keys() == after.keys()
-        and all(properties(before[key]) == properties(after[key]) for key in before)
-    )
-    bindings_valid = same_envelope
-    changed_bindings = False
-    if same_envelope:
-        old_owners: dict[str, set[str]] = {}
-        new_owners: dict[str, set[str]] = {}
-        for identity in before:
-            old_paths = set(before[identity]["repository_paths"])
-            new_paths = set(after[identity]["repository_paths"])
-            if old_paths == new_paths:
-                continue
-            changed_bindings = True
-            node = before[identity]
-            worker_extension = (
-                identity == "NODE-TRUST-CI-WORKER"
-                and node["type"] == "worker"
-                and node["trust_domain"] == "TD-TRUST-CI-EXECUTION"
-                and node["owner"] == "Trust CI operators"
-                and node["runtime"]["kind"] == "container"
-                and old_paths <= new_paths
-                and new_paths - old_paths <= _PUBLIC_WORKER_SOURCES
-            )
-            if not worker_extension and (node["trust_domain"] not in domains
-                                        or node["type"] not in {"service", "datastore", "local_component"}):
-                bindings_valid = False
-            for path in old_paths ^ new_paths:
-                if not source(path):
-                    bindings_valid = False
-        for identity, node in before.items():
-            for path in node["repository_paths"]:
-                old_owners.setdefault(path, set()).add(identity)
-        for identity, node in after.items():
-            for path in node["repository_paths"]:
-                new_owners.setdefault(path, set()).add(identity)
-        for path in old_owners.keys() | new_owners.keys():
-            old = old_owners.get(path, set())
-            new = new_owners.get(path, set())
-            if old == new:
-                continue
-            if not old and len(new) == 1:
-                # A new exact source registration cannot expand an existing prefix owner.
-                if any(_matches(path, node["repository_paths"]) for node in before.values()):
-                    bindings_valid = False
-                continue
-            # Approved correction: store.py is the API's existing PostgreSQL client,
-            # not the PostgreSQL server. No other ownership transfer is metadata.
-            api = before.get("NODE-TRUST-CI-API", {})
-            postgres = before.get("NODE-TRUST-CI-POSTGRES", {})
-            if not (
-                path == "trust-ci/src/adaptive_trust_ci/store.py"
-                and old == {"NODE-TRUST-CI-POSTGRES"}
-                and new == {"NODE-TRUST-CI-API"}
-                and api.get("type") == "service"
-                and api.get("runtime", {}).get("kind") == "container"
-                and postgres.get("type") == "datastore"
-                and postgres.get("runtime", {}).get("kind") == "postgresql"
-                and api.get("owner") == postgres.get("owner") == "Trust CI operators"
-                and api.get("trust_domain") == postgres.get("trust_domain")
-                and api.get("trust_domain") in domains
-            ):
-                bindings_valid = False
-    if bindings_valid and (changed_bindings or new_components) and "architecture/system.yaml" in diff.changed_paths:
-        qualified.append("architecture/system.yaml")
-    if bindings_valid and same_envelope and admitted and "architecture/system.yaml" in diff.changed_paths:
-        qualified.extend(("architecture/system.yaml", *public_paths))
-
-    contract_path = "engineering/contracts/openapi/trust-ci.v1.json"
-    old_contracts = {item["id"]: item for item in base["contracts"]}
-    new_contracts = {item["id"]: item for item in head["contracts"]}
-    contract = old_contracts.get("CONTRACT-TRUST-CI-OPENAPI")
-    owners = {identity for identity, node in before.items() if "CONTRACT-TRUST-CI-OPENAPI" in node["public_contracts"]}
-    head_owners = {identity for identity, node in after.items() if "CONTRACT-TRUST-CI-OPENAPI" in node["public_contracts"]}
-    if (
-        contract_path in diff.changed_paths
-        and contract is not None
-        and contract == new_contracts.get("CONTRACT-TRUST-CI-OPENAPI")
-        and contract["path"] == contract_path
-        and contract["kind"] == "openapi"
-        and contract["role"] == contract["compatibility"] == "bidirectional"
-        and owners == head_owners == {"NODE-TRUST-CI-API"}
-        and properties(before["NODE-TRUST-CI-API"]) == properties(after["NODE-TRUST-CI-API"])
-        and before["NODE-TRUST-CI-API"]["trust_domain"] in domains
-        and before["NODE-TRUST-CI-API"]["type"] == "service"
-    ):
-        qualified.append(contract_path)
-    if 'architecture/system.yaml' in qualified and (new_components or any(
-            path.startswith('architecture/generated/') for path in diff.changed_paths)):
-        views = _paired_component_views(root, diff)
-        if views is None:
-            return ()
-        qualified.extend(path for path in views if path in diff.changed_paths)
-    return tuple(sorted(set(qualified)))
+from .architecture_metadata import _trust_ci_metadata_paths as _trust_ci_metadata_paths
 
 
 def _change_separation(snapshot: ArchitectureSnapshot, diff: ArchitectureDiff, root: Path | None = None) -> FitnessResult:
@@ -2454,8 +2311,10 @@ def _operation_dependencies(
     requested: frozenset[str] = frozenset(),
 ) -> _OperationDependencies:
     """Return names that can feed a changed callable/decorator expression."""
+    # This invocation owns a fresh index, so caller mutation cannot reuse facts.
+    nodes = tuple(ast.walk(tree))
     dependencies: set[str] = set(requested)
-    for node in ast.walk(tree):
+    for node in nodes:
         values: list[ast.AST] = []
         if isinstance(node, ast.Call):
             values.append(node.func)
@@ -2467,7 +2326,7 @@ def _operation_dependencies(
             )
     assignments: dict[str, set[str]] = {}
     imported_names = {
-        alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        alias.asname or alias.name for node in nodes if isinstance(node, ast.ImportFrom)
         for alias in node.names
     }
     def target_names(target: ast.AST) -> set[str]:
@@ -2480,7 +2339,7 @@ def _operation_dependencies(
         if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             return {target.value.id}
         return set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 for name in target_names(target):
@@ -2539,6 +2398,7 @@ def _operation_dependencies(
     return _OperationDependencies(frozenset(dependencies))
 
 
+
 def _declared_module_exports(tree: ast.Module) -> tuple[str, ...]:
     declared: set[str] = set()
     for node in tree.body:
@@ -2589,79 +2449,8 @@ def _queue_scalar_projection(tree: ast.Module) -> ast.Module:
 
 
 def _queue_export_slice_prepared(tree: ast.Module, requested: frozenset[str]) -> ast.Module:
-    """Read an owned scalar tree; copy selected declarations before rewriting."""
-    import copy
-
-    @lru_cache(maxsize=None)
-    def names(node: ast.AST) -> set[str]:
-        return {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
-
-    @lru_cache(maxsize=None)
-    def writes(node: ast.AST) -> set[str]:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            return {node.name}
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            return {alias.asname or alias.name.split('.')[0] for alias in node.names}
-        targets = [item for item in ast.walk(node)
-                   if isinstance(item, (ast.Name, ast.Attribute, ast.Subscript))
-                   and isinstance(item.ctx, (ast.Store, ast.Del))]
-        return set().union(*(names(item) for item in targets)) if targets else set()
-
-    memo: dict[tuple[int, frozenset[str], bool, int], list[ast.stmt]] = {}
-
-    def closure(body: list[ast.stmt], seeds: set[str], *, returns: bool = False, depth: int = 0) -> list[ast.stmt]:
-        if depth > 64:
-            raise ArchitectureError('queue export syntax depth limit exceeded', code='limit')
-        key = (id(body), frozenset(seeds), returns, depth)
-        if key in memo:
-            return memo[key]
-        selected: dict[int, ast.stmt] = {}
-        wanted = set(seeds)
-        for _ in range(MAX_QUEUE_DEPENDENCY_WORK):
-            previous = (len(wanted), len(selected))
-            for index, node in enumerate(body):
-                wildcard = isinstance(node, ast.ImportFrom) and any(alias.name == '*' for alias in node.names)
-                mutation = isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and bool(names(node) & wanted)
-                returning = returns and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and any(isinstance(item, (ast.Return, ast.Yield, ast.YieldFrom)) for item in ast.walk(node))
-                if not (writes(node) & wanted or wildcard or mutation or returning):
-                    continue
-                chosen = node
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    chosen = copy.copy(node)
-                    chosen.body = closure(node.body, set(), returns=True, depth=depth + 1) or [ast.Pass()]
-                    chosen.returns = None
-                    chosen.args = copy.deepcopy(node.args)
-                    for argument in (*chosen.args.posonlyargs, *chosen.args.args, *chosen.args.kwonlyargs,
-                                     *([chosen.args.vararg] if chosen.args.vararg else []),
-                                     *([chosen.args.kwarg] if chosen.args.kwarg else [])):
-                        argument.annotation = None
-                elif isinstance(node, (ast.If, ast.While, ast.For, ast.AsyncFor, ast.Try, ast.With, ast.AsyncWith)):
-                    chosen = copy.copy(node)
-                    for field in ('body', 'orelse', 'finalbody'):
-                        if hasattr(node, field):
-                            setattr(chosen, field, closure(getattr(node, field), wanted, returns=returns, depth=depth + 1))
-                    if hasattr(chosen, 'test') and not (names(chosen.test) & wanted):
-                        # The value interpreter joins both branches. Keep an
-                        # unknown predicate so the projection cannot imply reachability.
-                        chosen.test = ast.Name(id='__getzilla_unknown_predicate__', ctx=ast.Load())
-                    if isinstance(chosen, (ast.For, ast.AsyncFor)) and not (names(chosen.target) & wanted):
-                        chosen.iter = ast.Tuple(elts=[ast.Constant(value=None)], ctx=ast.Load())
-                    if isinstance(chosen, ast.Try):
-                        chosen.handlers = []
-                        for handler in node.handlers:
-                            selected_handler = copy.copy(handler)
-                            selected_handler.type = None
-                            selected_handler.body = closure(handler.body, wanted, returns=returns, depth=depth + 1)
-                            chosen.handlers.append(selected_handler)
-                selected[index] = chosen
-                wanted.update(names(chosen))
-            if previous == (len(wanted), len(selected)):
-                result = [selected[index] for index in sorted(selected)]
-                memo[key] = result
-                return result
-        raise ArchitectureError('queue export dependency limit exceeded', code='limit')
-
-    return ast.Module(body=closure(tree.body, set(requested)), type_ignores=[])
+    from .python_source_proof import _queue_export_slice_prepared as prepare
+    return prepare(tree, requested, work_limit=MAX_QUEUE_DEPENDENCY_WORK)
 
 
 @lru_cache(maxsize=128)
@@ -2670,123 +2459,10 @@ def _queue_return_exports(tree: ast.Module, adapters: frozenset[str],
     return _queue_return_exports_scoped(tree, adapters, requested, depth, [MAX_QUEUE_DEPENDENCY_WORK])
 
 
-def _queue_return_exports_scoped(tree: ast.Module, adapters: frozenset[str],
-                                 requested: frozenset[str] | None, depth: int, budget: list[int] | _QueueBudget) -> set[str]:
-    """Evaluate helper dependencies first; nested scopes share one work budget."""
-    if depth > MAX_QUEUE_ADAPTER_DEPTH:
-        raise ArchitectureError('queue factory return depth limit exceeded', code='limit')
-    marker = '__getzilla_return_projection__'
-    if any(isinstance(node, ast.Name) and (node.id == marker or
-           (node.id.startswith(('__getzilla_return_factory_', '__getzilla_nested_factory_')) and node.id not in adapters))
-           for node in ast.walk(tree)):
-        raise ArchitectureError('return projection name collision', code='fitness')
-    projections = {}
-    preparation_cost = max(1, (sum(1 for _ in ast.walk(tree)) + QUEUE_PROJECTION_WORK_NODES - 1)
-                           // QUEUE_PROJECTION_WORK_NODES) if isinstance(budget, _QueueBudget) else 0
-    for node in tree.body:
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and (requested is None or node.name in requested) and node.name not in projections):
-            if isinstance(budget, _QueueBudget):
-                budget.step(cost=preparation_cost)
-            projection = _queue_export_slice(tree, frozenset({node.name}))
-            selected = next(item for item in projection.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == node.name)
-            projections[node.name] = (selected, [item for item in projection.body if item is not selected])
-    dependencies = {}
-    for name, (selected, prefix) in projections.items():
-        names = {item.id for item in ast.walk(selected) if isinstance(item, ast.Name)}
-        # Module aliases can carry a helper into a return without naming it in
-        # the function. Function bodies in the prefix belong to their own scope.
-        for statement in prefix:
-            if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                names.update(item.id for item in ast.walk(statement) if isinstance(item, ast.Name))
-        dependencies[name] = (names & projections.keys()) - {name}
-    dependents = {name: set() for name in projections}
-    for name, needed in dependencies.items():
-        for dependency in needed:
-            dependents[dependency].add(name)
-    remaining = {name: set(needed) for name, needed in dependencies.items()}
-    ready = deque(sorted(name for name, needed in remaining.items() if not needed))
-    order = []
-    while ready:
-        name = ready.popleft()
-        order.append(name)
-        for dependent in sorted(dependents[name]):
-            remaining[dependent].discard(name)
-            if not remaining[dependent]:
-                ready.append(dependent)
-    order.extend(name for name in projections if name not in order)  # cycles retain bounded rechecks
-    pending, queued, found = deque(order), set(order), set()
-    while pending:
-        name = pending.popleft()
-        queued.remove(name)
-        if name in found:
-            continue
-        if isinstance(budget, _QueueBudget):
-            budget.step()
-        else:
-            if budget[0] <= 0:
-                raise ArchitectureError('queue factory return dependency limit exceeded', code='limit')
-            budget[0] -= 1
-        selected, prefix = projections[name]
-        if _queue_projected_return(selected, prefix, adapters, found, marker, depth, budget):
-            found.add(name)
-            for dependent in sorted(dependents[name] - found - queued):
-                pending.append(dependent)
-                queued.add(dependent)
-    return found
+from .queue_source_resolution import _queue_return_exports_scoped as _queue_return_exports_scoped
 
 
-def _queue_projected_return(selected: ast.FunctionDef | ast.AsyncFunctionDef, prefix: list[ast.stmt],
-                             adapters: frozenset[str], known: set[str], marker: str,
-                             depth: int, budget: list[int] | _QueueBudget) -> bool:
-    import copy
-
-    class Returns(ast.NodeTransformer):
-        def visit_FunctionDef(self, node):
-            return node
-        visit_AsyncFunctionDef = visit_FunctionDef
-
-        def visit_Return(self, node):
-            return ast.Expr(value=ast.Call(func=ast.Attribute(value=ast.Name(id=marker, ctx=ast.Load()), attr='append', ctx=ast.Load()),
-                                          args=[node.value or ast.Constant(value=None)], keywords=[]))
-
-    inherited = set()
-    projected_prefix = []
-    for statement in prefix:
-        projected_prefix.append(statement)
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and statement.name in known:
-            alias = '__getzilla_return_factory_' + statement.name
-            inherited.add(alias)
-            projected_prefix.append(ast.Assign(targets=[ast.Name(id=statement.name, ctx=ast.Store())], value=ast.Name(id=alias, ctx=ast.Load())))
-    adapters = adapters | inherited
-    initialize = ast.Assign(targets=[ast.Name(id=marker, ctx=ast.Store())], value=ast.List(elts=[], ctx=ast.Load()))
-    arguments = [*selected.args.posonlyargs, *selected.args.args]
-    parameters = [*arguments, *selected.args.kwonlyargs,
-                  *([selected.args.vararg] if selected.args.vararg else []),
-                  *([selected.args.kwarg] if selected.args.kwarg else [])]
-    defaults = [ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=ast.Constant(value=None))
-                for argument in parameters]
-    defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
-                    for argument, default in zip(arguments[-len(selected.args.defaults):], selected.args.defaults))
-    defaults.extend(ast.Assign(targets=[ast.Name(id=argument.arg, ctx=ast.Store())], value=copy.deepcopy(default))
-                    for argument, default in zip(selected.args.kwonlyargs, selected.args.kw_defaults) if default is not None)
-    nested = [item for item in selected.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))]
-    nested_factories = set()
-    if nested:
-        nested_tree = ast.Module(body=[*projected_prefix, *defaults, *selected.body], type_ignores=[])
-        nested_factories = _queue_return_exports_scoped(nested_tree, frozenset(adapters),
-            frozenset(item.name for item in nested), depth + 1, budget)
-    nested_names = {'__getzilla_nested_factory_' + name for name in nested_factories}
-    body = list(defaults)
-    for item in selected.body:
-        body.append(Returns().visit(copy.deepcopy(item)))
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name in nested_factories:
-            body.append(ast.Assign(targets=[ast.Name(id=item.name, ctx=ast.Store())],
-                value=ast.Name(id='__getzilla_nested_factory_' + item.name, ctx=ast.Load())))
-    for decorator in selected.decorator_list:
-        body.append(ast.Expr(value=ast.Call(func=ast.Attribute(value=ast.Name(id=marker, ctx=ast.Load()), attr='append', ctx=ast.Load()), args=[decorator], keywords=[])))
-    result = analyze_queue_tree(ast.Module(body=[*projected_prefix, initialize, *body], type_ignores=[]), frozenset(adapters) | nested_names)
-    return marker in result.derived_names
+from .queue_source_resolution import _queue_projected_return as _queue_projected_return
 
 
 def _resolve_import_module(current_package: str, module: str | None, level: int) -> str:
@@ -2794,7 +2470,7 @@ def _resolve_import_module(current_package: str, module: str | None, level: int)
         return module or ""
     package = current_package.split(".") if current_package else []
     remove = level - 1
-    if remove > len(package):
+    if level and (not package or remove >= len(package)):
         raise ArchitectureError("relative queue adapter import escapes its package", code="fitness")
     prefix = package[: len(package) - remove] if remove else package
     suffix = module.split(".") if module else []
@@ -2808,22 +2484,21 @@ def _imported_module(package: str, name: str) -> str:
 
 def _module_package(path: str, source_roots: tuple[str, ...] = (), paths: tuple[str, ...] = ()) -> str:
     directories = PurePosixPath(path).parent.parts
-    src = [index + 1 for index, part in enumerate(directories) if part == 'src' and index + 1 < len(directories)]
-    if len(src) == 1:
-        return '.'.join(directories[src[0]:])
+    matching_roots = [root for root in source_roots if root and _matches(path, (root,))]
+    # Only the source roots derived from declared ownership establish src layout;
+    # an ordinary directory named src does not change a module's package.
+    src_roots = [root for root in matching_roots if PurePosixPath(root).name == 'src']
+    if src_roots:
+        relative = path[len(max(src_roots, key=len)) + 1:]
+        return '.'.join(PurePosixPath(relative).parent.parts)
     for index in range(len(directories)):
         if '/'.join((*directories[:index + 1], '__init__.py')) in paths:
             return '.'.join(directories[index:])
-    relative = path
-    matching_roots = [
-        root for root in source_roots if root and _matches(path, (root,))
-    ]
-    if matching_roots:
-        relative = path[len(max(matching_roots, key=len)) + 1:]
-    module = relative.rsplit(".", 1)[0].replace("/", ".")
-    if module.endswith(".__init__"):
-        return module.removesuffix(".__init__")
-    return module.rsplit(".", 1)[0] if "." in module else ""
+    relative = path[len(max(matching_roots, key=len)) + 1:] if matching_roots else path
+    module = relative.rsplit('.', 1)[0].replace('/', '.')
+    if module.endswith('.__init__'):
+        return module.removesuffix('.__init__')
+    return module.rsplit('.', 1)[0] if '.' in module else ''
 
 
 def _queue_adjacent_module(module: str) -> bool:
@@ -2862,7 +2537,8 @@ def _queue_source_roots(snapshot: ArchitectureSnapshot) -> tuple[str, ...]:
 def _queue_module_inventory(root: Path, diff: ArchitectureDiff, side: str, source_roots: tuple[str, ...]) -> _QueueResolutionCache:
     paths = _repository_paths(root, diff, source_roots) if side == "head" else git_tree_paths(root, diff.base_sha, source_roots)
     modules = {relative.removesuffix("/__init__.py").removesuffix(".py").replace("/", ".") for path in paths for prefix in source_roots if not prefix or _matches(path, (prefix,)) for relative in (path[len(prefix) + 1:] if prefix else path,) if relative.endswith(".py")}
-    return _QueueResolutionCache(tuple(sorted(modules)), tuple(sorted(path for path in paths if path.endswith(".py"))), {}, {})
+    return _QueueResolutionCache(tuple(sorted(modules)), tuple(sorted(path for path in paths if path.endswith(".py"))), {}, {},
+                                 _queue_analysis_profile(root, diff, side))
 
 
 def _prime_local_module_sources(
@@ -2871,7 +2547,7 @@ def _prime_local_module_sources(
     remaining: int,
     budget: _QueueBudget | None = None,
 ) -> None:
-    pending = sorted(module for module in modules if module in cache.modules and module not in cache.values)
+    pending = sorted(module for module in modules if module in cache.source_modules and module not in cache.values)
     if len(pending) > remaining:
         raise ArchitectureError("queue adapter module limit exceeded", code="limit")
     paths_by_module = {
@@ -2900,7 +2576,7 @@ def _prime_local_module_sources(
 
 def _is_local_package(cache: _QueueResolutionCache, module: str) -> bool:
     package_path = f"{module.replace('.', '/')}/__init__.py"
-    return any(path.endswith(package_path) for path in cache.paths) or module not in cache.modules and any(name.startswith(module + ".") for name in cache.modules)
+    return any(path.endswith(package_path) for path in cache.paths) or module not in cache.source_modules and any(name.startswith(module + ".") for name in cache.source_modules)
 
 
 def _module_member_demands(tree: ast.AST, access_name: str, patches: dict | None = None) -> frozenset[str] | None:
@@ -2955,230 +2631,14 @@ def _prepared_module_member_demand(preparation: tuple, access_name: str) -> froz
     return frozenset(members) or None
 
 
-class _CallableUseProof(NamedTuple):
-    identity: frozenset[str]
-    returns: frozenset[str]
-    opaque: frozenset[str]
-    stable_imports: frozenset[str]
 
 
-class _CallUseInventory(NamedTuple):
-    tree: ast.AST
-    namespace_closed: bool
-    nodes: tuple[ast.AST, ...]
-    parents: Mapping
-    bindings: tuple
-    counts: Mapping
-    scope_counts: Mapping
-    owners: Mapping
-    declarations: Mapping
-    nonlocals: frozenset[str]
-    unknown_reads: frozenset[ast.AST]
-    reads: Mapping
-    attributes: Mapping
-    getters: Mapping
-    unknown_getter: bool
-    getter_values: Mapping
-    structural: frozenset[ast.AST]
-    stable_imports: frozenset[str]
 
 
-def _call_use_inventory(tree: ast.AST, *, namespace_closed: bool, patches: dict) -> _CallUseInventory:
-    """One complete immutable index, shared by object and result-use queries."""
-    nodes = tuple(ast.walk(tree))
-    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
-    bindings = binding_events(tree)
-    owners = {node: binding_owner(node, parents) for node in nodes}
-    counts = Counter(event.name for event in bindings)
-    scope_counts = Counter((owners[event.node], event.name) for event in bindings)
-    declarations = defaultdict(set)
-    reads, attributes, getters = (defaultdict(list) for _ in range(3))
-    unknown_reads, structural = set(), set()
-    getter_values = {}
-    unknown_getter = bool(counts['getattr'])
-    for node in nodes:
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
-            declarations[owners[node]].update(node.names)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            reads[node.id].append(node)
-            if node.id == 'getattr':
-                use = parents.get(node)
-                unknown_getter |= not isinstance(use, ast.Call) or use.func is not node
-        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
-            attributes[node.attr].append(node)
-        headers = []
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            headers = [value for field, values in ast.iter_fields(node) if field != 'body'
-                       for value in (values if isinstance(values, list) else [values])]
-        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)) and node.generators:
-            headers.append(node.generators[0].iter)
-        unknown_reads.update(child for header in headers if isinstance(header, ast.AST)
-                             for child in ast.walk(header) if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load))
-        if isinstance(node, ast.Call):
-            if id(node) in patches:
-                structural.add(node.args[0])
-            if isinstance(node.func, ast.Name) and node.func.id == 'getattr':
-                literal = (len(node.args) in (2, 3) and not node.keywords and isinstance(node.args[1], ast.Constant)
-                           and isinstance(node.args[1].value, str))
-                if literal:
-                    getters[node.args[1].value].append(node)
-                    if namespace_closed and not counts['getattr'] and isinstance(node.args[0], ast.Name) and node.args[1].value.isidentifier():
-                        getter_values[node] = node.args[0].id + '.' + node.args[1].value
-                        structural.add(node.args[0])
-                else:
-                    unknown_getter = True
-    nonlocals = frozenset(name for names in declarations.values() for name in names)
-    identities = defaultdict(set)
-    import_ids = {node: ast.dump(node) for node in {event.node for event in bindings}
-                  if isinstance(node, (ast.Import, ast.ImportFrom))}
-    for event in bindings:
-        identities[event.name].add(import_ids.get(event.node))
-    stable_imports = frozenset(name for name, values in identities.items()
-                              if namespace_closed and name not in nonlocals and len(values) == 1 and None not in values)
-    frozen = [MappingProxyType({name: tuple(values) for name, values in index.items()})
-              for index in (declarations, reads, attributes, getters)]
-    return _CallUseInventory(tree, namespace_closed, nodes, MappingProxyType(parents), bindings,
-        MappingProxyType(counts), MappingProxyType(scope_counts), MappingProxyType(owners), frozen[0], nonlocals,
-        frozenset(unknown_reads), *frozen[1:], unknown_getter, MappingProxyType(getter_values),
-        frozenset(structural), stable_imports)
+from .queue_source_resolution import _call_use_inventory as _call_use_inventory
 
 
-def _discarded_call_results(inventory: _CallUseInventory, *, returns: bool = False) -> frozenset[ast.Call]:
-    """Prove complete local data flow to discard; unknown consumption stays live.
-
-    Calls, statement protocols, returns and escaping closures are never data
-    sinks. Plain aliases require one lexical binding and every reader. These
-    facts live only in this analysis; caller AST identities are not cache keys.
-    """
-    nodes, parents, counts = inventory.nodes, inventory.parents, inventory.scope_counts
-    owner = inventory.owners.get
-    declarations = inventory.declarations
-    unknown = object()
-
-    @lru_cache(maxsize=None)
-    def resolved(node):
-        if node in inventory.unknown_reads:
-            return unknown
-        scope = owner(node)
-        while True:
-            if node.id in declarations.get(scope, ()):
-                return unknown
-            if counts[(scope, node.id)]:
-                if isinstance(scope, ast.ClassDef) and owner(node) is not scope:
-                    return unknown
-                return scope
-            if scope is None:
-                return None
-            scope = owner(scope)
-
-    reads, attributes, getters = inventory.reads, inventory.attributes, inventory.getters
-    memo = {}
-    active = set()
-    function_memo = {}
-    function_active = set()
-    work = 0
-
-    def callable_use_safe(node, depth):
-        parent = parents.get(node)
-        if isinstance(parent, ast.Call) and parent.func is node:
-            return safe(parent, depth + 1)
-        if isinstance(parent, ast.Expr) and parent.value is node:
-            return True
-        if isinstance(parent, ast.Assign) and parent.value is node and len(parent.targets) == 1:
-            return binding_safe(parent.targets[0], depth + 1, callable_value=True)
-        return False
-
-    def function_result_safe(function, depth):
-        nonlocal work
-        if returns:
-            return False
-        if function in function_memo:
-            return function_memo[function]
-        if function in function_active or depth > 64 or work >= MAX_QUEUE_DEPENDENCY_WORK:
-            return False
-        work += 1
-        function_active.add(function)
-        if isinstance(function, ast.Lambda):
-            answer = callable_use_safe(function, depth + 1)
-        else:
-            scope = owner(function)
-            answer = (not function.decorator_list and counts[(scope, function.name)] == 1
-                      and function.name not in inventory.nonlocals)
-            references = []
-            for read in reads.get(function.name, ()):
-                selected = resolved(read)
-                if selected is unknown:
-                    answer = False
-                elif selected is scope:
-                    references.append(read)
-            if isinstance(scope, ast.ClassDef):
-                class_scope = owner(scope)
-                # Unknown receivers/getters or an escaping class do not prove
-                # which method will run. Unused sibling methods stay separate.
-                receiver_used = any(
-                    resolved(read) in (unknown, method)
-                    for method in scope.body if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    for argument in [*method.args.posonlyargs, *method.args.args][:1]
-                    for read in reads.get(argument.arg, ()))
-                answer &= not (scope.bases or scope.keywords or scope.decorator_list or receiver_used
-                               or any(name.startswith('__') for name in attributes))
-                answer &= not inventory.unknown_getter and not any(
-                    resolved(read) in (unknown, class_scope) for read in reads.get(scope.name, ()))
-                references.extend(attributes.get(function.name, ()))
-                references.extend(getters.get(function.name, ()))
-            answer = answer and all(callable_use_safe(read, depth + 1) for read in references)
-        function_active.remove(function)
-        function_memo[function] = answer
-        return answer
-
-    def binding_safe(target, depth, origin=None, *, callable_value=False):
-        if not isinstance(target, ast.Name):
-            return False
-        scope = owner(target)
-        if (isinstance(scope, ast.ClassDef) or counts[(scope, target.id)] != 1
-                or target.id in declarations.get(scope, ())):
-            return False
-        for read in reads.get(target.id, ()):
-            selected = resolved(read)
-            checked = (callable_use_safe(read, depth + 1) if callable_value
-                       else safe(read, depth + 1, origin)) if selected is scope else True
-            if selected is unknown or not checked:
-                return False
-        return True
-
-    initial_origin = object()
-
-    def safe(node, depth=0, origin=initial_origin):
-        nonlocal work
-        if origin is initial_origin:
-            origin = owner(node)
-        key = (node, origin)
-        if key in memo:
-            return memo[key]
-        if key in active or work >= MAX_QUEUE_DEPENDENCY_WORK or depth > 64:
-            return False
-        work += 1
-        active.add(key)
-        parent = parents.get(node)
-        answer = False
-        if isinstance(parent, ast.Expr) and parent.value is node:
-            answer = True
-        elif isinstance(parent, ast.Assign) and parent.value is node:
-            answer = all(binding_safe(target, depth + 1, origin) for target in parent.targets)
-        elif isinstance(parent, ast.AnnAssign) and parent.value is node:
-            answer = binding_safe(parent.target, depth + 1, origin)
-        elif isinstance(parent, (ast.Return, ast.Yield, ast.YieldFrom)) or (
-                isinstance(parent, ast.Lambda) and parent.body is node):
-            function = parent if isinstance(parent, ast.Lambda) else owner(parent)
-            answer = (function is origin and isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
-                      and function_result_safe(function, depth + 1))
-        elif isinstance(parent, (ast.List, ast.Tuple)) or isinstance(parent, ast.Dict) and node in parent.values:
-            answer = not isinstance(getattr(parent, 'ctx', ast.Load()), (ast.Store, ast.Del)) and safe(parent, depth + 1, origin)
-        active.remove(key)
-        memo[key] = answer
-        return answer
-
-    return frozenset(node for node in nodes if isinstance(node, ast.Call) and safe(node))
+from .queue_source_resolution import _discarded_call_results as _discarded_call_results
 
 
 def _callable_use_proof(tree: ast.AST, *, namespace_closed: bool, patches: dict,
@@ -3187,93 +2647,7 @@ def _callable_use_proof(tree: ast.AST, *, namespace_closed: bool, patches: dict,
                                 returns=returns)
 
 
-def _inventory_use_proof(inventory: _CallUseInventory, *, returns: bool = False) -> _CallableUseProof:
-    """Positive proof for plain callees/aliases; all other value uses are opaque.
-
-    This is a complete syntactic use inventory, not a carrier recognizer. A
-    future or unsupported expression therefore cannot make an import disappear.
-    Caller-owned trees are prepared afresh; only owned immutable source bytes
-    may cache the result. Whole-source binding identity is conservative across
-    lexical scopes: repeated identical imports share one provider identity, but
-    every other binding or namespace uncertainty refuses that shortcut.
-    """
-    nodes, parents, namespace_closed = inventory.nodes, inventory.parents, inventory.namespace_closed
-    counts, loads, declared_nonlocal = inventory.counts, inventory.reads, inventory.nonlocals
-    getter_values, structural = inventory.getter_values, inventory.structural
-    discarded_results = _discarded_call_results(inventory, returns=returns) if namespace_closed else frozenset()
-
-    def reference(node):
-        parts = []
-        while isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
-            parts.append(node.attr)
-            node = node.value
-        if node in getter_values:
-            prefix = getter_values[node]
-            return '.'.join((prefix, *reversed(parts)))
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            return '.'.join((node.id, *reversed(parts)))
-        return None
-
-    memo = {}
-    alias_work = 0
-
-    def use_kind(node, visiting=frozenset()):
-        nonlocal alias_work
-        # Qualifiers belong to the complete direct member expression. Literal
-        # getters/patch targets use the already-validated member projection.
-        if node in structural:
-            holder = parents[node]
-            if holder in getter_values:
-                node = holder
-            else:
-                return 0
-        while (isinstance(parents.get(node), ast.Attribute) and parents[node].value is node
-               and isinstance(parents[node].ctx, ast.Load)):
-            node = parents[node]
-        if node in memo:
-            return memo[node]
-        parent = parents.get(node)
-        if isinstance(parent, ast.Call) and parent.func is node:
-            # Object identity does not prove that the returned value is data.
-            # Every unproved result retains its full return/source demand.
-            result = 0 if parent in discarded_results else 1
-        elif (namespace_closed and isinstance(parent, ast.Assign) and parent.value is node
-              and len(parent.targets) == 1 and isinstance(parent.targets[0], ast.Name)
-              and counts.get(parent.targets[0].id) == 1 and parent.targets[0].id not in declared_nonlocal):
-            alias = parent.targets[0].id
-            readers = loads.get(alias, ())
-            if alias in visiting:
-                result = 2
-            elif not readers:
-                # An exhaustive zero-reader inventory proves a plain copy,
-                # rather than an unsupported carrier or invocation.
-                result = 0
-            else:
-                alias_work += 1
-                if alias_work > MAX_QUEUE_DEPENDENCY_WORK or len(visiting) >= 64:
-                    # Failure to finish a positive proof grants no admission.
-                    # Existing dependency/source budgets still decide whether
-                    # resolving the conservative demand itself is possible.
-                    result = 2
-                else:
-                    result = max(use_kind(reader, visiting | {alias}) for reader in readers)
-        else:
-            result = 2
-        memo[node] = result
-        return result
-
-    kinds = {}
-    for node in nodes:
-        if node in structural:
-            continue
-        parent = parents.get(node)
-        if isinstance(parent, ast.Attribute) and parent.value is node and isinstance(parent.ctx, ast.Load):
-            continue
-        name = reference(node)
-        if name:
-            kinds[name] = max(kinds.get(name, 0), use_kind(node))
-    return _CallableUseProof(*(frozenset(name for name, kind in kinds.items() if kind == value)
-                               for value in range(3)), inventory.stable_imports)
+from .queue_source_resolution import _inventory_use_proof as _inventory_use_proof
 
 
 def _plain_callable_declaration(tree: ast.Module, requested: frozenset[str] | None) -> bool:
@@ -3384,23 +2758,28 @@ def _queue_import_equivalent_tree(tree: ast.Module) -> ast.Module:
     return projected
 
 
+class _QueueNormalizedSource(NamedTuple):
+    tree: ast.Module
+    nodes: int
+    declared_exports: tuple[str, ...]
+
+
 @lru_cache(maxsize=128)
-def _queue_normalized_source_tree(path: str, source: bytes) -> ast.Module:
+def _queue_normalized_source(path: str, source: bytes) -> _QueueNormalizedSource:
     """Prepare an analysis-owned tree once per exact immutable source version.
 
     Downstream slicing/projection copies before changing nodes. Caller-owned
     ASTs enter _queue_import_equivalent_tree directly and never reuse a proof
     cached by mutable object identity.
     """
-    return _queue_import_equivalent_tree(_queue_source_tree(path, source))
+    tree = _queue_import_equivalent_tree(_queue_source_tree(path, source))
+    return _QueueNormalizedSource(tree, sum(1 for _ in ast.walk(tree)), _declared_module_exports(tree))
 
 
-class _QueueSourcePreparation(NamedTuple):
-    tree: ast.Module
-    namespace_closed: bool
-    plain_callables: frozenset[str]
-    callable_uses: _CallableUseProof
-    inventory: _CallUseInventory
+def _queue_normalized_source_tree(path: str, source: bytes) -> ast.Module:
+    return _queue_normalized_source(path, source).tree
+
+
 
 
 @lru_cache(maxsize=128)
@@ -3433,480 +2812,62 @@ def _queue_owned_callable_mutation(path: str, source: bytes, requested: frozense
 
 def _budgeted_queue_tree(path: str, source: bytes, budget: _QueueBudget) -> ast.Module:
     budget.source(path, source)
-    tree = _queue_source_tree(path, source)
+    _queue_source_tree(path, source)
     budget.source(path, source, _queue_source_node_count(path, source))
-    tree = _queue_normalized_source_tree(path, source)
-    budget.source(path, source, sum(1 for _ in ast.walk(tree)))
-    return tree
+    normalized = _queue_normalized_source(path, source)
+    budget.source(path, source, normalized.nodes)
+    return normalized.tree
 
 
-def _local_queue_resolution(
-    root: Path,
-    diff: ArchitectureDiff,
-    module: str,
-    side: str,
-    cache: _QueueResolutionCache,
-    resolving: set[str],
-    visited: set[str],
-    source_roots: tuple[str, ...],
-    requested: frozenset[str] | None = None,
-    callable_only: bool = False,
-    budget: _QueueBudget | None = None,
-) -> _QueueAdapterResolution:
-    budget = budget if budget is not None else _QueueBudget(side)
-    original_key = (module, requested, callable_only)
-    prefetched = cache.values.get(module)
-    source_identity = tuple((path, hashlib.sha256(value).hexdigest())
-                            for path, value, _package in prefetched.sources) if prefetched else ()
-    work_key = repr((side, module, tuple(sorted(requested)) if requested is not None else None,
-                     callable_only, source_identity))
-    frame = budget.enter(work_key, module=module)
+def _diagnostic_step(phase: str, locator=None, demand=None) -> str:
+    """Reconstructable private locators; source/demand text never enters logs."""
+    if not isinstance(phase, str) or not re.fullmatch('[a-z][a-z0-9-]{0,23}', phase):
+        return 'arch-unavailable'
     try:
-        budget.step(request=True)
-        cached = cache.demands.get(original_key)
-        if cached is not None and cached.footprint is None:
-            raise ArchitectureError('queue cached resource footprint is unavailable', code='limit')
-        result = _local_queue_resolution_impl(root, diff, module, side, cache, resolving, visited,
-            source_roots, requested, callable_only, budget)
-        budget.merge(result.footprint)
-        canonical = result
-        if (callable_only and resolving and module not in resolving and not result.modules
-                and result.reason == 'local_module_not_queue' and result.declared_exports):
-            # A dependent declaration read still traverses a reexport edge.
-            # Keep its topology/depth charge even though its stable function
-            # body is not expanded. The canonical declaration cache stays
-            # independent of whether this request has a parent.
-            if len(visited | {module}) > MAX_QUEUE_ADAPTER_MODULES:
-                raise ArchitectureError('queue adapter module limit exceeded', code='limit')
-            budget.check_depth(len(resolving) + 1, site='declaration')
-            visited.add(module)
-            result = result._replace(modules=frozenset({module}), height=1, witness=(module,))
-    except BaseException as error:
-        if (isinstance(error, ArchitectureError) and error.code == 'limit'
-                and type(getattr(error, '_queue_refusal_capture', None)) is not _QueueRefusalCapture):
-            # Capture actual active request frames before unwinding. An inner
-            # interpreter refusal with no measured counter stays explicitly unknown.
-            captured = budget.refusal(str(error), 'other', None, None, site='resolver')
-            error.queue_refusal = captured.queue_refusal
-            error._queue_refusal_capture = captured._queue_refusal_capture._replace(owner=error)
-        budget.leave(frame)
+        suffix = '' if locator is None else '-' + _digest(locator)[:16]
+        if demand is not None:
+            suffix += '-' + _digest(demand)[:16]
+        return 'arch-' + phase + suffix
+    except (ValueError, TypeError, RecursionError):
+        return 'arch-unavailable'
+
+
+def _diagnostic_location(path):
+    if (isinstance(path, str) and len(path) <= 256
+            and re.fullmatch(r'(?:tests|scripts|\.getzilla/getzilla)/[A-Za-z0-9_./-]+\.py', path)
+            and all(part not in {'', '.', '..'} for part in path.split('/'))):
+        return path, 1
+    return None
+
+
+def _source_span(path, side, stage):
+    side = side if isinstance(side, str) and side in ('head', 'base') else 'unknown'
+    return diagnostics.span(_diagnostic_step('source-' + side + '-' + stage, path), stage='action',
+                            location=_diagnostic_location(path))
+
+
+def _queue_check_depth(budget, depth, *, site, module, side, active, cached=(), cached_height=None, cached_modules=()):
+    """Keep measured refusal authority and attach bounded advisory depth context."""
+    try:
+        budget.check_depth(depth, site=site, cached=cached)
+    except ArchitectureError as error:
+        if error.code == 'limit':
+            boundary = {'active': 'live-depth', 'declaration': 'declaration-depth', 'cached': 'cached-height'}[site]
+            advisory = _queue_depth_error(boundary, module, side, active,
+                cached_height=cached_height, cached_modules=cached_modules, budget=budget)
+            context = getattr(advisory, '_queue_depth_context', None)
+            if context is not None:
+                error._queue_depth_context = context
         raise
-    footprint = budget.leave(frame)
-    bounded = result._replace(footprint=footprint)
-    if cache.demands.get(original_key) is canonical:
-        cache.demands[original_key] = canonical._replace(footprint=footprint)
-    return bounded
 
 
-def _local_queue_resolution_impl(
-    root: Path,
-    diff: ArchitectureDiff,
-    module: str,
-    side: str,
-    cache: _QueueResolutionCache,
-    resolving: set[str],
-    visited: set[str],
-    source_roots: tuple[str, ...],
-    requested: frozenset[str] | None,
-    callable_only: bool,
-    budget: _QueueBudget,
-) -> _QueueAdapterResolution:
-    if (
-        not module
-        or any(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) is None for part in module.split("."))
-    ):
-        return _QueueAdapterResolution("not_queue", "invalid_local_module")
-    if module not in cache.modules:
-        return _QueueAdapterResolution("not_queue", "local_module_missing")
-    prefetched = cache.values.get(module)
-    demand_key = (module, requested, callable_only)
-    cached_declaration = cache.demands.get(demand_key)
-    if callable_only and cached_declaration is not None and not cached_declaration.modules:
-        return cached_declaration
-    if callable_only and prefetched is not None and prefetched.sources:
-        # Declaration inspection does not expand a dependency. It is bounded by
-        # the prefetched module batch and AST node cap, unlike recursive returns.
-        source_path, value, _package = prefetched.sources[0]
-        declaration = _budgeted_queue_tree(source_path, value, budget)
-        prepared = _queue_source_preparation(source_path, value)
-        if _queue_owned_callable_mutation(source_path, value, requested):
-            raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
-        if requested and requested <= prepared.plain_callables:
-            result = _QueueAdapterResolution('not_queue', 'local_module_not_queue', declared_exports=_declared_module_exports(declaration))
-            cache.demands[demand_key] = result
-            return result
-    if module not in visited:
-        if len(visited) >= MAX_QUEUE_ADAPTER_MODULES:
-            raise ArchitectureError("queue adapter module limit exceeded", code="limit")
-        visited.add(module)
-    if prefetched is not None and prefetched.state != "prefetched":
-        return prefetched
-    if module in resolving:
-        return _QueueAdapterResolution("unsupported", "cyclic_local_queue_adapter")
-    budget.check_depth(len(resolving) + 1, site='active')
-    cached = cache.demands.get(demand_key)
-    if cached is not None and not (cached.modules & resolving):
-        if len(visited | cached.modules) > MAX_QUEUE_ADAPTER_MODULES:
-            raise ArchitectureError('queue adapter module limit exceeded', code='limit')
-        budget.check_depth(len(resolving) + cached.height, site='cached', cached=cached.witness)
-        visited.update(cached.modules)
-        return cached
-    resolving.add(module)
-    try:
-        sources = prefetched.sources if prefetched is not None else ()
-        if not sources:
-            result = _QueueAdapterResolution("not_queue", "local_module_missing")
-            cache.values[module] = result
-            return result
-        source_path, value, current_package = sources[0]
-        tree = _budgeted_queue_tree(source_path, value, budget)
-        prepared = _queue_source_preparation(source_path, value)
-        declared = _declared_module_exports(tree)
-        requested = requested if requested is not None else frozenset(declared)
-        if _queue_owned_callable_mutation(source_path, value, requested):
-            raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
-        tree = _queue_owned_export_slice(source_path, value, requested)
-        imported = _queue_adapter_names(
-            root,
-            diff,
-            tree,
-            side,
-            cache,
-            resolving,
-            visited,
-            current_package=current_package,
-            source_roots=source_roots,
-            requested=requested or frozenset(),
-            callable_only_exports=callable_only,
-            source_preparation=prepared if tree is prepared.tree else None,
-            budget=budget,
-        )
-        try:
-            analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.modules)
-        except QueueAnalysisLimit as exc:
-            raise ArchitectureError(str(exc), code="limit") from exc
-        if imported.unproved_queue_callback:
-            raise _UnsupportedQueueCallbackError('queue-bearing callback return is unsupported', code='fitness')
-        # A projection with no queue imports, values or effects cannot create a
-        # queue return. Avoid reslicing every ordinary helper in that case.
-        try:
-            factories = _queue_return_exports_scoped(tree, imported.names, None, 0, budget) if analysis.signals or imported.names else set()
-        except QueueAnalysisLimit as exc:
-            raise ArchitectureError(str(exc), code='limit') from exc
-        if factories:
-            # The adapter value models a callable's returned queue. Preserve the
-            # selected function body for operation checks, then expose its return
-            # summary before subsequent assignments such as app = make_queue().
-            body = []
-            aliases = {'__getzilla_factory_' + name for name in factories}
-            if any(isinstance(node, ast.Name) and node.id in aliases for node in ast.walk(tree)):
-                raise ArchitectureError('factory projection name collision', code='fitness')
-            for node in tree.body:
-                body.append(node)
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in factories:
-                    alias = '__getzilla_factory_' + node.name
-                    body.append(ast.Assign(targets=[ast.Name(id=node.name, ctx=ast.Store())], value=ast.Name(id=alias, ctx=ast.Load())))
-            try:
-                analysis = analyze_queue_tree(ast.Module(body=body, type_ignores=[]), imported.names | aliases,
-                                              allow_local_ipc='queue' not in cache.modules)
-            except QueueAnalysisLimit as exc:
-                raise ArchitectureError(str(exc), code='limit') from exc
-        exports = set(analysis.export_paths) - {'__getzilla_factory_' + name for name in factories}
-        exports = tuple(sorted(exports))
-        has_queue_provenance = bool(analysis.signals or exports)
-        state = (
-            "unsupported"
-            if (imported.unsupported or analysis.uncertain) and has_queue_provenance
-            else ("resolved" if has_queue_provenance else "not_queue")
-        )
-        reason = "local_queue_provenance_resolved" if has_queue_provenance else "local_module_not_queue"
-        result = _QueueAdapterResolution(
-            state, reason, exports, analysis.signals, declared,
-            modules=imported.modules | {module}, height=imported.height + 1,
-            witness=(module, *imported.witness),
-        )
-        # Side/source bytes belong to this snapshot cache; a completed summary
-        # additionally binds the export demand, transitive module cost and depth.
-        if state != 'unsupported':
-            cache.demands[demand_key] = result
-        return result
-    finally:
-        resolving.remove(module)
+from .queue_source_resolution import _local_queue_resolution as _local_queue_resolution
 
 
-def _queue_adapter_names(
-    root: Path,
-    diff: ArchitectureDiff,
-    tree: ast.AST,
-    side: str,
-    cache: _QueueResolutionCache,
-    resolving: set[str] | None = None,
-    visited: set[str] | None = None,
-    *, current_package: str = "",
-    source_roots: tuple[str, ...],
-    requested: frozenset[str] = frozenset(),
-    callable_only_exports: bool = False,
-    source_preparation: _QueueSourcePreparation | None = None,
-    budget: _QueueBudget | None = None,
-) -> _QueueAdapterNamesResult:
-    budget = budget if budget is not None else _QueueBudget(side)
-    proven: set[str] = set()
-    unsupported = False
-    modules: set[str] = set()
-    height = 0
-    witness: tuple[str, ...] = ()
-    unproved_queue_callback = False
-    active = resolving if resolving is not None else set()
-    seen = visited if visited is not None else set()
-    dependency_result = _operation_dependencies(tree, requested=requested)
-    dependencies = set(dependency_result.names)
-    if source_preparation is not None and tree is not source_preparation.tree:
-        raise ArchitectureError('owned queue source preparation mismatches its AST', code='fitness')
-    full_fallback = source_preparation is not None and not source_preparation.namespace_closed
-    patches = {} if full_fallback else literal_patch_members(tree)
-    member_demands: dict[str, frozenset[str] | None] = {}
-    preparation = None
-    prepared = False
+from .queue_source_resolution import _local_queue_resolution_impl as _local_queue_resolution_impl
 
-    def demanded_members(access_name: str) -> frozenset[str] | None:
-        nonlocal preparation, prepared
-        if not prepared:
-            preparation = None if full_fallback else _prepare_module_member_demands(tree, patches)
-            prepared = True
-        if access_name not in member_demands:
-            member_demands[access_name] = (_prepared_module_member_demand(preparation, access_name)
-                                           if preparation is not None else None)
-        return member_demands[access_name]
 
-    if source_preparation is not None:
-        inventory = source_preparation.inventory
-        use_namespace_closed = source_preparation.namespace_closed
-    else:
-        preparation = _prepare_module_member_demands(tree, patches)
-        prepared = True
-        use_namespace_closed = preparation is not None
-        inventory = _call_use_inventory(tree, namespace_closed=use_namespace_closed, patches=patches)
-    force_returns = bool(requested) and not callable_only_exports
-    use_proof = (source_preparation.callable_uses if source_preparation is not None and not force_returns
-                 else _inventory_use_proof(inventory, returns=force_returns))
-    callback_demands = set(use_proof.opaque)
-    return_demands = use_proof.returns | use_proof.opaque
-    dependencies.update(name.split('.')[0] for name in return_demands)
-
-    def complete_callable_use(prefix: str) -> bool:
-        if local_name not in use_proof.stable_imports:
-            return False
-        relevant = {name for name in use_proof.identity | use_proof.returns | use_proof.opaque
-                    if name == prefix or name.startswith(prefix + '.') or prefix.startswith(name + '.')}
-        if relevant:
-            return relevant <= use_proof.identity
-        # An explicit, stable import reexport may forward the caller's proved
-        # object-only demand. No recognized use at a root is not such a proof.
-        return callable_only_exports and local_name in requested
-
-    def callback_has_queue_export(resolution: _QueueAdapterResolution) -> bool:
-        for value in callback_demands:
-            if wildcard:
-                prefix = value
-            else:
-                if value == access_name or access_name.startswith(value + '.'):
-                    suffix = ''
-                elif value.startswith(access_name + '.'):
-                    suffix = value[len(access_name):]
-                else:
-                    continue
-                prefix = suffix.lstrip('.') if whole_module else target_name + suffix
-            if not prefix and resolution.exports:
-                return True
-            if any(export == prefix or export.startswith(prefix + '.') for export in resolution.exports):
-                return True
-        return False
-
-    def resolve_import(module: str, members: frozenset[str] | None, *, split: bool) -> _QueueAdapterResolution:
-        if not split or not members:
-            return _local_queue_resolution(root, diff, module, side, cache, active, seen,
-                source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=members,
-                callable_only=complete_callable_use(access_name)
-                and (callable_only_exports or local_name not in requested)
-                and local_name not in return_demands, budget=budget)
-        results = []
-        for member in sorted(members):
-            prefix = access_name + '.' + member
-            returned = (local_name in requested and not callable_only_exports) or local_name in return_demands or any(
-                value == prefix or value.startswith(prefix + '.') for value in return_demands)
-            results.append(_local_queue_resolution(root, diff, module, side, cache, active, seen,
-                source_roots[:MAX_QUEUE_SOURCE_ROOTS], requested=frozenset({member}),
-                callable_only=not returned and complete_callable_use(prefix), budget=budget))
-        if len(results) == 1:
-            return results[0]
-        state = ('unsupported' if any(item.state == 'unsupported' for item in results)
-                 else 'resolved' if any(item.state == 'resolved' for item in results) else 'not_queue')
-        missing = all(item.reason == 'local_module_missing' for item in results)
-        return _QueueAdapterResolution(state, 'local_module_missing' if missing else
-            'local_queue_provenance_resolved' if state != 'not_queue' else 'local_module_not_queue',
-            tuple(sorted({name for item in results for name in item.exports})),
-            tuple(sorted({signal for item in results for signal in item.signals})),
-            tuple(sorted({name for item in results for name in item.declared_exports})),
-            modules=frozenset(name for item in results for name in item.modules),
-            height=max(item.height for item in results),
-            witness=max(results, key=lambda item: (item.height, bool(item.modules))).witness)
-
-    for _target, _member, replacement, factory in patches.values():
-        names = frozenset(node.id for node in ast.walk(replacement) if isinstance(node, ast.Name)) if replacement is not None else frozenset()
-        dependencies.update(names)
-        if factory:
-            return_demands |= names
-    reachable = dependencies | set(dependency_result.frontier)
-    normalized: list[tuple[str, str, str, str, int, bool, bool]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports = tuple((alias.name, "", alias.asname or alias.name.split(".", 1)[0], alias.asname or alias.name, 0, True, False) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            module = _resolve_import_module(current_package, node.module, node.level)
-            imports = tuple((
-                module,
-                alias.name,
-                alias.asname or alias.name,
-                alias.asname or alias.name,
-                node.level, False, alias.name == "*",
-            ) for alias in node.names)
-        else:
-            continue
-        normalized.extend(imports)
-    for _module, _target, name, access, _level, _whole, wildcard in normalized:
-        if wildcard:
-            # A wildcard supplies no complete binding/use proof for a callable.
-            return_demands |= {name}
-            for value in use_proof.returns | use_proof.opaque:
-                dependencies.add(value.split('.')[0])
-                return_demands |= {value}
-            callback_demands.update(use_proof.opaque)
-            continue
-        for value in use_proof.returns | use_proof.opaque:
-            if value == access or value.startswith(access + '.') or access.startswith(value + '.'):
-                dependencies.add(name)
-                return_demands |= {value}
-                if value == access or access.startswith(value + '.'):
-                    return_demands |= {name}
-                if value in use_proof.opaque:
-                    callback_demands.add(value)
-                    if not use_namespace_closed or access.startswith(value + '.'):
-                        callback_demands.add(access)
-    reachable = dependencies | set(dependency_result.frontier)
-    relevant = [item for item in normalized if item[0].split(".")[0] not in _QUEUE_IMPORTS and (item[6] and reachable or item[2] in dependencies or item[2] in dependency_result.frontier_imports)]
-    _prime_local_module_sources(root, diff, {item[0] for item in relevant}, side, cache, source_roots[:MAX_QUEUE_SOURCE_ROOTS], MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
-    for target_module, target_name, local_name, access_name, level, whole_module, wildcard in normalized:
-            if target_module.split(".")[0] in _QUEUE_IMPORTS or not (wildcard and reachable or local_name in dependencies or local_name in dependency_result.frontier_imports):
-                continue
-            queue_adjacent = _queue_adjacent_module(target_module)
-            frontier_reachable = local_name in dependency_result.frontier_imports
-            if len(source_roots) > MAX_QUEUE_SOURCE_ROOTS and (queue_adjacent or frontier_reachable):
-                proven.add(local_name)
-                unsupported = True
-                continue
-            bounded_source_roots = source_roots[:MAX_QUEUE_SOURCE_ROOTS]
-            resolution = resolve_import(target_module,
-                (frozenset({target_name}) if target_name and not wildcard else
-                 frozenset(reachable) if wildcard else demanded_members(access_name)),
-                split=whole_module and not wildcard)
-            modules.update(resolution.modules)
-            if resolution.modules and resolution.height > height:
-                witness = resolution.witness
-            height = max(height, resolution.height if resolution.modules else 0)
-            if target_name and not wildcard and target_name not in resolution.declared_exports and _is_local_package(cache, target_module):
-                target_module, target_name, whole_module = f"{target_module}.{target_name}", "", True
-                _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
-                resolution = resolve_import(target_module, demanded_members(access_name), split=True)
-                modules.update(resolution.modules)
-                if resolution.modules and resolution.height > height:
-                    witness = resolution.witness
-                height = max(height, resolution.height if resolution.modules else 0)
-                queue_adjacent = _queue_adjacent_module(target_module)
-            export_resolved = (
-                (target_name and any(value == target_name or value.startswith(target_name + '.') for value in resolution.exports))
-                or (not target_name and bool(resolution.exports))
-            )
-            if callback_has_queue_export(resolution):
-                if dependency_result.exhausted:
-                    raise ArchitectureError('callable use dependency frontier is exhausted', code='limit')
-                # Validate the unchanged interpreter bounds before reporting a
-                # semantic refusal; a limit must not turn into new_queue.
-                unproved_queue_callback = True
-            if target_name and not wildcard:
-                members = [value[len(target_name):] for value in resolution.exports if value.startswith(target_name + '.')]
-                if members:
-                    proven.update(local_name + member for member in members)
-                    if target_name not in resolution.exports:
-                        continue
-            local_values = tuple(sorted(name for name in reachable & set(resolution.exports) if not name.startswith('_'))) if wildcard else (local_name,)
-            if whole_module and resolution.reason in {"local_queue_provenance_resolved", "local_module_not_queue"}:
-                proven.update(f"{access_name}.{export}" for export in resolution.exports)
-                unsupported = unsupported or bool(resolution.exports)
-                continue
-            if (frontier_reachable or whole_module or wildcard) and (
-                level > 0
-                or resolution.reason != "local_module_missing"
-                or any(name == target_module.split(".", 1)[0] or name.startswith(target_module.split(".", 1)[0] + ".") for name in cache.modules)
-            ):
-                declared = resolution.reason == "local_module_not_queue" and (
-                    whole_module or wildcard or target_name in resolution.declared_exports)
-                if declared or wildcard and not local_values and (
-                    resolution.reason == "local_queue_provenance_resolved"
-                ):
-                    continue
-                proven.update(local_values or reachable)
-                unsupported = True
-                continue
-            if (
-                len(source_roots) > MAX_QUEUE_SOURCE_ROOTS
-                and resolution.state == "resolved"
-                and export_resolved
-            ):
-                proven.add(local_name)
-                unsupported = True
-                continue
-            if resolution.state == "unsupported" and export_resolved:
-                proven.add(local_name)
-                unsupported = True
-                continue
-            if (
-                resolution.state == "unsupported"
-                and queue_adjacent
-            ):
-                raise ArchitectureError(
-                    f"relevant local queue adapter is unsupported: {target_module}"
-                    f" ({resolution.reason})",
-                    code="fitness",
-                )
-            if (
-                not resolution.exports
-                and queue_adjacent
-                and (
-                    level > 0
-                    or any(name == target_module.split(".", 1)[0] or name.startswith(target_module.split(".", 1)[0] + ".") for name in cache.modules)
-                )
-                and resolution.reason == "local_module_missing"
-            ):
-                raise ArchitectureError(
-                    f"relevant local queue adapter is unresolved: {target_module}",
-                    code="fitness",
-                )
-            if (
-                target_name
-                and target_name not in resolution.exports
-                and resolution.state == "resolved"
-                and queue_adjacent
-            ):
-                raise ArchitectureError(
-                    f"relevant local queue adapter export is unresolved: "
-                    f"{target_module}.{target_name}",
-                    code="fitness",
-                )
-            if (
-                target_name and target_name in resolution.exports
-            ) or (not target_name and resolution.exports):
-                proven.add(local_name)
-    return _QueueAdapterNamesResult(frozenset(proven), unsupported, frozenset(modules), height, unproved_queue_callback, witness)
+from .queue_source_resolution import _queue_adapter_names as _queue_adapter_names
 
 
 def _queue_signals(
@@ -3920,7 +2881,9 @@ def _queue_signals(
     *, source_path: str = '<importer>', source: bytes | None = None, complete_module: bool = False,
     budget: _QueueBudget | None = None,
 ) -> _QueueProvenanceResult:
-    budget = budget if budget is not None else _QueueBudget(side)
+    budget = budget if budget is not None else _QueueBudget(side, profile=cache.profile)
+    if budget.profile != cache.profile or _queue_analysis_profile(root, diff, side) != cache.profile:
+        raise ArchitectureError("queue source cache profile changed", code="fitness")
     source_was_supplied = source is not None
     source = source if source is not None else ast.unparse(tree).encode('utf-8')
     budget.source(source_path, source)
@@ -3939,10 +2902,12 @@ def _queue_signals(
         budget=budget,
     )
     try:
-        analysis = analyze_queue_tree(tree, adapters.names, allow_local_ipc='queue' not in cache.modules,
+        analysis = analyze_queue_tree(tree, adapters.names, allow_local_ipc='queue' not in cache.source_modules,
                                       complete_module=complete_module)
     except QueueAnalysisLimit as exc:
         raise ArchitectureError(str(exc), code="limit") from exc
+    if _queue_analysis_profile(root, diff, side) != cache.profile:
+        raise ArchitectureError("queue source cache profile changed", code="fitness")
     if adapters.unproved_queue_callback:
         raise _UnsupportedQueueCallbackError('queue-bearing callback return is unsupported', code='fitness')
     unresolved = bool((adapters.unsupported or analysis.uncertain) and analysis.signals)
@@ -3956,120 +2921,7 @@ def _queue_signals(
                             and not analysis.derived_names and not analysis.export_paths))
 
 
-def _new_queue_sources(
-    root: Path,
-    diff: ArchitectureDiff,
-    python: _PythonInventory,
-    source_roots: tuple[str, ...],
-) -> _QueueProvenanceResult:
-    applicable: list[str] = []
-    unsupported: list[str] = []
-    changed_signals: set[str] = set()
-    limits: list[tuple[str, str, str]] = []
-    causes: list[tuple[str, str, str, str, str]] = []
-    head_cache = _queue_module_inventory(root, diff, "head", source_roots)
-    base_cache = _queue_module_inventory(root, diff, "base", source_roots)
-    for path in _python_paths(diff):
-        side = "head"
-        stage = "resolve_package"
-        try:
-            current_package = _module_package(path, source_roots, head_cache.paths)
-            stage = 'read'
-            head_value = read_diff_file(root, diff, path, 'head')
-            if head_value is None:
-                raise ArchitectureError('changed Python source is unavailable', code='missing')
-            head_budget = _QueueBudget('head')
-            stage = 'admit'
-            head_budget.source(path, head_value)
-            # These two boundaries retain complete parsed source scopes.
-            # Synthetic export/return consumers do not grant module provenance.
-            stage = 'parse'
-            head_tree = python.tree(path)
-            stage = 'classify'
-            head = _queue_signals(
-                root,
-                diff,
-                head_tree,
-                "head",
-                head_cache,
-                current_package,
-                source_roots,
-                source_path=path, source=head_value, budget=head_budget, complete_module=True,
-            )
-            side = "base"
-            stage = "read"
-            base_value = read_diff_file(root, diff, path, "base")
-            base = _QueueProvenanceResult("not_queue", "no_base_source", ())
-            if base_value is not None:
-                base_budget = _QueueBudget('base')
-                stage = 'admit'
-                base_budget.source(path, base_value)
-                stage = 'parse'
-                base_tree = ast.parse(base_value.decode("utf-8"), filename=path)
-                if sum(1 for _ in ast.walk(base_tree)) > MAX_ANALYZED_AST_NODES:
-                    raise ArchitectureError(f"Python AST node limit exceeded: {path}", code="limit")
-                stage = 'classify'
-                try:
-                    base = _queue_signals(
-                        root,
-                        diff,
-                        base_tree,
-                        "base",
-                        base_cache,
-                        current_package,
-                        source_roots,
-                        source_path=path, source=base_value, budget=base_budget, complete_module=True,
-                    )
-                except _UnsupportedQueueCallbackError:
-                    if not head.complete_empty:
-                        raise
-                    causes.append((path, 'base', 'classify', 'complete_empty_head', 'fitness'))
-                    continue
-            stage = 'compare'
-            delta = set(head.signals) - set(base.signals)
-            if delta:
-                changed_signals.update(f"{path}:{signal}" for signal in delta)
-                outcome = head.state if head.state in {"unsupported", "resolved", "not_queue"} else "unknown"
-                causes.append((path, "head", "classify", "returned_queue_signal", outcome))
-                if head.state == "unsupported":
-                    unsupported.append(path)
-                else:
-                    applicable.append(path)
-        except ArchitectureError as exc:
-            if exc.code == "limit":
-                limits.append((path, side, _queue_limit_text(exc)))
-            else:
-                unsupported.append(path)
-                code = _queue_diagnostic_code(exc.code)
-                changed_signals.add(f"{path}:unsupported:{code}")
-                causes.append((path, side, stage, "architecture_error", code))
-        except (SyntaxError, UnicodeDecodeError):
-            value = read_diff_file(root, diff, path, "head") or b""
-            if re.search(
-                rb"\b(celery|rq|redis|kombu|pika|kafka|confluent_kafka|enqueue|apply_async|send_task)\b",
-                value,
-            ):
-                unsupported.append(path)
-                changed_signals.add(f"{path}:unsupported:syntax")
-                causes.append((path, side, stage, "syntax_error", "syntax"))
-    if unsupported or limits:
-        return _QueueProvenanceResult(
-            "unsupported",
-            "analysis_limit_exceeded" if limits else "queue_provenance_unresolved",
-            tuple(sorted(changed_signals)),
-            tuple(sorted(set((*applicable, *unsupported)))),
-            tuple(sorted(limits)),
-            tuple(sorted(causes)),
-        )
-    if applicable:
-        return _QueueProvenanceResult(
-            "resolved",
-            "new_queue_signal",
-            tuple(sorted(changed_signals)),
-            tuple(sorted(set(applicable))),
-            causes=tuple(sorted(causes)),
-        )
-    return _QueueProvenanceResult("not_queue", "no_queue_signal", (), causes=tuple(sorted(causes)))
+from .queue_source_scan import _new_queue_sources as _new_queue_sources
 
 
 def _background_jobs(
@@ -4320,7 +3172,7 @@ def _new_import_family(
 
 
 def _network_families(tree: ast.AST, project_roots: set[str]) -> set[str]:
-    byte_only = _byte_only_http_imports(tree)
+    byte_only = _non_client_imports(tree)
     values = {
         imported for imported in _import_targets(tree) if imported not in byte_only and _network_protocol(imported) is not None
     }
@@ -4468,6 +3320,7 @@ def _bind_applicability_inventory(
     )
 
 
+@git_binding_scope()
 def evaluate_fitness(
     root: Path | str,
     snapshot: ArchitectureSnapshot,
@@ -4476,47 +3329,55 @@ def evaluate_fitness(
     *,
     pre_risk: str,
 ) -> FitnessReport:
-    repository = Path(root).resolve(strict=True)
-    supplied_paths = tuple(sorted(set(changed_paths)))
-    if supplied_paths != diff.changed_paths:
-        raise ArchitectureError("changed_paths must exactly match the architecture diff", code="fitness")
-    if architecture_digests(snapshot)["architecture_digest"] != diff.head_architecture_digest:
-        raise ArchitectureError("fitness snapshot does not match the diff head", code="fitness")
-    python = _PythonInventory(repository, diff)
-    queue_provenance = _new_queue_sources(
-        repository, diff, python, _queue_source_roots(snapshot)
-    )
-    raw_results = tuple(
-        sorted(
-            (
-                _background_jobs(
-                    repository, snapshot, diff, python, queue_provenance
-                ),
-                _change_separation(snapshot, diff, root),
-                _code_budget(snapshot, diff, python),
-                _contract_compatibility(snapshot, diff),
-                _forbidden_edges(snapshot, diff),
-                _governance_promotion(repository, diff),
-                _migration_safety(repository, snapshot, diff),
-                _module_boundaries(snapshot, diff, python),
-                _network_clients(snapshot, diff, python),
-                _production_imports(diff, python),
-                _secret_flows(snapshot, diff),
-                _tenant_authorization(snapshot, diff),
-                _workspace_trust(snapshot, diff),
-            ),
-            key=lambda item: item.category,
-        )
-    )
-    results = tuple(
-        _bind_applicability_inventory(repository, snapshot, diff, result)
-        for result in raw_results
-    )
+    with diagnostics.span('arch-fitness-inputs', stage='action'):
+        repository = Path(root).resolve(strict=True)
+        supplied_paths = tuple(sorted(set(changed_paths)))
+        if supplied_paths != diff.changed_paths:
+            raise ArchitectureError("changed_paths must exactly match the architecture diff", code="fitness")
+        if architecture_digests(snapshot)["architecture_digest"] != diff.head_architecture_digest:
+            raise ArchitectureError("fitness snapshot does not match the diff head", code="fitness")
+        python = _PythonInventory(repository, diff)
+    with diagnostics.span('arch-queue-analysis', stage='action'):
+        queue_provenance = _new_queue_sources(repository, diff, python, _queue_source_roots(snapshot))
+    measured = []
+    with diagnostics.span('arch-fitness-background-job', stage='action'):
+        measured.append(_background_jobs(repository, snapshot, diff, python, queue_provenance))
+    with diagnostics.span('arch-fitness-change-separation', stage='action'):
+        measured.append(_change_separation(snapshot, diff, root))
+    with diagnostics.span('arch-fitness-code-budget', stage='action'):
+        measured.append(_code_budget(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-contracts', stage='action'):
+        measured.append(_contract_compatibility(snapshot, diff))
+    with diagnostics.span('arch-fitness-forbidden-edges', stage='action'):
+        measured.append(_forbidden_edges(snapshot, diff))
+    with diagnostics.span('arch-fitness-governance', stage='action'):
+        measured.append(_governance_promotion(repository, diff))
+    with diagnostics.span('arch-fitness-migration', stage='action'):
+        measured.append(_migration_safety(repository, snapshot, diff))
+    with diagnostics.span('arch-fitness-module-boundary', stage='action'):
+        measured.append(_module_boundaries(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-network-client', stage='action'):
+        measured.append(_network_clients(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-production-import', stage='action'):
+        measured.append(_production_imports(diff, python))
+    with diagnostics.span('arch-fitness-secret-flow', stage='action'):
+        measured.append(_secret_flows(snapshot, diff))
+    with diagnostics.span('arch-fitness-tenant-authorization', stage='action'):
+        measured.append(_tenant_authorization(snapshot, diff))
+    with diagnostics.span('arch-fitness-workspace-trust', stage='action'):
+        measured.append(_workspace_trust(snapshot, diff))
+    raw_results = tuple(sorted(measured, key=lambda item: item.category))
+    bound = []
+    for result in raw_results:
+        with diagnostics.span(_diagnostic_step('applicability', result.category), stage='action'):
+            bound.append(_bind_applicability_inventory(repository, snapshot, diff, result))
+    results = tuple(bound)
     if tuple(item.category for item in results) != FITNESS_CATEGORIES:
         raise ArchitectureError("mandatory fitness category coverage is incomplete", code="fitness")
-    escalation, post_risk, triggers = _risk(
-        repository, snapshot, diff, python, pre_risk, queue_provenance
-    )
+    with diagnostics.span('arch-risk', stage='action'):
+        escalation, post_risk, triggers = _risk(
+            repository, snapshot, diff, python, pre_risk, queue_provenance
+        )
     architecture_significant = diff.baseline_introduced or bool(diff.changes or triggers)
     docs_only = bool(diff.changed_paths) and all(
         _matches(path, ("docs",)) or path.endswith(".md") for path in diff.changed_paths
@@ -4558,6 +3419,7 @@ def evaluate_fitness(
     )
 
 
+@git_binding_scope()
 def architecture_evidence(
     root: Path | str,
     *,

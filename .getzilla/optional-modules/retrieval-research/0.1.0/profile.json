@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "profile": "public-research162/v1",
+  "enabled_by_default": false,
+  "inventory_paths": 4000,
+  "inventory_bytes": 33554432,
+  "source_file_bytes": 1048576,
+  "source_cut_seconds": 2,
+  "native_publication": "unbound",
+  "model_execution": "unsupported"
+}

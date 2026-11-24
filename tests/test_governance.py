@@ -294,7 +294,9 @@ def _git_commit_fixture(root: Path) -> str:
 
 
 def _materialize_architecture(root: Path) -> None:
-    shutil.copytree(ROOT / "architecture", root / "architecture")
+    # Independent toy Git histories use consumer limits, like installed projects.
+    shutil.copytree(ROOT / "architecture", root / "architecture",
+                    ignore=shutil.ignore_patterns("queue-analysis-profile.json"))
     shutil.copytree(ROOT / "engineering" / "contracts", root / "engineering" / "contracts")
     shutil.copytree(ROOT / "factory" / "contracts", root / "factory" / "contracts")
     shutil.copytree(ROOT / "pilot" / "contracts", root / "pilot" / "contracts")
@@ -1354,7 +1356,8 @@ class GovernanceKnowledgeTests(unittest.TestCase):
         evidence_documents: dict[str, object] | None = None,
     ) -> Path:
         root = _make_fixture(self)
-        shutil.copytree(ROOT / "architecture", root / "architecture")
+        shutil.copytree(ROOT / "architecture", root / "architecture",
+                        ignore=shutil.ignore_patterns("queue-analysis-profile.json"))
         for schema_name in ("architecture-system.schema.json", "architecture-rules.schema.json"):
             shutil.copy2(ROOT / "schemas" / schema_name, root / "schemas" / schema_name)
         shutil.copytree(ROOT / "engineering" / "contracts", root / "engineering" / "contracts")
@@ -1677,6 +1680,25 @@ class GovernanceKnowledgeTests(unittest.TestCase):
 class GovernanceHandoffTests(unittest.TestCase):
     NOW = datetime(2026, 8, 28, 13, 0, tzinfo=timezone.utc)
 
+    def test_ordinary_fixture_uses_consumer_limits_and_copied_self_profile_is_refused(self) -> None:
+        from getzilla import architecture_fitness as fitness
+
+        root = _make_fixture(self)
+        _materialize_architecture(root)
+        _git_commit_fixture(root)
+        declaration = "architecture/queue-analysis-profile.json"
+        self.assertFalse((root / declaration).exists())
+        profile = fitness._queue_analysis_profile(root, None, "head")
+        self.assertEqual((profile.name, profile.module_limit, profile.byte_limit),
+                         ("consumer-v1", 64, 2 * 1024 * 1024))
+        self.assertEqual(fitness.MAX_QUEUE_ANALYSIS_AST_NODES, 400_000)
+        self.assertEqual(fitness.MAX_QUEUE_ADAPTER_DEPTH, 8)
+        installer = runpy.run_path(str(ROOT / "scripts/install_into.py"))
+        self.assertNotIn(declaration, {relative for relative, _ in installer["iter_source_files"](ROOT)})
+        shutil.copy2(ROOT / declaration, root / declaration)
+        with self.assertRaisesRegex(ArchitectureError, "exact Getzilla source ancestry"):
+            fitness._queue_analysis_profile(root, None, "head")
+
     def _clean_fixture(self) -> tuple[Path, object, str, dict[str, object]]:
         root = _make_fixture(self)
         _materialize_architecture(root)
@@ -1698,9 +1720,43 @@ class GovernanceHandoffTests(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            # A hang guard, not a budget: handoff runs hundreds of git processes, ~30s on Windows.
+            # A hang guard, not a budget: handoff runs ~30 git processes, ~1s in Windows Sandbox.
             timeout=120,
         )
+
+    def test_handoff_cross_checks_the_binding_once_and_batches_architecture_reads(self) -> None:
+        root, snapshot, head, architecture = self._clean_fixture()
+        self.assertGreater(len(architecture_diff.load_architecture(root).system["contracts"]), 20)
+        for cache in (
+            architecture_diff._GIT_BLOB_CACHE,
+            architecture_diff._GIT_COMMIT_CACHE,
+            architecture_diff._GIT_FORMAT_CACHE,
+            architecture_diff._MATERIALIZED_STATE_CACHE,
+        ):
+            cache.clear()
+        real_run = architecture_diff._run_capped
+        commands: list[list[str]] = []
+
+        def observed(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+            commands.append(command)
+            return real_run(command, **kwargs)
+
+        with mock.patch.object(architecture_diff, "_run_capped", side_effect=observed):
+            handoff = build_governance_handoff(
+                snapshot, architecture=architecture, base_sha=head, head_sha=head, now=self.NOW,
+            )
+        self.assertEqual(handoff.exact_head_sha, head)
+        probes = [command for command in commands if "--absolute-git-dir" in command]
+        blob_batches = [
+            command for command in commands if any(argument.startswith("--batch") for argument in command)
+        ]
+        # One Git cross-check for the one binding and a blob batch per read group, not one
+        # cross-check per Git operation and one cat-file per contract (726 processes before).
+        self.assertEqual(len(probes), 1)
+        self.assertLess(len(blob_batches), 10)
+        # Each isolated Git view parses config from stdin before reading repository data.
+        repository_reads = [command for command in commands if "--file=-" not in command]
+        self.assertLess(len(repository_reads), 50)
 
     def test_handoff_has_exact_closed_immutable_v1_shape(self) -> None:
         _, snapshot, head, architecture = self._clean_fixture()
@@ -1821,13 +1877,13 @@ class GovernanceHandoffTests(unittest.TestCase):
         reads = 0
 
         def alternating_read(
-            descriptor: int, relative: str, *, label: str
+            descriptor: int, relative: str, *, label: str, anchor=None
         ) -> bytes:
             nonlocal reads
             if relative == shared_path:
                 reads += 1
                 return first_bytes if reads % 2 else head_bytes
-            return real_read(descriptor, relative, label=label)
+            return real_read(descriptor, relative, label=label, anchor=anchor)
 
         with mock.patch.object(
             governance, "_read_regular_bytes", side_effect=alternating_read
@@ -1849,12 +1905,12 @@ class GovernanceHandoffTests(unittest.TestCase):
         reads = 0
 
         def counted_read(
-            descriptor: int, relative: str, *, label: str
+            descriptor: int, relative: str, *, label: str, anchor=None
         ) -> bytes:
             nonlocal reads
             if relative == shared_path:
                 reads += 1
-            return real_read(descriptor, relative, label=label)
+            return real_read(descriptor, relative, label=label, anchor=anchor)
 
         with mock.patch.object(
             governance, "_read_regular_bytes", side_effect=counted_read
@@ -2237,7 +2293,8 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
             self._assert_git_binding_refused(
                 lambda: architecture_diff.run_git_bounded(root, ["rev-parse", "HEAD"]), "worktree root", root,
             )
-        self.assertEqual(observed, [foreign_head])
+        # The isolated Git view retains the original HEAD even before the postcheck.
+        self.assertEqual(observed, [(head + "\n").encode()])
 
     def test_git_binding_allows_normal_object_additions_during_read(self) -> None:
         root, head = self._repository()
@@ -2417,8 +2474,8 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         subprocess.run(["git", "worktree", "add", "-q", "--detach", str(linked), head], cwd=root, check=True)
         real_pointer = architecture_diff._git_pointer
 
-        def mutate(path: Path) -> bytes:
-            content = real_pointer(path)
+        def mutate(path: Path, *, _guard=None) -> bytes:
+            content = real_pointer(path, _guard=_guard)
             if path == linked / ".git":
                 path.write_text(f"gitdir: {foreign / '.git'}\n", encoding="utf-8")
             return content
@@ -2426,6 +2483,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         with mock.patch.object(architecture_diff, "_git_pointer", side_effect=mutate):
             with self.assertRaises(ArchitectureError):
                 architecture_diff._git(linked, ["rev-parse", "HEAD"])
+        self.assertEqual((linked / ".git").read_text(), f"gitdir: {foreign / '.git'}\n")
 
     def test_linked_worktree_cannot_redirect_its_common_object_store(self) -> None:
         root, head = self._repository()
@@ -2437,6 +2495,46 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         (git_directory / "commondir").write_text(str(foreign / ".git") + "\n", encoding="utf-8")
         with self.assertRaises(ArchitectureError):
             architecture_diff._git(linked, ["rev-parse", "HEAD"])
+
+    def test_binding_scope_reuses_only_an_unchanged_cross_checked_binding(self) -> None:
+        root, head = self._repository()
+        foreign, _ = self._repository()
+        linked = root.parent / f"{root.name}-scope-linked"
+        self.addCleanup(shutil.rmtree, linked, True)
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(linked), head], cwd=root, check=True)
+        real_run = architecture_diff._run_capped
+        probes: list[list[str]] = []
+
+        def observed(command: list[str], **kwargs: object) -> tuple[int, bytes, bytes]:
+            if "--absolute-git-dir" in command:
+                probes.append(command)
+            return real_run(command, **kwargs)
+
+        expected = (head + "\n").encode()
+        with mock.patch.object(architecture_diff, "_run_capped", side_effect=observed):
+            for _ in range(2):
+                self.assertEqual(architecture_diff._git(root, ["rev-parse", "HEAD"]), expected)
+            self.assertEqual(len(probes), 2)
+            with architecture_diff.git_binding_scope():
+                for worktree in (root, linked, root, linked):
+                    self.assertEqual(architecture_diff._git(worktree, ["rev-parse", "HEAD"]), expected)
+                with architecture_diff.git_binding_scope():
+                    self.assertEqual(architecture_diff._git(root, ["rev-parse", "HEAD"]), expected)
+                self.assertEqual(len(probes), 4)
+                # An in-place config edit leaves .git itself untouched; it is still cross-checked again.
+                with (root / ".git" / "config").open("a", encoding="utf-8") as config:
+                    config.write(f"[core]\n\tworktree = {foreign}\n")
+                with self.assertRaises(ArchitectureError):
+                    architecture_diff._git(root, ["rev-parse", "HEAD"])
+                # The isolated view rejects core.worktree before starting rev-parse.
+                self.assertEqual(len(probes), 4)
+                # In place: Git for Windows hides .git, and Windows refuses to recreate a hidden file.
+                with (linked / ".git").open("r+b") as registration:
+                    registration.write(f"gitdir: {foreign / '.git'}\n".encode())
+                    registration.truncate()
+                with self.assertRaises(ArchitectureError):
+                    architecture_diff._git(linked, ["rev-parse", "HEAD"])
+            self.assertIsNone(architecture_diff._PROBED_BINDINGS.get())
 
     def test_regular_repository_cannot_redirect_its_common_object_store(self) -> None:
         root, _ = self._repository()
@@ -2469,7 +2567,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         subprocess.run(["git", "replace", head, replacement_head], cwd=root, check=True)
         self.assertEqual(governance._git_output(root, ["show", f"{head}:decisions.md"], label="exact blob"), b"# decisions\n")
 
-    def test_clean_gate_refuses_filters_before_they_can_execute(self) -> None:
+    def test_clean_gate_detects_dirty_files_without_executing_repository_filters(self) -> None:
         root, head = self._repository()
         (root / ".gitattributes").write_text("decisions.md filter=hostile\n", encoding="utf-8")
         sentinel = root / "filter-ran"
@@ -2477,7 +2575,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         (root / "decisions.md").write_bytes(b"changed\n")
         with self.assertRaises(GovernanceError) as caught:
             governance._require_clean_exact_git_state(root, base_sha=head, head_sha=head)
-        self.assertEqual(caught.exception.code, "git")
+        self.assertEqual(caught.exception.code, "dirty")
         self.assertFalse(sentinel.exists())
 
     def test_committed_gitlink_is_not_a_regular_governance_input(self) -> None:

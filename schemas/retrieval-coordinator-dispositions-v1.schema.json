@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:getzilla:research162:coordinator-dispositions:v1",
+  "$comment": "Actual coordinator source dispositions only; no seal or source/model permission. initial_report_digest and second_report_digest are retrieval.contracts.digest(parsed accepted annotation), not raw-byte SHA. Exact original/accepted raw hashes remain separately bound in publication groups. Third-source overrides need both adjudication keys bound to actual original report bytes and decision ordinal. Missing/unknown source evidence refuses; never force an unknown to binary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dispositions"
+  ],
+  "properties": {
+    "dispositions": {
+      "type": "array",
+      "maxItems": 89960,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "corpus",
+          "task_id",
+          "function_id",
+          "first",
+          "second",
+          "final",
+          "initial_report_digest",
+          "second_report_digest",
+          "reason"
+        ],
+        "properties": {
+          "corpus": {
+            "enum": [
+              "small",
+              "large"
+            ]
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "function_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "first": {
+            "enum": [
+              0,
+              1,
+              2
+            ]
+          },
+          "second": {
+            "enum": [
+              0,
+              1,
+              2
+            ]
+          },
+          "final": {
+            "enum": [
+              1,
+              2
+            ]
+          },
+          "initial_report_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "second_report_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "adjudication_report_sha256": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            ]
+          },
+          "adjudication_decision_index": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 89959
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

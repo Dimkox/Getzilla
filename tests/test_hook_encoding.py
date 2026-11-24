@@ -50,7 +50,19 @@ class HookEncodingTests(unittest.TestCase):
             data = json.loads(proc.stdout.decode('utf-8'))
             verdict = json.dumps(data, ensure_ascii=False)
             self.assertIn('deny', verdict)
-            self.assertIn('ключ✓.key', verdict)
+            self.assertNotIn('ключ✓.key', verdict)
+            self.assertIn('secret', verdict)
+            # A trusted fixture message proves the output byte contract without
+            # requiring the production denial to echo an untrusted operand.
+            message = 'Проверка UTF-8 ✓'
+            emitter = root / '.getzilla/hooks/owned_encoding_fixture.py'
+            emitter.write_text('from _lib import emit, permission_output\n'
+                               f'emit(permission_output(False, {message!r}))\n',
+                               encoding='utf-8', newline='\n')
+            emitted = _hook(root, emitter.name, {})
+            self.assertEqual(emitted.returncode, 0, emitted.stderr.decode('utf-8', 'replace'))
+            self.assertIn(message.encode('utf-8'), emitted.stdout)
+            self.assertIn(message, json.dumps(json.loads(emitted.stdout.decode('utf-8')), ensure_ascii=False))
 
 
 if __name__ == '__main__':

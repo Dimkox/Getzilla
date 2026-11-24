@@ -1,6 +1,8 @@
 <!-- Template source for AGENTS.md; links are relative to its output directory. -->
 # Getzilla consumer engineering contract
 
+Configure [optional language gates](docs/LANGUAGE_QUALITY_GATES.md) per project.
+
 This managed block governs the installed workflow in this consumer repository. Consumer-owned instructions outside the managed markers remain owned by the consumer. Installation supplies workflow tools and factory source; it does not establish project milestones, activate a service, configure every host CLI, or authorize operational actions.
 
 ## Required installed entrypoints
@@ -39,6 +41,12 @@ Use only `allowed_agents` from the active route. Run its independent analysis ag
 After committing source and before dispatch, run `python3 scripts/getzilla_route.py --reconcile --json`. One ordinary code reviewer covers correctness and test adequacy. Actual diff categories plus configured risk thresholds select security, data and release audits. Incomplete or stale source assessment cannot qualify. Explicit additional reviews persist via `--add-reviewer test_reviewer`; legacy routes retain their selected reviewers. Operational approvals remain separate.
 
 When this repository uses incident history, keep dated events in `engineering/incidents/`, repeated lessons in `engineering/mistakes.md`, and the root `mistakes.md` compatibility entrypoint and governance projection. Preserve historical source bytes and provenance when moving records.
+Measure host logical CPUs, actual affinity/cpuset and ancestor quotas before heavy work.
+Reserve two from the total host logical count: `max(1, n - 2)`, capped by actual capacity.
+Apply this reserve once. Explicit worker requests may lower the shared budget only.
+Sum concurrent heavy workers within the budget. Agent slots and route caps are separate.
+
+Use only `allowed_agents` from the active route. Run its independent analysis agents in parallel, use exactly one write agent as implementation owner, and dispatch the listed independent review agents only after implementation and verification. Never substitute a generic worker for a selected domain write agent or let an implementer approve its own work.
 
 Read relevant code, contracts and tests before editing. Reproduce defects and add a failing regression or characterization test when practical. Make the smallest coherent change, preserve compatibility unless a versioned break is approved, and justify any new service or dependency. Production-facing behavior requires observable success/failure signals and rollback or forward recovery. Respect named human gates; ordinary bounded work without a named gate can proceed within the user's scope.
 

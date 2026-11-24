@@ -83,9 +83,27 @@ class GetzillaCliTests(unittest.TestCase):
     def test_parallel_workers_use_measured_capacity_with_two_cpu_reserve(self) -> None:
         from unittest import mock
         from getzilla import startup_cpu
-        with mock.patch.object(startup_cpu, 'measure', return_value={'chosen_capacity': 2}) as measure:
+        environment = {key: value for key, value in os.environ.items() if key != 'GETZILLA_TEST_CPU_RESERVE'}
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(startup_cpu, 'measure', return_value={'chosen_capacity': 2}) as measure:
             self.assertEqual(cli.test_workers(), 2)
         measure.assert_called_once_with(reserve=2, probe=False)
+
+    def test_ci_runner_can_lower_the_test_cpu_reserve_with_a_bounded_value(self) -> None:
+        from unittest import mock
+        from getzilla import startup_cpu
+        cases = [('0', 0), ('1', 1), ('64', 64), ('', 2), ('65', 2), ('-1', 2), ('abc', 2), (' 0', 2),
+                 ('٠', 2), ('007', 2)]
+        for value, expected in cases:
+            with self.subTest(value=value), mock.patch.dict(os.environ, {'GETZILLA_TEST_CPU_RESERVE': value}), \
+                    mock.patch.object(startup_cpu, 'measure', return_value={'chosen_capacity': 4}) as measure:
+                self.assertEqual(cli.test_cpu_reserve(), expected)
+                self.assertEqual(cli.test_workers(), 4)
+                measure.assert_called_once_with(reserve=expected, probe=False)
+        with mock.patch.dict(os.environ, {'GETZILLA_TEST_CPU_RESERVE': '0'}), \
+                mock.patch.object(startup_cpu, 'measure', side_effect=RuntimeError('no topology')), \
+                mock.patch.object(cli.os, 'cpu_count', return_value=4):
+            self.assertEqual(cli.test_workers(), 4)
 
     def test_parallel_entrypoint_preserves_full_discovery_options_and_failure_status(self) -> None:
         from unittest import mock
@@ -194,7 +212,11 @@ class GetzillaCliTests(unittest.TestCase):
 
     def test_project_scripts_take_precedence_inside_a_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = Path(tmp) / 'project'
+            parent = Path(tmp)
+            (parent / '.getzilla').mkdir()
+            (parent / 'scripts').mkdir()
+            (parent / 'scripts/getzilla_status.py').write_text("print('ancestor status')\n", encoding='utf-8')
+            project = parent / 'project'
             (project / '.getzilla').mkdir(parents=True)
             (project / 'scripts').mkdir()
             (project / 'scripts/getzilla_status.py').write_text("print('project status')\n", encoding='utf-8')
@@ -206,7 +228,12 @@ class GetzillaCliTests(unittest.TestCase):
             self.assertEqual(proc.stdout.strip(), 'project status')
             outside = Path(tmp) / 'elsewhere'
             outside.mkdir()
-            self.assertEqual(cli.script_path('getzilla_status.py', outside), ROOT / 'scripts/getzilla_status.py')
+            # Runtime scratch can itself be inside a real Getzilla checkout.
+            # Give the ancestor its own marker instead of assuming no project.
+            self.assertEqual(cli.script_path('getzilla_status.py', outside), parent / 'scripts/getzilla_status.py')
+            proc = run('status', cwd=outside)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), 'ancestor status')
 
 
 class ShimTests(unittest.TestCase):
@@ -237,7 +264,9 @@ class ShimTests(unittest.TestCase):
     def test_both_installers_put_getzilla_on_path(self) -> None:
         shell = (ROOT / 'scripts/install.sh').read_text(encoding='utf-8')
         powershell = (ROOT / 'scripts/install.ps1').read_text(encoding='utf-8')
-        self.assertIn('ln -sf "$home/bin/getzilla" "$HOME/.local/bin/getzilla"', shell)
+        self.assertIn('ln -s "$home/bin/getzilla" "$command"', shell)
+        self.assertIn('User command conflict: $command; existing bytes preserved.', shell)
+        self.assertNotIn('ln -sf', shell)
         self.assertLess(shell.index('  fetch_getzilla "$repo" "$ref" "$home"\n'),
                         shell.index('  link_getzilla_command "$home"\n'))
         self.assertIn("Add-UserPath (Join-Path $GetzillaHome 'bin')", powershell)

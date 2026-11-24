@@ -2,48 +2,46 @@ from __future__ import annotations
 
 import hashlib
 import itertools
-import json
+import json as json  # compatibility export: same JSON parser owner
 import os
 import re
-import stat
-import ctypes
-import errno
-import threading
-import time
+import stat as stat  # compatibility module export
+import ctypes as ctypes  # compatibility module export
+import errno as errno  # compatibility module export
+import threading as threading  # compatibility module export
+import time as time  # compatibility module export
 import unicodedata
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 try:
-    from . import fsx
+    from .workflow_inputs import (  # noqa: F401 exact compatibility exports
+        PLACEHOLDER, MAX_DEPTH, MAX_NODES, MAX_SOURCE_BYTES, MAX_STRING_LENGTH, WorkflowArtifactError, _bounded_walk, _open_root, _read_regular, _read_regular_windows, _stat_identity, _strict_json, _windows_confirm_directories, _windows_open_regular, canonical_json, fsx,
+    )
     from .workflow_storage import change_directory, valid_package_path
-except ImportError:  # loaded standalone by file path: bind the sibling platform layer the same way
+except ImportError:  # loaded standalone by file path: bind sibling input/storage owners
     import importlib.util as _importlib_util
-
-    import sys as _sys
-
-    def _load_standalone_fsx():
-        spec = _importlib_util.spec_from_file_location(
-            "_getzilla_workflow_artifacts_fsx", Path(__file__).with_name("fsx.py")
-        )
-        assert spec is not None and spec.loader is not None
-        module = _importlib_util.module_from_spec(spec)
-        missing = object()
-        previous = _sys.modules.get(spec.name, missing)
-        # Deferred dataclass annotations resolve through the real module registry.
-        _sys.modules[spec.name] = module
-        try:
-            spec.loader.exec_module(module)
-        except BaseException:
-            if _sys.modules.get(spec.name) is module:
-                if previous is missing:
-                    del _sys.modules[spec.name]
-                else:
-                    _sys.modules[spec.name] = previous
-            raise
-        return module
-
-    fsx = _load_standalone_fsx()
+    _INPUT_SPEC = _importlib_util.spec_from_file_location(
+        "_getzilla_workflow_inputs", Path(__file__).with_name("workflow_inputs.py"))
+    assert _INPUT_SPEC is not None and _INPUT_SPEC.loader is not None
+    _inputs = _importlib_util.module_from_spec(_INPUT_SPEC)
+    _INPUT_SPEC.loader.exec_module(_inputs)
+    PLACEHOLDER = _inputs.PLACEHOLDER
+    MAX_DEPTH = _inputs.MAX_DEPTH
+    MAX_NODES = _inputs.MAX_NODES
+    MAX_SOURCE_BYTES = _inputs.MAX_SOURCE_BYTES
+    MAX_STRING_LENGTH = _inputs.MAX_STRING_LENGTH
+    WorkflowArtifactError = _inputs.WorkflowArtifactError
+    _bounded_walk = _inputs._bounded_walk
+    _open_root = _inputs._open_root
+    _read_regular = _inputs._read_regular
+    _read_regular_windows = _inputs._read_regular_windows
+    _stat_identity = _inputs._stat_identity
+    _strict_json = _inputs._strict_json
+    _windows_confirm_directories = _inputs._windows_confirm_directories
+    _windows_open_regular = _inputs._windows_open_regular
+    canonical_json = _inputs.canonical_json
+    fsx = _inputs.fsx
     _STORAGE_SPEC = _importlib_util.spec_from_file_location(
         "_getzilla_workflow_storage", Path(__file__).with_name("workflow_storage.py"))
     assert _STORAGE_SPEC is not None and _STORAGE_SPEC.loader is not None
@@ -53,11 +51,7 @@ except ImportError:  # loaded standalone by file path: bind the sibling platform
 
 
 MAX_MANIFEST_BYTES = 262_144
-MAX_SOURCE_BYTES = 1_000_000
 MAX_SOURCES = 256
-MAX_DEPTH = 64
-MAX_NODES = 20_000
-MAX_STRING_LENGTH = 65_536
 MAX_MARKDOWN_LINES = 20_000
 MAX_MARKDOWN_LINE_LENGTH = 8_192
 MAX_TASKS = 500
@@ -194,7 +188,6 @@ BMAD_TERMINAL_STATUS = frozenset({"done", "complete", "completed", "ready-for-re
 BMAD_NONTERMINAL_STATUS = frozenset(
     {"backlog", "draft", "ready-for-dev", "ready", "in-progress", "open", "optional", "blocked", "high-level"}
 )
-PLACEHOLDER = re.compile(r"(?i)(?:\bUNKNOWN\b|\bTBD\b|\bTODO\b|NEEDS CLARIFICATION|\.\.\.)")
 SPEC_TASK = re.compile(r"^\s*-\s*\[([ xX])\]\s+(T[0-9]{1,6})\s+(?:(\[P\])\s+)?(?:\[US[0-9]+\]\s+)?(.+?)\s*$")
 BMAD_TASK = re.compile(r"^\s*-\s*\[([ xX])\]\s+(.+?)\s*$")
 CRITERION_TOKEN = re.compile(r"\b(?:AC|INV|FORBID)-[0-9]{3,6}\b")
@@ -204,10 +197,6 @@ CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 SAFE_UNITTEST_TARGET = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?::[A-Za-z_][A-Za-z0-9_]*)?$")
 
 
-class WorkflowArtifactError(ValueError):
-    def __init__(self, message: str, *, code: str = "invalid") -> None:
-        super().__init__(message)
-        self.code = code
 
 
 class WorkflowSource:
@@ -253,70 +242,10 @@ def validate_workflow_source(identity: Any) -> dict[str, Any]:
     return identity
 
 
-def canonical_json(value: Any) -> bytes:
-    _bounded_walk(value)
-    try:
-        return (
-            json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
-        ).encode("ascii")
-    except (TypeError, ValueError, UnicodeError) as exc:
-        raise WorkflowArtifactError("value is not canonical JSON", code="json") from exc
 
 
-def _bounded_walk(value: Any) -> None:
-    nodes = 0
-    stack: list[tuple[Any, int]] = [(value, 0)]
-    while stack:
-        current, depth = stack.pop()
-        nodes += 1
-        if nodes > MAX_NODES or depth > MAX_DEPTH:
-            raise WorkflowArtifactError("JSON structural limit exceeded", code="limit")
-        if isinstance(current, str):
-            if len(current) > MAX_STRING_LENGTH or unicodedata.normalize("NFC", current) != current:
-                raise WorkflowArtifactError("JSON string is unbounded or non-NFC", code="unicode")
-            try:
-                current.encode("utf-8")
-            except UnicodeError as exc:
-                raise WorkflowArtifactError("JSON string is not UTF-8 encodable", code="unicode") from exc
-        elif isinstance(current, dict):
-            for key, child in current.items():
-                if not isinstance(key, str):
-                    raise WorkflowArtifactError("JSON object key must be a string", code="json")
-                stack.append((key, depth + 1))
-                stack.append((child, depth + 1))
-        elif isinstance(current, list):
-            stack.extend((child, depth + 1) for child in current)
-        elif current is not None and not isinstance(current, (bool, int, float)):
-            raise WorkflowArtifactError("unsupported JSON value", code="json")
 
 
-def _strict_json(raw: bytes, *, limit: int) -> Any:
-    if len(raw) > limit or raw.startswith(b"\xef\xbb\xbf"):
-        raise WorkflowArtifactError("JSON byte limit or encoding preamble rejected", code="limit")
-    try:
-        text = raw.decode("utf-8", errors="strict")
-
-        def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
-            result: dict[str, Any] = {}
-            for key, value in items:
-                if key in result:
-                    raise WorkflowArtifactError(f"duplicate JSON key: {key}", code="duplicate")
-                result[key] = value
-            return result
-
-        value = json.loads(
-            text,
-            object_pairs_hook=pairs,
-            parse_constant=lambda token: (_ for _ in ()).throw(
-                WorkflowArtifactError(f"non-finite JSON value: {token}", code="json")
-            ),
-        )
-    except WorkflowArtifactError:
-        raise
-    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
-        raise WorkflowArtifactError("invalid strict JSON", code="json") from exc
-    _bounded_walk(value)
-    return value
 
 
 def _relative_path(root: Path, path: Path | str) -> str:
@@ -370,151 +299,16 @@ def _bounded_markdown(content: str, path: str) -> None:
         raise WorkflowArtifactError(f"source text limits exceeded: {path}", code="limit")
 
 
-def _open_root(root: Path) -> tuple[Path, fsx.DirHandle]:
-    canonical = root.resolve(strict=True)
-    if fsx.WINDOWS:
-        # No directory descriptors: fsx pins path plus identity and refuses links/junctions.
-        try:
-            return canonical, fsx.open_dir(canonical)
-        except OSError as exc:
-            raise WorkflowArtifactError("cannot open repository root safely", code="io") from exc
-    required = ("O_DIRECTORY", "O_NOFOLLOW", "O_CLOEXEC", "O_NONBLOCK")
-    if any(not hasattr(os, name) for name in required) or os.open not in getattr(os, "supports_dir_fd", set()):
-        raise WorkflowArtifactError("secure descriptor reads unsupported", code="platform")
-    try:
-        descriptor = os.open(canonical, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    except OSError as exc:
-        raise WorkflowArtifactError("cannot open repository root safely", code="io") from exc
-    return canonical, descriptor
 
 
-def _windows_open_regular(directory: fsx.DirHandle, name: str) -> int | None:
-    """Windows stand-in for an ``O_NOFOLLOW`` open: refuse links, then pin the opened identity.
-
-    ``None`` marks an entry that is neither a link nor a regular file: where POSIX
-    opens it and the caller's ``S_ISREG`` check rejects it, Windows cannot open it.
-    """
-    expected = fsx.lstat_at(directory, name)
-    if fsx.is_link(expected):
-        raise OSError(errno.ELOOP, "refusing to follow a link or reparse point", name)
-    if not stat.S_ISREG(expected.st_mode):
-        return None
-    descriptor = fsx.open_at(directory, name, os.O_RDONLY)
-    try:
-        opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
-            raise OSError(errno.ELOOP, "entry changed between inspection and open", name)
-    except BaseException:
-        os.close(descriptor)
-        raise
-    return descriptor
 
 
-def _windows_confirm_directories(handles: list[fsx.DirHandle]) -> None:
-    """Re-check every pinned Windows directory; a swapped or relinked ancestor fails closed."""
-    for handle in handles:
-        current = fsx.fstat_dir(handle)
-        if (current.st_dev, current.st_ino) != (handle.info.st_dev, handle.info.st_ino):
-            raise OSError(errno.ENOTDIR, "directory identity changed", fsx.path_of(handle))
 
 
-def _dup_dir(handle: fsx.DirHandle) -> fsx.DirHandle:
-    """``os.dup`` for a descriptor; a Windows directory handle is an immutable value."""
-    if isinstance(handle, fsx.WindowsDirectory):
-        return handle
-    return os.dup(handle)
 
 
-def _read_regular_windows(root: Path, relative: str, *, limit: int) -> bytes:
-    _canonical, directory = _open_root(root)
-    parts = PurePosixPath(relative).parts
-    chain = [directory]
-    descriptor: int | None = None
-    try:
-        for component in parts[:-1]:
-            directory = fsx.open_dir_at(directory, component)
-            chain.append(directory)
-        descriptor = _windows_open_regular(directory, parts[-1])
-        if descriptor is None:
-            raise WorkflowArtifactError(f"source is not a bounded regular file: {relative}", code="file")
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
-            raise WorkflowArtifactError(f"source is not a bounded regular file: {relative}", code="file")
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = os.read(descriptor, min(65_536, limit + 1 - total))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
-            if total > limit:
-                raise WorkflowArtifactError(f"source exceeds byte limit: {relative}", code="limit")
-        after = os.fstat(descriptor)
-        if _stat_identity(before) != _stat_identity(after):
-            raise WorkflowArtifactError(f"source changed while reading: {relative}", code="race")
-        _windows_confirm_directories(chain)
-        return b"".join(chunks)
-    except WorkflowArtifactError:
-        raise
-    except OSError as exc:
-        raise WorkflowArtifactError(f"cannot read source safely: {relative}", code="io") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
 
 
-def _read_regular(root: Path, relative: str, *, limit: int) -> bytes:
-    if fsx.WINDOWS:
-        return _read_regular_windows(root, relative, limit=limit)
-    canonical, root_fd = _open_root(root)
-    del canonical
-    parts = PurePosixPath(relative).parts
-    directory_fd = os.dup(root_fd)
-    os.close(root_fd)
-    descriptor: int | None = None
-    flags_dir = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-    flags_file = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-    try:
-        for component in parts[:-1]:
-            next_fd = os.open(component, flags_dir, dir_fd=directory_fd)
-            os.close(directory_fd)
-            directory_fd = next_fd
-        descriptor = os.open(parts[-1], flags_file, dir_fd=directory_fd)
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
-            raise WorkflowArtifactError(f"source is not a bounded regular file: {relative}", code="file")
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = os.read(descriptor, min(65_536, limit + 1 - total))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
-            if total > limit:
-                raise WorkflowArtifactError(f"source exceeds byte limit: {relative}", code="limit")
-        after = os.fstat(descriptor)
-        identity = (
-            before.st_dev,
-            before.st_ino,
-            before.st_mode,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        observed = (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
-        if identity != observed:
-            raise WorkflowArtifactError(f"source changed while reading: {relative}", code="race")
-        return b"".join(chunks)
-    except WorkflowArtifactError:
-        raise
-    except OSError as exc:
-        raise WorkflowArtifactError(f"cannot read source safely: {relative}", code="io") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(directory_fd)
 
 
 def load_source_manifest(root: Path, manifest_path: Path) -> SourceBundle:
@@ -607,7 +401,8 @@ def load_runtime_authority(root: Path, kind: str) -> dict[str, Any]:
             if has_task_context(data):
                 raise WorkflowArtifactError('canonical owned route is unavailable', code='route')
     else:
-        data = _strict_json(_read_regular(root, relative, limit=MAX_MANIFEST_BYTES), limit=MAX_MANIFEST_BYTES)
+        from .native_state_snapshot import decode
+        data = _strict_json(decode(_read_regular(root, relative, limit=4096),limit=4096), limit=MAX_MANIFEST_BYTES)
     if not isinstance(data, dict):
         raise WorkflowArtifactError(f"active {kind} must be an object", code=kind)
     if kind == "route":
@@ -1033,6 +828,8 @@ def compile_task_graph(root: Path, change_id: str, bundle: SourceBundle, route: 
         if missing:
             raise WorkflowArtifactError(f"task has missing dependencies: {sorted(missing)}", code="dependency")
         task["depends_on"] = sorted(id_by_key[key] for key in raw_tasks_by_key(interim, task["key"], raw_tasks))
+        if task["task_id"] in task["depends_on"]:
+            raise WorkflowArtifactError("task depends on itself", code="self-dependency")
         dependencies[task["task_id"]] = set(task["depends_on"])
     pending = {task_id: len(values) for task_id, values in dependencies.items()}
     dependents: dict[str, set[str]] = {task_id: set() for task_id in dependencies}
@@ -1580,84 +1377,98 @@ def projection_bytes(kind: str, payload: Any) -> bytes:
     return (header + "```json\n" + canonical_json(payload).decode("ascii") + "```\n").encode("utf-8")
 
 
-def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    # Windows st_ctime is the creation time, which ReplaceFileW copies from the
-    # replaced file, not a change clock; the identity omits it there.
-    change = 0 if fsx.WINDOWS else value.st_ctime_ns
-    return (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, change)
 
 
-def _cas_identity_at(parent_fd: fsx.DirHandle, name: str) -> tuple[int, int, int, int, int, int]:
-    return _stat_identity(fsx.lstat_at(parent_fd, name))
 
 
-def _post_exchange_identity_matches(
-    observed: tuple[int, int, int, int, int, int],
-    expected: tuple[int, int, int, int, int, int],
-) -> bool:
-    return observed[:5] == expected[:5] and observed[5] >= expected[5]
 
 
-def _renameat2_exchange_call(renameat2: Any, parent_fd: int, temporary: str, target: str) -> int:
-    return renameat2(parent_fd, os.fsencode(temporary), parent_fd, os.fsencode(target), 2)
 
 
-def _rename_exchange(
-    parent_fd: fsx.DirHandle,
-    temporary: str,
-    target: str,
-    expected_temporary: tuple[int, int, int, int, int, int] | None = None,
-    expected_target: tuple[int, int, int, int, int, int] | None = None,
-) -> None:
-    if expected_temporary is not None and _cas_identity_at(parent_fd, temporary) != expected_temporary:
-        raise WorkflowArtifactError("CAS exchange source identity changed", code="race")
-    if expected_target is not None and _cas_identity_at(parent_fd, target) != expected_target:
-        raise WorkflowArtifactError("CAS exchange target identity changed", code="race")
-    if fsx.WINDOWS:
-        # ReplaceFileW + rename stands in for RENAME_EXCHANGE; unlike renameat2 the
-        # private temporary name is briefly absent, and a failure between the two
-        # steps leaves the displaced bytes at "<temporary>.displaced" (never deleted).
-        fsx.exchange_at(parent_fd, temporary, target)
-        return
-    try:
-        renameat2 = fsx.libc_renameat2()  # macOS: renameatx_np(RENAME_SWAP)
-    except AttributeError as exc:
-        raise WorkflowArtifactError(
-            "atomic exchange is unavailable; existing-target CAS is unsupported on this platform",
-            code="platform",
-        ) from exc
-    if _renameat2_exchange_call(renameat2, parent_fd, temporary, target) != 0:
-        error = ctypes.get_errno()
-        if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
-            raise WorkflowArtifactError(
-                "atomic exchange is unavailable; existing-target CAS is unsupported on this platform",
-                code="platform",
-            )
-        raise OSError(error, os.strerror(error))
 
 
-def _rename_noreplace(
-    parent_fd: fsx.DirHandle, source: str, target: str, target_parent_fd: fsx.DirHandle | None = None
-) -> None:
-    if fsx.WINDOWS:
-        # MoveFileEx without REPLACE_EXISTING: atomic, fails with FileExistsError on an existing target.
-        fsx.rename_noreplace_at(parent_fd, source, parent_fd if target_parent_fd is None else target_parent_fd, target)
-        return
-    try:
-        renameat2 = fsx.libc_renameat2()  # macOS: renameatx_np(RENAME_EXCL)
-    except AttributeError as exc:
-        raise WorkflowArtifactError("no-clobber recovery rename is unavailable", code="platform") from exc
-    destination_fd = parent_fd if target_parent_fd is None else target_parent_fd
-    if renameat2(parent_fd, os.fsencode(source), destination_fd, os.fsencode(target), 1) != 0:
-        error = ctypes.get_errno()
-        if error == errno.EEXIST:
-            raise FileExistsError(error, os.strerror(error), target)
-        if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
-            raise WorkflowArtifactError("no-clobber recovery rename is unavailable", code="platform")
-        raise OSError(error, os.strerror(error))
 
 
 CAS_LOCK_ATTEMPTS = 5
+
+
+
+
+
+
+
+
+
+_CAS_WRITER_MODULE = None
+
+
+def _load_cas_writer():
+    global _CAS_WRITER_MODULE
+    if _CAS_WRITER_MODULE is None:
+        try:
+            from . import workflow_cas
+        except ImportError:  # standalone facade retains a real sibling source owner
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "_getzilla_workflow_cas", Path(__file__).with_name("workflow_cas.py"))
+            assert spec is not None and spec.loader is not None
+            workflow_cas = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(workflow_cas)
+        _CAS_WRITER_MODULE = workflow_cas
+    return _CAS_WRITER_MODULE
+
+
+def _cas_context():
+    return _load_cas_writer()._CASContext(
+        bound_cas_lock_attempts=CAS_LOCK_ATTEMPTS,
+        bound_max_source_bytes=MAX_SOURCE_BYTES,
+        bound_workflowartifacterror=WorkflowArtifactError,
+        bound_cas_recovery_sequence=_CAS_RECOVERY_SEQUENCE,
+        bound_acquire_cas_lock=_acquire_cas_lock,
+        bound_acquire_cas_lock_once=_acquire_cas_lock_once,
+        bound_cas_identity_at=_cas_identity_at,
+        bound_cas_write=_cas_write,
+        bound_dup_dir=_dup_dir,
+        bound_open_root=_open_root,
+        bound_post_exchange_identity_matches=_post_exchange_identity_matches,
+        bound_rename_exchange=_rename_exchange,
+        bound_rename_noreplace=_rename_noreplace,
+        bound_renameat2_exchange_call=_renameat2_exchange_call,
+        bound_stat_identity=_stat_identity,
+        bound_strict_json=_strict_json,
+        bound_windows_confirm_directories=_windows_confirm_directories,
+        bound_windows_open_regular=_windows_open_regular,
+        bound_canonical_json=canonical_json,
+        bound_change_directory=change_directory,
+        bound_fsx=fsx,
+        bound_validate_convergence_report=validate_convergence_report,
+        bound_validate_task_graph=validate_task_graph,
+        bound_workflow_paths=workflow_paths,
+    )
+
+def _dup_dir(handle: fsx.DirHandle) -> fsx.DirHandle:
+    """``os.dup`` for a descriptor; a Windows directory handle is an immutable value."""
+    return _load_cas_writer()._dup_dir(handle, _context=_cas_context())
+
+
+def _cas_identity_at(parent_fd: fsx.DirHandle, name: str) -> tuple[int, int, int, int, int, int]:
+    return _load_cas_writer()._cas_identity_at(parent_fd, name, _context=_cas_context())
+
+
+def _post_exchange_identity_matches(observed: tuple[int, int, int, int, int, int], expected: tuple[int, int, int, int, int, int]) -> bool:
+    return _load_cas_writer()._post_exchange_identity_matches(observed, expected, _context=_cas_context())
+
+
+def _renameat2_exchange_call(renameat2: Any, parent_fd: int, temporary: str, target: str) -> int:
+    return _load_cas_writer()._renameat2_exchange_call(renameat2, parent_fd, temporary, target, _context=_cas_context())
+
+
+def _rename_exchange(parent_fd: fsx.DirHandle, temporary: str, target: str, expected_temporary: tuple[int, int, int, int, int, int] | None=None, expected_target: tuple[int, int, int, int, int, int] | None=None) -> None:
+    return _load_cas_writer()._rename_exchange(parent_fd, temporary, target, expected_temporary, expected_target, _context=_cas_context())
+
+
+def _rename_noreplace(parent_fd: fsx.DirHandle, source: str, target: str, target_parent_fd: fsx.DirHandle | None=None) -> None:
+    return _load_cas_writer()._rename_noreplace(parent_fd, source, target, target_parent_fd, _context=_cas_context())
 
 
 def _acquire_cas_lock(root: Path, change_id: str, relative_target: str) -> tuple[int, fsx.DirHandle]:
@@ -1666,310 +1477,16 @@ def _acquire_cas_lock(root: Path, change_id: str, relative_target: str) -> tuple
     macOS APFS was seen to answer ENOENT to the second of two concurrent writers. Every step
     is an idempotent mkdir/open/flock that writes no data, so a bounded retry is safe.
     """
-    for attempt in range(1, CAS_LOCK_ATTEMPTS + 1):
-        try:
-            return _acquire_cas_lock_once(root, change_id, relative_target)
-        except WorkflowArtifactError as exc:
-            if (exc.code != "io" or not isinstance(exc.__cause__, FileNotFoundError)
-                    or attempt == CAS_LOCK_ATTEMPTS):
-                raise
-            time.sleep(0.01 * attempt)
-    raise AssertionError("unreachable")  # pragma: no cover
+    return _load_cas_writer()._acquire_cas_lock(root, change_id, relative_target, _context=_cas_context())
 
 
 def _acquire_cas_lock_once(root: Path, change_id: str, relative_target: str) -> tuple[int, fsx.DirHandle]:
-    _, root_fd = _open_root(root)
-    directory_fd = root_fd
-    lock_fd: int | None = None
-    try:
-        for component in (".getzilla", "runtime", "workflow-cas", change_id):
-            try:
-                fsx.mkdir_at(directory_fd, component, 0o700)
-            except FileExistsError:
-                pass
-            next_fd = fsx.open_dir_at(directory_fd, component, flags=fsx.O_CLOEXEC)
-            fsx.close_dir(directory_fd)
-            directory_fd = next_fd
-        lock_name = hashlib.sha256(relative_target.encode("utf-8")).hexdigest() + ".lock"
-        lock_fd = fsx.open_at(
-            directory_fd,
-            lock_name,
-            os.O_RDWR | os.O_CREAT | fsx.O_NOFOLLOW | fsx.O_CLOEXEC | fsx.O_NONBLOCK,
-            0o600,
-        )
-        before = os.fstat(lock_fd)
-        if not stat.S_ISREG(before.st_mode):
-            raise WorkflowArtifactError("CAS lock is not a regular file", code="cas")
-        if not fsx.WINDOWS:
-            os.set_blocking(lock_fd, True)
-        # Windows msvcrt.locking retries for about ten seconds, then fails closed as an io error.
-        fsx.lock_file(lock_fd)
-        current = fsx.lstat_at(directory_fd, lock_name)
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_mode,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        ) != (
-            current.st_dev,
-            current.st_ino,
-            current.st_mode,
-            current.st_size,
-            current.st_mtime_ns,
-            current.st_ctime_ns,
-        ):
-            raise WorkflowArtifactError("CAS lock identity changed", code="race")
-        result = (lock_fd, _dup_dir(directory_fd))
-        lock_fd = None
-        return result
-    except WorkflowArtifactError:
-        raise
-    except OSError as exc:
-        raise WorkflowArtifactError("CAS lock acquisition failed", code="io") from exc
-    finally:
-        if lock_fd is not None:
-            os.close(lock_fd)
-        fsx.close_dir(directory_fd)
+    return _load_cas_writer()._acquire_cas_lock_once(root, change_id, relative_target, _context=_cas_context())
 
 
 def cas_write(root: Path, change_id: str, relative_target: str, data: bytes, expected_digest: str) -> str:
-    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
-        raise WorkflowArtifactError("expected digest must be lowercase SHA-256", code="cas")
-    if len(data) > MAX_SOURCE_BYTES:
-        raise WorkflowArtifactError("CAS payload exceeds byte limit", code="limit")
-    workflow_paths(root, change_id)
-    target_path = PurePosixPath(relative_target)
-    target_parts = target_path.parts
-    if (
-        not target_parts
-        or len(target_parts) > 8
-        or any(part in {"", ".", ".."} for part in target_parts)
-        or len(relative_target) > 512
-        or unicodedata.normalize("NFC", relative_target) != relative_target
-    ):
-        raise WorkflowArtifactError("invalid workflow write target", code="path")
-    direct = relative_target in {"task-graph.json", "convergence-report.json"}
-    projected = len(target_parts) >= 2 and target_parts[0] in {"projections", "exports"}
-    if not direct and not projected:
-        raise WorkflowArtifactError("workflow write target is not allowlisted", code="path")
-    if direct:
-        derived = _strict_json(data, limit=MAX_SOURCE_BYTES)
-        if relative_target == "task-graph.json":
-            validate_task_graph(derived)
-        else:
-            validate_convergence_report(derived)
-        if canonical_json(derived) != data:
-            raise WorkflowArtifactError("derived workflow artifact is not canonical JSON", code="cas")
+    return _load_cas_writer().cas_write(root, change_id, relative_target, data, expected_digest, _context=_cas_context())
 
-    package = change_directory(root, change_id, writable=True)
-    lock_fd, recovery_dir_fd = _acquire_cas_lock(root, change_id, relative_target)
-    _, root_fd = _open_root(root)
-    directory_fd: fsx.DirHandle | None = root_fd
-    parent_fd: fsx.DirHandle | None = None
-    descriptor: int | None = None
-    recovery_token = hashlib.sha256(
-        f"{relative_target}\0{os.getpid()}\0{threading.get_ident()}\0{next(_CAS_RECOVERY_SEQUENCE)}".encode()
-    ).hexdigest()[:24]
-    temporary = f".agb-stage-{recovery_token}"
-    recovery = f".agb-recovery-{recovery_token}"
-    temporary_exists = False
-    temporary_identity: tuple[int, int, int, int, int, int] | None = None
-    flags_file = 0 if fsx.WINDOWS else os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-    # Windows walks paths, so the pinned directories are re-confirmed before publication.
-    windows_chain: list[fsx.DirHandle] = [root_fd, recovery_dir_fd] if fsx.WINDOWS else []
 
-    def entry_identity(fd: fsx.DirHandle, name: str) -> tuple[int, int, int, int, int, int]:
-        return _cas_identity_at(fd, name)
-
-    def digest_target(fd: fsx.DirHandle, name: str) -> tuple[str, tuple[int, int, int, int, int, int]]:
-        source_fd: int | None = None
-        try:
-            if fsx.WINDOWS:
-                source_fd = _windows_open_regular(fd, name)
-                if source_fd is None:
-                    raise WorkflowArtifactError("CAS target is not a bounded regular file", code="cas")
-            else:
-                source_fd = os.open(name, flags_file, dir_fd=fd)
-            before = os.fstat(source_fd)
-            if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_SOURCE_BYTES:
-                raise WorkflowArtifactError("CAS target is not a bounded regular file", code="cas")
-            digest = hashlib.sha256()
-            remaining = MAX_SOURCE_BYTES + 1
-            while remaining:
-                chunk = os.read(source_fd, min(65_536, remaining))
-                if not chunk:
-                    break
-                digest.update(chunk)
-                remaining -= len(chunk)
-            after = os.fstat(source_fd)
-            before_identity = _stat_identity(before)
-            after_identity = _stat_identity(after)
-            if before.st_size > MAX_SOURCE_BYTES or before_identity != after_identity:
-                raise WorkflowArtifactError("CAS target changed while reading", code="race")
-            return digest.hexdigest(), after_identity
-        finally:
-            if source_fd is not None:
-                os.close(source_fd)
-
-    def preserve_temporary() -> str | None:
-        nonlocal temporary_exists
-        if not temporary_exists or parent_fd is None:
-            return None
-        try:
-            _rename_noreplace(parent_fd, temporary, recovery, recovery_dir_fd)
-        except FileNotFoundError:
-            artifact = None
-        except (FileExistsError, OSError, WorkflowArtifactError):
-            artifact = temporary
-        else:
-            artifact = recovery
-        temporary_exists = False
-        return artifact
-
-    try:
-        for component in (*package.relative_to(root).parts, "workflow"):
-            next_fd = fsx.open_dir_at(directory_fd, component, flags=fsx.O_CLOEXEC)
-            fsx.close_dir(directory_fd)
-            directory_fd = next_fd
-            if fsx.WINDOWS:
-                windows_chain.append(next_fd)
-        for component in target_parts[:-1]:
-            try:
-                fsx.mkdir_at(directory_fd, component, 0o700)
-            except FileExistsError:
-                pass
-            next_fd = fsx.open_dir_at(directory_fd, component, flags=fsx.O_CLOEXEC)
-            fsx.close_dir(directory_fd)
-            directory_fd = next_fd
-            if fsx.WINDOWS:
-                windows_chain.append(next_fd)
-        parent_fd = directory_fd
-        directory_fd = None
-
-        try:
-            current, current_identity = digest_target(parent_fd, target_parts[-1])
-        except FileNotFoundError:
-            current = "0" * 64
-            current_identity = None
-        if current != expected_digest:
-            raise WorkflowArtifactError("CAS expected digest mismatch", code="cas")
-
-        descriptor = fsx.open_at(
-            parent_fd,
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC,
-            0o600,
-        )
-        temporary_exists = True
-        offset = 0
-        while offset < len(data):
-            offset += os.write(descriptor, data[offset:])
-        os.fsync(descriptor)
-        temporary_stat = os.fstat(descriptor)
-        temporary_identity = _stat_identity(temporary_stat)
-        os.close(descriptor)
-        descriptor = None
-        if fsx.WINDOWS:
-            _windows_confirm_directories(windows_chain)
-        if current_identity is None:
-            try:
-                if fsx.WINDOWS:
-                    # MoveFileEx without REPLACE_EXISTING publishes atomically and never
-                    # clobbers; the staged name is consumed, so no recovery copy remains.
-                    fsx.rename_noreplace_at(parent_fd, temporary, parent_fd, target_parts[-1])
-                    temporary_exists = False
-                else:
-                    os.link(
-                        temporary,
-                        target_parts[-1],
-                        src_dir_fd=parent_fd,
-                        dst_dir_fd=parent_fd,
-                        follow_symlinks=False,
-                    )
-            except FileExistsError as exc:
-                raise WorkflowArtifactError("CAS target appeared before publication", code="race") from exc
-            preserve_temporary()
-        else:
-            _rename_exchange(parent_fd, temporary, target_parts[-1], temporary_identity, current_identity)
-            displaced_identity = None
-            published_identity = None
-            try:
-                displaced_identity = entry_identity(parent_fd, temporary)
-                published_identity = entry_identity(parent_fd, target_parts[-1])
-                identities_valid = _post_exchange_identity_matches(
-                    displaced_identity, current_identity
-                ) and _post_exchange_identity_matches(published_identity, temporary_identity)
-                displaced_digest = None
-                if identities_valid:
-                    displaced_digest, hashed_displaced_identity = digest_target(parent_fd, temporary)
-                    identities_valid = _post_exchange_identity_matches(
-                        hashed_displaced_identity, displaced_identity
-                    )
-                publication_valid = identities_valid and displaced_digest == expected_digest
-            except (OSError, WorkflowArtifactError):
-                publication_valid = False
-            if not publication_valid:
-                rollback_error: BaseException | None = None
-                try:
-                    _rename_exchange(
-                        parent_fd,
-                        temporary,
-                        target_parts[-1],
-                        displaced_identity,
-                        published_identity,
-                    )
-                except Exception as exc:  # preserve entries even when platform rollback fails
-                    rollback_error = exc
-                if rollback_error is None:
-                    try:
-                        restored_identity = entry_identity(parent_fd, target_parts[-1])
-                    except OSError:
-                        restored_identity = None
-                    try:
-                        rollback_temp_identity = entry_identity(parent_fd, temporary)
-                    except OSError:
-                        rollback_temp_identity = None
-                    recovery_artifact = preserve_temporary()
-                    restored_changed = displaced_identity is not None and (
-                        restored_identity is None
-                        or not _post_exchange_identity_matches(restored_identity, displaced_identity)
-                    )
-                    rollback_temp_changed = published_identity is not None and (
-                        rollback_temp_identity is None
-                        or not _post_exchange_identity_matches(rollback_temp_identity, published_identity)
-                    )
-                    if restored_changed or rollback_temp_changed:
-                        raise WorkflowArtifactError(
-                            f"CAS rollback raced; competing entries were preserved for forward recovery at {recovery_artifact}",
-                            code="race",
-                        )
-                    raise WorkflowArtifactError(
-                        f"CAS target changed before atomic publication and was restored; recovery={recovery_artifact}",
-                        code="race",
-                    )
-                recovery_artifact = preserve_temporary()
-                raise WorkflowArtifactError(
-                    f"CAS rollback failed closed with entries preserved at {recovery_artifact}: {rollback_error}",
-                    code="race",
-                )
-            preserve_temporary()
-        fsx.fsync_dir(parent_fd)
-    except WorkflowArtifactError:
-        raise
-    except OSError as exc:
-        raise WorkflowArtifactError("CAS publication failed", code="io") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if directory_fd is not None:
-            fsx.close_dir(directory_fd)
-        if parent_fd is not None:
-            if temporary_exists:
-                preserve_temporary()
-            fsx.close_dir(parent_fd)
-        fsx.unlock_file(lock_fd)
-        os.close(lock_fd)
-        fsx.close_dir(recovery_dir_fd)
-    return hashlib.sha256(data).hexdigest()
+def _cas_write(root: Path, change_id: str, relative_target: str, data: bytes, expected_digest: str, *, package_target: bool=False) -> str:
+    return _load_cas_writer()._cas_write(root, change_id, relative_target, data, expected_digest, package_target=package_target, _context=_cas_context())

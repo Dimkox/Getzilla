@@ -62,6 +62,10 @@ for root in ('/state', '/work'):
 print('\\n'.join(digests))
 '''
 
+_INIT = ("import os, sys; "
+         "sys.exit(4) if os.listdir('/state') or os.listdir('/work') else None; "
+         "os.chown('/state',65534,65534); os.chown('/work',65534,65534)")
+
 
 def _inspect(docker, ident):
     value = json.loads(fixture._command([docker, 'inspect', ident]))
@@ -89,6 +93,7 @@ def _valid(info, ident, image, nonce, volumes, phase, thread):
                 or host.get('DeviceRequests') not in (None, []) or host.get('VolumesFrom') not in (None, [])
                 or host['RestartPolicy'] != {'Name': 'no', 'MaximumRetryCount': 0}
                 or host['PidsLimit'] != 64 or host['Memory'] != 536870912 or host['NanoCpus'] != 2000000000
+                or host.get('CpusetCpus') != fixture._cpu_set()
                 or host['SecurityOpt'] != ['no-new-privileges']
                 or host['Tmpfs'] != {fixture.CONTAINER_TMP: 'rw,nosuid,nodev,size=64m,mode=1777'}
                 or host['PidMode'] not in ('', 'private') or host['IpcMode'] not in ('', 'private')):
@@ -116,11 +121,42 @@ def _valid(info, ident, image, nonce, volumes, phase, thread):
         return False
 
 
+def _volume_owner(docker, volumes):
+    if (not isinstance(volumes, (list, tuple)) or len(volumes) != 2
+            or not re.fullmatch(r'getzilla-fixture-[a-f0-9]{32}-state', volumes[0])
+            or volumes[1] != volumes[0].removesuffix('-state')+'-work'):
+        raise fixture.FixtureError('invalid_volume')
+    owners = []
+    for name in volumes:
+        try:
+            rows = json.loads(fixture._command([docker, 'volume', 'inspect', name]))
+            if not isinstance(rows, list) or len(rows) != 1 or rows[0]['Name'] != name:
+                raise fixture.FixtureError('invalid_volume')
+            owner = rows[0]['Labels']['getzilla.owner']
+            if not isinstance(owner, str) or not re.fullmatch(r'[a-f0-9]{32}', owner):
+                raise fixture.FixtureError('invalid_volume')
+            owners.append(owner)
+        except (KeyError, TypeError, ValueError):
+            raise fixture.FixtureError('invalid_volume') from None
+    if owners[0] != owners[1]:
+        raise fixture.FixtureError('invalid_volume')
+    return owners[0]
+
+
 def _helper(docker, image, volumes, program, *, root=False):
+    if root and program != _INIT:
+        raise fixture.FixtureError('root_init_unqualified')
+    owner = _volume_owner(docker, volumes)
+    contract, _ = fixture._image_contract()
+    if image == fixture.IMAGE and not root:
+        fixture._base_image(docker, contract)
+    else:
+        fixture._bound_image(docker, image, contract)
     mounts = [part for name, target in zip(volumes, ('/state', '/work'))
               for part in ('--mount', 'type=volume,src=' + name + ',dst=' + target + ('' if root else ',readonly'))]
     args = [docker, 'create', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-            '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m', '--cpus', '2']
+            '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m', '--cpus', '2',
+            '--cpuset-cpus', fixture._cpu_set(), '--label', 'getzilla.owner='+owner]
     if root:
         args += ['--cap-add', 'CHOWN']
     args += ['--user', '0' if root else '65534:65534', *mounts, '--entrypoint', 'python', image, '-c', program]
@@ -148,7 +184,7 @@ def _volume_names(root, binding):
 def _create(docker, image, volumes, nonce, phase, thread=''):
     args = [docker, 'create', '-i', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--label', 'getzilla.owner=' + nonce, '--restart', 'no', '--security-opt', 'no-new-privileges', '--pids-limit', '64',
-            '--memory', '512m', '--cpus', '2', '--user', '65534:65534',
+            '--memory', '512m', '--cpus', '2', '--cpuset-cpus', fixture._cpu_set(), '--user', '65534:65534',
             '--tmpfs', fixture.CONTAINER_TMP + ':rw,nosuid,nodev,size=64m,mode=1777',
             *_mounts(volumes), '-e', 'HOME=' + fixture.CONTAINER_TMP,
             '-e', 'CODEX_HOME=' + fixture.CONTAINER_TMP + '/codex',
@@ -254,6 +290,7 @@ def _admit_model_request(root, binding, pipe, nonce, generation, revision, model
     return claim['revision']
 
 
+@fixture._docker_client()
 def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dict:
     docker = shutil.which('docker', path='/usr/bin:/bin')
     codex = shutil.which('codex')
@@ -263,12 +300,9 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             or len(policy.candidates) != 2 or [x.model for x in policy.candidates] != ['fixture-a', 'fixture-b']
             or any(x.provider != 'local_fixture' or x.account_ref != 'synthetic' for x in policy.candidates)):
         raise fixture.FixtureError('fixture_unavailable')
-    codex = str(Path(codex).resolve())
     recovery = None
     try:
-        with open(codex, 'rb') as stream:
-            if hashlib.file_digest(stream, 'sha256').hexdigest() != fixture.CODEX_SHA256:
-                raise fixture.FixtureError('codex_unqualified')
+        fixture._read_input(codex, fixture.CODEX_SHA256, 'codex_unqualified')
         try:
             journal.create_controlled_chain(root, binding, journal.Usage(1, '0'), budget)
         except journal.JournalError as error:
@@ -318,15 +352,15 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
                         or (volume[0].get('Labels') or {}).get('getzilla.owner') != nonce):
                     raise fixture.FixtureError('invalid_volume')
                 created_volumes.append(name)
-            _helper(docker, image, volumes, "import os; os.chown('/state',65534,65534); os.chown('/work',65534,65534)", root=True)
+            _helper(docker, image, volumes, _INIT, root=True)
             baseline = _checkpoint(docker, image, volumes)
             a = _create(docker, image, volumes, nonce, 'a')
             containers.append(a)
             first = journal.consume_controlled_send(root, binding, 1, 1)
             if not first['claimed']:
                 raise fixture.FixtureError('claim_denied')
-            proc_a = subprocess.Popen([docker, 'start', '-ai', a], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'}, bufsize=0)
+            proc_a = fixture._client_popen([docker, 'start', '-ai', a], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                          stderr=subprocess.DEVNULL, bufsize=0)
             processes.append(proc_a)
             preserve_volumes = True
             pipe_a = fixture._Lines(proc_a)
@@ -378,6 +412,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             image = info.get('Image')
             if not isinstance(image, str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
                 raise fixture.FixtureError('invalid_image')
+            contract, _ = fixture._image_contract()
+            fixture._bound_image(docker, image, contract)
             if not _stopped(docker, a, image, nonce, volumes, 'a', ''):
                 raise fixture.FixtureError('shutdown_uncertain')
             if not _exclusive_volumes(docker, volumes, [a]):
@@ -386,9 +422,10 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             fence_ready = True
             image_owned = True
             program = ("import hashlib; from pathlib import Path; "
+                       "print(hashlib.sha256(Path('/fixture-contract.json').read_bytes()).hexdigest()); "
                        "print(hashlib.sha256(Path('/fixture.py').read_bytes()).hexdigest()); "
                        "print(hashlib.sha256(Path('/fixture-codex').read_bytes()).hexdigest())")
-            if _helper(docker, image, volumes, program).splitlines() != [fixture.FIXTURE_SHA256, fixture.CODEX_SHA256]:
+            if _helper(docker, image, volumes, program).splitlines() != [fixture.CONTRACT_SHA256, fixture.FIXTURE_SHA256, fixture.CODEX_SHA256]:
                 raise fixture.FixtureError('image_mismatch')
             checkpoint = _checkpoint(docker, image, volumes)
             if (checkpoint != _checkpoint(docker, image, volumes)
@@ -407,8 +444,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
         second = journal.consume_controlled_send(root, binding, 2, reserved['revision'])
         if not second['claimed']:
             raise fixture.FixtureError('claim_denied')
-        proc_b = subprocess.Popen([docker, 'start', '-ai', b], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'}, bufsize=0)
+        proc_b = fixture._client_popen([docker, 'start', '-ai', b], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, bufsize=0)
         processes.append(proc_b)
         pipe_b = fixture._Lines(proc_b)
         lines.append(pipe_b)
@@ -451,15 +488,8 @@ def run(root: Path, binding: journal.Binding, budget: journal.TaskBudget) -> dic
             except OSError:
                 cleanup_failed = True
         for process in processes:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    cleanup_failed = True
+            if not fixture._stop_client(process):
+                cleanup_failed = True
             for stream in (process.stdin, process.stdout):
                 if stream is not None:
                     try:

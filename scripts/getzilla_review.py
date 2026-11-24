@@ -42,4 +42,6 @@ try:
                          reviewed_context=args.reviewed_context)
 except (RuntimeError, ValueError, OSError) as exc:
     raise SystemExit(f'Review was not recorded: {exc}') from None
+from getzilla.sprint_lifecycle import flush_after_scope
+flush_after_scope(root, path.parent.name)
 print(path.relative_to(root))

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,7 +92,8 @@ def _snapshot(args: argparse.Namespace) -> int:
     if not args.target:
         print('getzilla cleanup snapshot: give a commit, or --remove with a snapshot path', file=sys.stderr)
         return 2
-    root = find_root()
+    # Git resolves the enclosing worktree even when an outer directory has a Getzilla install.
+    root = Path.cwd()
     try:
         base = Path(args.base) if args.base else None
         if args.remove:

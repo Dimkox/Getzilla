@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "context-hook-grok",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {
+    "context-retrieval": "0.1.0"
+  },
+  "permissions": [
+    "context.hook.grok"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "sink.json",
+      "sha256": "28ddc2c6f86cb490315d9c69d9f6fe920aab81122226962964931f84f19112b1",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}

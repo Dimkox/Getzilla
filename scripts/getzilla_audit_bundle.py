@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess  # nosec B404
 import sys
+sys.dont_write_bytecode = True
 import threading
 import time
 from datetime import date, datetime, timezone
@@ -43,7 +44,7 @@ def _git_bytes(root: Path, *args: str) -> bytes:
     from getzilla.project_ingestion import _env
 
     return subprocess.run(['git', '--no-replace-objects', '--no-optional-locks', '-c', 'core.fsmonitor=false',  # nosec B603 B607
-                           '-c', 'core.untrackedCache=false', '-c', 'protocol.allow=never', '-C', str(root), *args],
+                           '-c', 'core.untrackedCache=false', '-c', 'core.excludesFile=' + os.devnull, '-c', 'protocol.allow=never', '-C', str(root), *args],
                           capture_output=True, env=_env(), check=True, timeout=30).stdout
 
 
@@ -75,9 +76,8 @@ def _receipt_untracked_paths(root: Path) -> set[str]:
     from getzilla import fsx
 
     git_dir = _git(root, 'rev-parse', '--absolute-git-dir')
-    config_keys = {'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'}
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith('GIT_') or key in config_keys}
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env.update({'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'})
     env.update({'GIT_TERMINAL_PROMPT': '0', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_NO_LAZY_FETCH': '1',
                 'GIT_NO_REPLACE_OBJECTS': '1', 'LC_ALL': 'C'})
     argv = ['git', '--no-replace-objects', '--no-optional-locks', '--git-dir=' + git_dir,

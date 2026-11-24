@@ -7,20 +7,17 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import importlib
-import importlib.machinery
-import importlib.util
 import json
 import os
 import re
 import sys
-import zipimport
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .util import git_head, run, tree_fingerprint
+from .verification_policy_source import implementation_source_binding, _module_source  # noqa: F401 compatibility
 
 MAX_OBLIGATIONS = 4096
 MAX_PLAN_BYTES = 2 * 1024 * 1024
@@ -33,14 +30,22 @@ SECURITY_IDS = frozenset(SECURITY_FAMILIES)
 _KEYS = {'id', 'check_id', 'requirement_ids', 'applicability', 'reason', 'evidence', 'expected_tests', 'data_sources'}
 _UNREAD_DOCUMENTS = object()
 _POLICY_PATHS = (
+    "architecture/queue-analysis-profile.json",
+    '.getzilla/config/retrieval-research-runtime-v1.json',
+    '.getzilla/getzilla/research_conditions_v1.json',
+    '.getzilla/getzilla/research_image_conditions_v1.json',
     '.getzilla/getzilla/verification_plan.py', '.getzilla/getzilla/quality_gates.py',
     '.getzilla/getzilla/verification.py', '.getzilla/getzilla/criterion_tests.py',
     '.getzilla/getzilla/expanded_security.py', '.getzilla/getzilla/security_data.py',
+    '.getzilla/getzilla/security_publication.py', '.getzilla/getzilla/security_windows_publication.py',
     '.getzilla/getzilla/stacks.py', '.getzilla/getzilla/stack_runners.py',
     '.getzilla/config/diff-risk-rules.json', '.getzilla/config/routing.json',
     '.getzilla/config/stacks.json',
     '.getzilla-verification.json', '.getzilla-test-runner.json', '.getzilla-evals.json',
     'architecture/system.yaml', 'architecture/rules.yaml',
+    'scripts/getzilla_cli.py', 'scripts/getzilla_hook.py',
+    'scripts/getzilla_security.py', 'scripts/getzilla_startup_cpu.py',
+    'trust-ci/lock_profile_validation.py', 'scripts/getzilla_sync_lock_validation.py',
 )
 
 
@@ -70,32 +75,6 @@ def _obligation(value: Any) -> dict:
     return copy.deepcopy(value)
 
 
-def _module_source(module) -> bytes:
-    """Read corresponding engine source through its actual closed loader; never execute it."""
-    loader = getattr(module, '__loader__', None)
-    if type(loader) not in {importlib.machinery.SourceFileLoader,
-                            importlib.machinery.SourcelessFileLoader, zipimport.zipimporter}:
-        raise ValueError('verification policy source loader is unavailable')
-    try:
-        filename = loader.get_filename(module.__name__)
-        if filename != module.__file__:
-            raise ValueError('verification policy source identity differs')
-        source = filename
-        if source.endswith('.pyc'):
-            try:
-                source = importlib.util.source_from_cache(source)
-            except ValueError:
-                source = source[:-1]
-        if not source.endswith('.py'):
-            raise ValueError('verification policy has no corresponding Python source')
-        content = loader.get_data(source)
-        if not isinstance(content, bytes) or not 0 < len(content) <= 4 * 1024 * 1024:
-            raise ValueError('verification policy source is unavailable or excessive')
-        return content
-    except (AttributeError, ImportError, OSError, TypeError) as exc:
-        raise ValueError('verification policy source cannot be bound') from exc
-
-
 def policy_binding(root: Path) -> dict:
     from .verification_tool_workspace import checked_path
     values = {}
@@ -107,21 +86,7 @@ def policy_binding(root: Path) -> dict:
         if not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
             raise ValueError('verification policy path is not a bounded regular file: ' + name)
         values[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    implementation = {}
-    for name in ('verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
-                 'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
-                 'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
-                 'verification_scope.py', 'verification_tool_workspace.py',
-                 'expanded_security.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
-                 'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py', 'security_oci.py',
-                 'security_cli.py', 'public_security_context.py'):
-        module = importlib.import_module('.' + name[:-3], __package__)
-        implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
-    from . import STACK_DIR
-    registry = STACK_DIR / 'config' / 'stacks.json'
-    if not registry.is_file() or registry.is_symlink() or registry.stat().st_size > 4 * 1024 * 1024:
-        raise ValueError('engine stack registry source is unavailable')
-    implementation['stacks.json'] = hashlib.sha256(registry.read_bytes()).hexdigest()
+    implementation = implementation_source_binding()
     content = {'inputs': values, 'implementation': implementation}
     return {'schema_version': 1, **content, 'digest': digest(content)}
 
@@ -382,14 +347,31 @@ def _plan_documents(root: Path, route: dict) -> dict | None:
             'spec_digest': canonical_spec_digest(spec), 'requirements_digest': requirements_digest}
 
 
+def node_checks_required(root: Path, requested_profiles=None) -> bool:
+    """Task-domain inference is not a Node requirement; real markers still are."""
+    if (root / 'package.json').is_file() or (requested_profiles is not None and 'frontend' in requested_profiles):
+        return True
+    from .stacks import tree_files
+    return any(Path(name).name == 'package.json' for name in tree_files(root))
+
+
+def requested_profiles_from_report(report):
+    """Keep invocation provenance separate from effective inferred profiles."""
+    requested = report.get('requested_profiles', report.get('profiles'))
+    if requested is not None and (type(requested) is not list or any(type(item) is not str for item in requested)):
+        raise ValueError('invalid requested profile provenance')
+    return requested
+
+
 def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *, files=None, profiles=None,
                         bases=None, documents=_UNREAD_DOCUMENTS) -> list[dict]:
     from .quality_gates import MANDATORY_PR_CHECKS, MANDATORY_PYTHON_PR_CHECKS
-    from .verification import (_existing_quality_paths, _semgrep_config, _trivy_config_present,
+    from .verification_scope import (_existing_quality_paths, _semgrep_config, _trivy_config_present,
                                composer_check_selection, node_check_selection, python_check_selection)
     from .verification_tools import load_checks
     names = {'required-plan', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'source-stability', 'task-context'}
     files = files or []
+    requested_profiles = profiles
     profiles = profiles or route.get('quality_profiles', ['base'])
     if mode == FOCUSED_MODE:
         names.update({'git-diff-check', 'scope-selection', 'static-seo-landing-contract'})
@@ -469,7 +451,7 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
                 names.update(name for name, _args in composer_check_selection(root))
         if 'bitrix' in profiles:
             names.add('bitrix')
-        if 'frontend' in profiles and not (root / 'package.json').is_file():
+        if node_checks_required(root, requested_profiles) and not (root / 'package.json').is_file():
             names.add('package-json')
         if (root / 'package.json').is_file():
             try:
@@ -552,14 +534,29 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
 
 def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=None) -> dict:
     """Read the current native source and policy; never trust the old plan to select obligations."""
-    from .continuity import context_binding, legacy_evidence_allowed
     from .state import get_active_route
-    from .verification import _git_range_selection, _changed_file_inventory
+    from .git_ranges import GitRangeSelection, _git_range_selection
+    route = get_active_route(root) or {}
+    range_mode = 'pr' if mode == 'fast' and route.get('delivery_lane') == 'light' else mode
+    ranges = _git_range_selection(root, route or None, range_mode)
+    if ranges.qualification_bases is not None:
+        ranges = GitRangeSelection(list(ranges.qualification_bases), list(ranges.findings))
+    return _compile_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope,
+                                  route=route, ranges=ranges)
+
+
+def _compile_required_plan(root: Path, *, mode: str, profiles, docs_scope, route: dict, ranges) -> dict:
+    """Compile live policy and observations from already proved explicit ranges.
+
+    No range acquisition or receipt lookup occurs here. Prior qualification can
+    therefore be checked without re-entering its own witness reader.
+    """
+    from .continuity import context_binding, legacy_evidence_allowed
+    from .verification_scope import _changed_file_inventory
     from .review_plan import assess
     from .verification_scope import select_docs_state_scope, FOCUSED_TEST_TARGETS
-    from .verification import _docs_state_status_inventory
+    from .verification_scope import _docs_state_status_inventory
     from .expanded_security import security_obligations
-    route = get_active_route(root) or {}
     documents = _plan_documents(root, route)
     context = context_binding(root, route) if route and not legacy_evidence_allowed(route) else {
         'version': 1, 'variant': 'legacy' if route else 'unrouted', 'route_id': route.get('route_id'),
@@ -568,8 +565,6 @@ def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=No
         context['package'] = {'path': documents['path'], 'change_id': documents['spec']['change_id'],
                               'spec_digest': documents['spec_digest'],
                               'requirements_digest': documents['requirements_digest']}
-    range_mode = 'pr' if mode == 'fast' and route.get('delivery_lane') == 'light' else mode
-    ranges = _git_range_selection(root, route or None, range_mode)
     files, metadata = _changed_file_inventory(root, route or None, mode, ranges)
     fingerprint = tree_fingerprint(root)
     head = git_head(root)
@@ -589,7 +584,7 @@ def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=No
         route = {**route, 'delivery_lane': 'light' if light['admitted'] else 'full', 'light_diff': light}
     if docs_scope is None and mode == FOCUSED_MODE:
         from .state import get_active_change
-        from .verification import select_static_seo_landing_scope
+        from .verification_scope import select_static_seo_landing_scope
         active = get_active_change(root) or {}
         findings = list(ranges.findings)
         if not route:
@@ -606,10 +601,11 @@ def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=No
             range_base_count=len(ranges.bases), file_statuses=statuses, status_inventory_trusted=trusted,
             route_present=bool(route), available_test_targets=[name for name in FOCUSED_TEST_TARGETS if (root / name).is_file()])
     selection = {'delivery_lane': route.get('delivery_lane', 'full'), 'profiles': profiles or route.get('quality_profiles', ['base']),
+                 'requested_profiles': profiles,
                  'delivery_expected': route.get('delivery_expected', False),
                  'light_diff': route.get('light_diff'), 'mode': mode, 'docs_scope': docs_scope}
     obligations = _native_obligations(root, mode, route, docs_scope, files=files,
-                                     profiles=selection['profiles'], bases=source['base'], documents=documents)
+                                     profiles=profiles, bases=source['base'], documents=documents)
     security = security_obligations(root)
     if (not isinstance(security, list) or len(security) != len(SECURITY_IDS) or
             {item.get('check_id') for item in security if isinstance(item, dict)} != SECURITY_IDS or
@@ -644,7 +640,20 @@ def report_gaps(root: Path, report: Any, *, now: datetime | None = None) -> list
     try:
         if not isinstance(report, dict) or not isinstance(report.get('required_plan'), dict):
             raise ValueError('qualifying verification requires an embedded required_plan')
-        current = current_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'))
+        profiles = requested_profiles_from_report(report)
+        current = current_required_plan(root, mode=report.get('mode'), profiles=profiles)
+        gaps = _report_plan_gaps(root, report, current, now=now)
+        if not gaps and current_required_plan(root, mode=report.get('mode'), profiles=profiles) != current:
+            return [_finding('required-plan-changed', 'required_plan',
+                             'current complete binding changed during result validation')]
+        return gaps
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        return [_finding('required-plan-unavailable', 'required_plan', 'current required plan and evidence could not be established')]
+
+
+def _report_plan_gaps(root: Path, report: dict, current: dict, *, now=None) -> list[dict[str, str]]:
+    """Validate complete results against a freshly compiled plan, without acquiring ranges."""
+    try:
         selected = current['binding']['selection']
         if report.get('mode') == 'fast' and selected.get('delivery_expected') and selected.get('delivery_lane') != 'light':
             return [_finding('required-qualifying-mode', 'mode', 'full task completion requires pr/release; fast qualifies only a measured light diff')]

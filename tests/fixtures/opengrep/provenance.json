@@ -1,0 +1,56 @@
+{
+  "kind": "local-observed-compiler-semantic-oracle-not-runtime-authority",
+  "launcher_sha256": "d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4",
+  "upstream_commit": "525e67142af506e2f3ea1728d18c5824813f0248",
+  "files": {
+    "python.yaml": {
+      "raw_sha256": "9db75fa31a64da5929ef75f65c2a551adc1a376d69c115f3a744bc651dbc9467",
+      "resolved_sha256": "ac800d01d11047ba85758a42fcfd51abadd2492fd5d00acf017110f2b09ca0c1",
+      "fixture": "python.resolved.json",
+      "ids": [
+        "getzilla.python.sql-injection",
+        "getzilla.python.command-injection",
+        "getzilla.python.code-injection",
+        "getzilla.python.path-traversal",
+        "getzilla.python.ssrf",
+        "getzilla.python.unsafe-deserialization"
+      ]
+    },
+    "php.yaml": {
+      "raw_sha256": "87fd690f622767db317e51bd9b0d2685526feefdfe1f1eb31a416a4ea7587352",
+      "resolved_sha256": "a9eedae48b9708e0f5349d6a7ef620622dc199dce444dccacf32efd5a19d16d2",
+      "fixture": "php.resolved.json",
+      "ids": [
+        "getzilla.php.sql-injection",
+        "getzilla.php.command-injection",
+        "getzilla.php.file-inclusion",
+        "getzilla.php.reflected-xss",
+        "getzilla.php.code-injection"
+      ]
+    },
+    "go.yaml": {
+      "raw_sha256": "1fb921fb0e41e6e8bfe7e07d3e41aa1cd9d973ce2c2e53e1c473cc92733025de",
+      "resolved_sha256": "1fe2285a243db7df2ec7d4fce2f5dbfd2e26037316c535fbbaaad5312da5f7f5",
+      "fixture": "go.resolved.json",
+      "ids": [
+        "getzilla.go.sql-injection",
+        "getzilla.go.command-injection",
+        "getzilla.go.ssrf"
+      ]
+    },
+    "javascript.yaml": {
+      "raw_sha256": "2041ad6f4e735c864c03d7c2c212908e7575de1a76750029a9a835e8ccb30485",
+      "resolved_sha256": "4d6c8b022e0d71bcaf553e461d8f5e0d9c4ff4bbc73a3aca81c9736f8abd8df5",
+      "fixture": "javascript.resolved.json",
+      "ids": [
+        "getzilla.javascript.command-injection",
+        "getzilla.javascript.code-injection",
+        "getzilla.javascript.sql-injection",
+        "getzilla.javascript.path-traversal",
+        "getzilla.javascript.ssrf",
+        "getzilla.javascript.reflected-xss",
+        "getzilla.javascript.open-redirect"
+      ]
+    }
+  }
+}

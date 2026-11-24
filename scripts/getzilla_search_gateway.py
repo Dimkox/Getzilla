@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+sys.dont_write_bytecode = True
 import types
 
 ROOT = Path(__file__).resolve().parents[1]

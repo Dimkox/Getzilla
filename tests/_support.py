@@ -15,6 +15,20 @@ import zipfile
 from pathlib import Path
 from typing import Iterator
 
+if sys.platform == 'darwin':
+    import fcntl
+
+
+def fixture_descriptor_path(descriptor: int) -> str:
+    if sys.platform == 'darwin':
+        raw = fcntl.fcntl(descriptor, fcntl.F_GETPATH, bytes(1024))
+        path = os.fsdecode(raw.split(b'\0', 1)[0])
+        if not os.path.isabs(path) or not os.path.samestat(os.fstat(descriptor), os.stat(path)):
+            raise AssertionError('fixture descriptor path changed')
+        return path
+    return os.readlink(f'/proc/self/fd/{descriptor}')
+
+
 PROJECT = Path(__file__).resolve().parents[1]
 CLEANUP_ATTEMPTS = 4
 
@@ -229,14 +243,12 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                 if verification_fixture and Path(directory) == PROJECT / '.getzilla/config':
                     # The named closed providers below replace these fixture-only
                     # host tool installations. Default project copies retain both.
-                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt'})
                     # This opted-in metadata fixture owns an empty security world;
-                    # optional CI payload images must not enter its initial commit.
-                    omitted.add('ci-images.json')
-                if Path(directory) == PROJECT / '.getzilla/runtime':
-                    # Runtime can contain the fixture destination or a changing review snapshot.
-                    # Exclude it before descending; deleting copied state afterward is too late.
-                    omitted.update(name for name in names if name not in {'.gitkeep', '.gitignore'})
+                    # quality tools and optional CI images stay outside its first commit.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json',
+                                    'license-exception-inputs'})
+                if Path(directory) == PROJECT / '.getzilla':
+                    omitted.add('runtime')
                 if (minimal_runtime and not verification_fixture and not source_only_runtime
                         and Path(directory) == PROJECT / '.getzilla/getzilla'):
                     omitted.update(name for name in names if name != '__init__.py')
@@ -244,19 +256,18 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
                 if source_only_runtime and Path(directory) == PROJECT / '.getzilla/config':
-                    # Original parent source-only declaration; no evidence grant.
-                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
+                    # This owned app excludes framework tools and the optional
+                    # Factory corresponding-source payload before its first commit.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json',
+                                    'license-exception-inputs'})
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore, copy_function=copy_file)
         runtime = root / '.getzilla/runtime'
-        if runtime.exists():
-            for child in runtime.iterdir():
-                if child.name in {'.gitkeep', '.gitignore'}:  # shipped files: runtime state stays out of Git
-                    continue
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
+        runtime.mkdir(parents=True)
+        (runtime / '.gitkeep').touch()
+        runtime_ignore = PROJECT / '.getzilla/runtime/.gitignore'
+        if runtime_ignore.is_file() and not runtime_ignore.is_symlink():
+            copy_file(runtime_ignore, runtime / '.gitignore')
         for rel in ('AGENTS.md', 'VERSION', 'ruff.toml', 'bandit.yaml', '.coveragerc'):
             src = PROJECT / rel
             if src.is_file():
@@ -472,13 +483,28 @@ def offline_mirror(base: Path) -> Path:
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
     from getzilla import baseline, updater
+    from getzilla.security_data import osv_coverage, publish_snapshot
+    from datetime import datetime, timezone
 
     mirror = base / 'update-mirror'
+    archives = {}
     for ecosystem in updater.OSV_ECOSYSTEMS:
         archive = mirror / 'osv' / ecosystem / 'all.zip'
         archive.parent.mkdir(parents=True)
         with zipfile.ZipFile(archive, 'w') as bundle:
-            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': []}))
+            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': [{
+                'package': {'ecosystem': ecosystem, 'name': 'example/owned' if ecosystem in {'Go', 'Packagist'} else 'owned-fixture'},
+                'versions': ['1.0.0'],
+            }]}))
+        archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip'] = archive.read_bytes()
+    current = datetime.now(timezone.utc)
+    for ecosystem in updater.OSV_ECOSYSTEMS:
+        payload = archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip']
+        publish_snapshot(mirror / 'osv', f'osv:{ecosystem}', payload,
+                         acquisition={'last_verified_sync_utc': current.isoformat(),
+                                      'retrieval_kind': 'download',
+                                      'producer': 'synthetic-public-offline-mirror'},
+                         coverage=osv_coverage(payload, ecosystem), now=current)
     opengrep = {}
     for asset, _ in updater.OPENGREP_ASSETS.values():
         data = f'#!/bin/sh\necho "opengrep {updater.OPENGREP_VERSION} fixture ({asset})"\n'.encode()

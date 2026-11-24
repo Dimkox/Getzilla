@@ -43,6 +43,31 @@ _ARCHIVAL_DOCUMENTS = {
 }
 
 
+_ISSUE162_ARCHIVE = {
+    'engineering/benchmarks/issue162/Dockerfile': (343, '3ab6604b628a2ac5911498dfe65cc5cedfb4931e5f4402d0f99dcd7afeb5f935'),
+    'engineering/benchmarks/issue162/Dockerfile.replay': (370, 'dd1a8d5f5214e30e85c3dba7c6386d583ef0e2c739cf816707c9b886e5a82f6d'),
+    'engineering/benchmarks/issue162/SHA256SUMS.json': (10487, '592380dcfe77a8660c015c7c696e35b2c90169454f7dc0ac349d44fe58c1c883'),
+    'engineering/benchmarks/issue162/report.md': (8778, '7ff0cedbbc90fe5e1fa13d88efb73bc110c579d947eae74315e79e12f42619fc'),
+    'engineering/benchmarks/issue162/REPRODUCE.md': (2709, 'd53e0237f1a6ce1136bfbf1325911ea58a0f7b5750bf87c39bbc9166540285d8'),
+    'engineering/benchmarks/issue162/cleanup-receipt.json': (711, '930d985c9f51f0dedb750a2f215c1a12e69220a41c8f2e202887fc42fbc460ea'),
+}
+_ISSUE170_ARCHIVE = {
+    'engineering/benchmarks/issue170/Dockerfile': (633, '2f2279727677104a75a03b208b348c56884a8cb1a12793dfc54bc93d08d4818c'),
+    'engineering/benchmarks/issue170/Dockerfile.tests': (227, '7c95be60b2351f64d8c10a979d482db2089c50f4965b08ce3d5f82d5b4ec0be1'),
+    'engineering/benchmarks/issue170/SHA256SUMS.json': (12201, '7eceb5f6d3a5119b87bcc5f1eb0807ceeb9b5e1dc3981c4367791dac8c2faefa'),
+    'engineering/benchmarks/issue170/report.md': (10454, '46be8d4e808930fc548d40d089e2438b73b90a7b3431a38b55def6725f6207d5'),
+    'engineering/benchmarks/issue170/artifacts/cleanup-result.json': (651, '3e6ce7b1aabcbc8cc2a0b7c815b68697b62906ccfcae7d15eeb80b32ad0d6a11'),
+    'engineering/benchmarks/issue170/artifacts/image-identities.json': (245, '7ca768c98c16c1690f806274fbf1d06e6af23846a97e475909c3400bf77522a5'),
+}
+
+_RETIRED_RECIPES = {
+    'engineering/benchmarks/issue162/Dockerfile': _ISSUE162_ARCHIVE,
+    'engineering/benchmarks/issue162/Dockerfile.replay': _ISSUE162_ARCHIVE,
+    'engineering/benchmarks/issue170/Dockerfile': _ISSUE170_ARCHIVE,
+    'engineering/benchmarks/issue170/Dockerfile.tests': _ISSUE170_ARCHIVE,
+}
+
+
 def canonical_digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
                                     ensure_ascii=True, allow_nan=False).encode()).hexdigest()
@@ -73,6 +98,18 @@ def _safe_bytes(root: Path, relative: str, *, maximum: int = MAX_MANIFEST_BYTES)
 
 
 def _archival_document(root: Path, relative: str, files: list[str]) -> dict | None:
+    if relative in _RETIRED_RECIPES:
+        evidence = []
+        for path, (size, digest) in _RETIRED_RECIPES[relative].items():
+            if path not in files:
+                raise ValueError('retired benchmark input is absent from tracked source')
+            data = _safe_bytes(root, path, maximum=size)
+            if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+                raise ValueError('retired benchmark input differs')
+            evidence.append({'path': path, 'bytes': size, 'sha256': digest})
+        return {**next(row for row in evidence if row['path'] == relative),
+                'classification': 'retired-benchmark-recipe',
+                'provenance': [row for row in evidence if row['path'] != relative]}
     record = _ARCHIVAL_DOCUMENTS.get(relative)
     if record is None:
         return None
@@ -508,11 +545,24 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
             if 'include' in document:
                 gap('unsupported-compose-composition', relative, 'Compose include needs qualified referenced-source coverage')
             services = _yaml_map(document.get('services'), 'Compose services')
-            for service in services.values():
+            for service_name, service in services.items():
                 fields = _yaml_map(service, 'Compose service')
-                for indirect in ('build', 'extends', 'provider'):
+                for indirect in ('extends', 'provider'):
                     if indirect in fields:
                         gap('unsupported-compose-composition', relative, f'Compose {indirect} needs qualified build/composition coverage')
+                if 'build' in fields:
+                    from .security_build_inputs import describe_build
+                    try:
+                        build = describe_build(root, relative, service_name, fields, files, bindings)
+                    except (OSError, ValueError, UnicodeError, TypeError, KeyError) as exc:
+                        gap('unsupported-compose-composition', relative, str(exc)[:300])
+                    else:
+                        result.setdefault('builds', []).append(build)
+                        for item in build['context_files']:
+                            if item['path'] not in result['files']:
+                                result['files'].append(item['path'])
+                        image(build['source_reference'], relative, build['line'], require_digest=True,
+                              platform=build['platform'])
                 if 'image' in fields:
                     yaml_image(fields['image'], relative, 'Compose image', platform=compose_image_platform(fields))
                 elif not set(fields) & {'build', 'extends', 'provider'}:
@@ -591,6 +641,15 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
     if len(files) > MAX_FILES:
         gap('inventory-limit', '.', 'source file inventory exceeds its bound')
         files = []
+    from .security_corresponding_source import classify
+    try:
+        corresponding = classify(root, files)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        corresponding = []
+        gap('corresponding-source-unverified', '<corresponding-source>', str(exc)[:300])
+    if corresponding:
+        result['corresponding_sources'] = corresponding
+    retained_manifests = {row['manifest'] for row in corresponding}
     for relative in files:
         pure = PurePosixPath(relative)
         if relative.startswith('.getzilla/runtime/') or any(part in {'.git', '.venv', 'node_modules'} for part in pure.parts):
@@ -640,6 +699,8 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                           require_digest=True, platform=data['platform'])
                     result['images'][-1].update(image_id=image_id, usage='build-ci')
             elif name == 'pyproject.toml':
+                if relative in retained_manifests:
+                    continue  # Exact constraints remain typed in corresponding_sources.
                 data = tomllib.loads(text)
                 project = data.get('project', {})
                 if 'dependencies' in project.get('dynamic', []):
@@ -745,6 +806,7 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                     continue
             if reference is not None:
                 image(reference, relative, line_number, platform=platform)
+    result['files'] = sorted(set(result['files']))
     result['dependencies'] = sorted(dependencies.values(), key=lambda item: (item['ecosystem'], item['name'], item['version'], item['manifest'], item['usage']))
     if isinstance(bindings, list) and used_image_bindings != {canonical_digest(row) for row in bindings}:
         gap('unused-image-source-selection', '<image-selection>', 'selected image use is absent or differs from current source')

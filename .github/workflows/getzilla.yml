@@ -24,6 +24,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels the outdated run of the same pull request. Every push and tag
+# run gets its own group (its run id), so it never waits for, or is cancelled by, another run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
@@ -80,7 +86,14 @@ jobs:
         with:
           python-version: "3.13"
           architecture: ${{ matrix.arch }}
+      - name: Provide native Git HTTPS build prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev libexpat1-dev libssl-dev zlib1g-dev
       - name: Exercise the real user installer and previous-stable project upgrade
+        env:
+          GETZILLA_GITHUB_METADATA_TOKEN: ${{ github.token }}
         shell: python
         run: |
           import os, pathlib, subprocess, sys
@@ -170,8 +183,8 @@ jobs:
   linux-core:
     if: always()
     needs: platform-install-results
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
       - name: Require both declared Linux native installer cells
         shell: bash
@@ -233,18 +246,49 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap
+          # Admit namespaces only for the distro-owned sandbox executable.
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
           /usr/bin/bwrap --version
           /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / -- /usr/bin/true
+      - name: Admit protected syntax frontends
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        shell: bash
+        run: |
+          sudo apt-get install -y --no-install-recommends python3.12 php8.3-cli
+          python - <<'PY'
+          import os, pathlib, subprocess, sys
+          sys.path.insert(0, '.getzilla')
+          from getzilla.security_acquisition import provision_typescript
+          parser = provision_typescript(pathlib.Path(os.environ['RUNNER_TEMP']) / 'typescript-parser')
+          subprocess.run(['sudo', 'install', '-d', '-m', '0755', '/usr/share/getzilla'], check=True)
+          subprocess.run(['sudo', 'install', '-T', '-m', '0644', str(parser), '/usr/share/getzilla/typescript-5.9.3.js'], check=True)
+          PY
+          python - <<'PY'
+          import pathlib, sys, tempfile
+          sys.path.insert(0, '.getzilla')
+          from getzilla.security_opengrep import syntax_check, syntax_frontend
+          for language in ('python', 'php', 'javascript', 'typescript'):
+              with syntax_frontend(language) as frontend:
+                  print(language, frontend.grammar, frontend.digest)
+                  if language == 'typescript':
+                      with tempfile.TemporaryDirectory() as directory:
+                          syntax_check(frontend, b'export const value: number = 1; throw new Error("must not execute");', pathlib.Path(directory))
+          PY
       - name: Install test requirements
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
         run: |
-          if [ -f .getzilla/config/python-test-requirements.txt ]; then
-            python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
-          fi
-          python -m pip install --disable-pip-version-check --require-hashes -r trust-ci/requirements-build.txt
+          python trust-ci/lock_profiles.py --check
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r trust-ci/requirements-runner.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
-          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.3 bandit==1.9.4 tomli==2.4.1
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation "$RUNNER_TEMP/trust-ci-source"
       - name: Set up pinned uv
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
@@ -252,7 +296,7 @@ jobs:
           version: "0.13.4"
           enable-cache: false
       - name: Full Factory unit discovery without database authority
-        if: success() || failure()
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         timeout-minutes: 15
         shell: bash
         env:
@@ -268,7 +312,7 @@ jobs:
         run: python -m unittest tests.test_skill_sandbox.BmadDependencyGraft.test_synthetic_cjs_esm_load_and_all_input_mounts_are_read_only
       - name: Known vulnerabilities in pinned dependencies (OSV)
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
-        run: python scripts/getzilla_vulns.py --online
+        run: python scripts/getzilla_vulns.py --online --db "$RUNNER_TEMP/getzilla-osv"
       - name: Static checks as the verifier runs them
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
@@ -296,44 +340,12 @@ jobs:
           export PATH="$RUNNER_TEMP/opengrep:$PATH"
           python -m unittest tests.test_opengrep
           python -c "import sys; sys.path.insert(0, '.getzilla'); from pathlib import Path; from getzilla.verification import _opengrep; r = _opengrep(Path('.')); print(r.status, r.summary); [print(d) for d in r.details]; sys.exit(r.status != 'pass')"
-      - name: Core tests
-        if: (success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_profile_admission.outcome == 'success'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import subprocess
-          import sys
-          sys.path.insert(0, 'scripts')
-          import getzilla_cli as cli
-          subprocess.run([cli.project_python(cli.HOME), '-c', 'import pytest, xdist'], check=True)
-          PY
-          python scripts/getzilla_cli.py test --require-parallel tests --max-worker-restart=0 --durations=20 -ra 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
       - name: Trust CI tests
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
         run: |
-          set -euo pipefail
-          exec > >(tee "$RUNNER_TEMP/trust-ci-tests.log") 2>&1
-          # These two integration suites consume the operator Core and its image fixtures.
-          checker=4f3bf76ceee183430b5cad5ad5419f6e6a919b5c
-          fixture=$(mktemp -d "$RUNNER_TEMP/trust-ci-core.XXXXXXXX")
-          git archive "$checker" .getzilla scripts | tar -x -C "$fixture"
-          git archive HEAD trust-ci .github architecture | tar -x -C "$fixture"
-          shopt -s globstar nullglob
-          native=()
-          for path in trust-ci/tests/**/test*.py; do
-            name=${path#trust-ci/tests/}
-            case "$name" in test_ops.py|test_public_admission.py) continue ;; esac
-            name=${name%.py}
-            native+=("${name//\//.}")
-          done
-          test "${#native[@]}" -gt 0
-          native_exit=0
-          PYTHONPATH="$PWD/trust-ci/tests:$PWD/trust-ci/src:$PWD/.getzilla" python -m unittest "${native[@]}" || native_exit=$?
-          cd "$fixture"
-          PYTHONPATH="$PWD/trust-ci/tests:$PWD/trust-ci/src:$PWD/.getzilla" python -m unittest test_ops test_public_admission
-          exit "$native_exit"
+          set -o pipefail
+          python -m unittest discover -s trust-ci/tests 2>&1 | tee "$RUNNER_TEMP/trust-ci-tests.log"
       - name: Annotate failing tests
         if: failure() && steps.source_checkout.outcome == 'success'
         shell: python
@@ -342,7 +354,7 @@ jobs:
           import pathlib
           import re
 
-          for log in ("core-tests.log", "trust-ci-tests.log"):
+          for log in ("trust-ci-tests.log",):
               path = pathlib.Path(os.environ["RUNNER_TEMP"]) / log
               if not path.is_file():
                   continue
@@ -366,6 +378,206 @@ jobs:
           path: ${{ runner.temp }}/getzilla-evidence/
           retention-days: 30
           if-no-files-found: error
+
+  # Core tests run in parallel shards on separate hosted runners, without waiting for the installer
+  # cells. linux-core keeps the installer gate, Factory unit discovery, OSV, static checks, OpenGrep,
+  # Trust CI tests and the evidence; the linux admission requires both jobs.
+  linux-core-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact commit with full history
+        id: source_checkout
+        if: always()
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Record startup capacity
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        run: python scripts/getzilla_startup_cpu.py --no-probe
+      - name: Set up the fixed Linux Node dependency
+        id: node_setup
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.2'
+          architecture: x64
+          package-manager-cache: false
+      - name: Admit physical Node inside the read-only runtime root
+        id: node_runtime
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_setup.outcome == 'success'
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, shutil, stat, subprocess
+          expected = pathlib.Path(os.environ['RUNNER_TOOL_CACHE']).resolve(strict=True) / 'node' / '24.22.2' / 'x64' / 'bin' / 'node'
+          selected = pathlib.Path(shutil.which('node') or '').resolve(strict=True)
+          if selected != expected or not selected.is_file():
+              raise SystemExit('selected Node is outside its declared cache entry')
+          if subprocess.check_output([str(selected), '--version'], text=True).strip() != 'v24.22.2':
+              raise SystemExit('selected Node version differs')
+          def digest(path):
+              with path.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          selected_digest = digest(selected)
+          subprocess.run(['sudo', 'install', '-T', '-m', '0755', '--', str(selected), '/usr/bin/node'], check=True)
+          node = pathlib.Path('/usr/bin/node')
+          info = node.lstat()
+          if (node.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o755
+                  or node.resolve(strict=True) != node or digest(node) != selected_digest):
+              raise SystemExit('physical Node identity differs')
+          if subprocess.check_output(['/usr/bin/node', '--version'], text=True).strip() != 'v24.22.2':
+              raise SystemExit('physical Node version differs')
+          print(json.dumps({'node_version': '24.22.2', 'sha256': selected_digest, 'physical_runtime_admitted': True}))
+      - name: Admit Bubblewrap for required Linux sandbox tests
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          # Admit namespaces only for the distro-owned sandbox executable.
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          /usr/bin/bwrap --version
+          /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / -- /usr/bin/true
+      - name: Admit protected syntax frontends
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        shell: bash
+        run: |
+          sudo apt-get install -y --no-install-recommends python3.12 php8.3-cli
+          python - <<'PY'
+          import os, pathlib, subprocess, sys
+          sys.path.insert(0, '.getzilla')
+          from getzilla.security_acquisition import provision_typescript
+          parser = provision_typescript(pathlib.Path(os.environ['RUNNER_TEMP']) / 'typescript-parser')
+          subprocess.run(['sudo', 'install', '-d', '-m', '0755', '/usr/share/getzilla'], check=True)
+          subprocess.run(['sudo', 'install', '-T', '-m', '0644', str(parser), '/usr/share/getzilla/typescript-5.9.3.js'], check=True)
+          PY
+          python - <<'PY'
+          import pathlib, sys, tempfile
+          sys.path.insert(0, '.getzilla')
+          from getzilla.security_opengrep import syntax_check, syntax_frontend
+          for language in ('python', 'php', 'javascript', 'typescript'):
+              with syntax_frontend(language) as frontend:
+                  print(language, frontend.grammar, frontend.digest)
+                  if language == 'typescript':
+                      with tempfile.TemporaryDirectory() as directory:
+                          syntax_check(frontend, b'export const value: number = 1; throw new Error("must not execute");', pathlib.Path(directory))
+          PY
+      - name: Install test requirements
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        shell: bash
+        run: |
+          python trust-ci/lock_profiles.py --check
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r trust-ci/requirements-runner.txt
+          cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation "$RUNNER_TEMP/trust-ci-source"
+      - name: Set up pinned uv
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.13.4"
+          enable-cache: false
+      - name: Require the real Linux CJS ESM and read-only sandbox profile
+        id: node_profile_admission
+        if: success() && steps.source_checkout.outcome == 'success' && steps.node_runtime.outcome == 'success'
+        run: python -m unittest tests.test_skill_sandbox.BmadDependencyGraft.test_synthetic_cjs_esm_load_and_all_input_mounts_are_read_only
+      - name: Core tests
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_profile_admission.outcome == 'success'
+        shell: bash
+        env:
+          # The hosted runner is dedicated to this job: use every measured CPU, not the workstation n-2 reserve.
+          GETZILLA_TEST_CPU_RESERVE: "0"
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ strategy.job-total }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          import sys
+          sys.path.insert(0, 'scripts')
+          import getzilla_cli as cli
+          subprocess.run([cli.project_python(cli.HOME), '-c', 'import pytest, xdist'], check=True)
+          PY
+          python - > "$RUNNER_TEMP/core-shard-files.txt" <<'SHARD'
+          import json
+          import os
+          import pathlib
+          import statistics
+
+          # Same balancing as macos-core: measured seconds per module, longest first onto the least-loaded shard.
+          modules = sorted(pathlib.Path("tests").rglob("test*.py"))
+          count = int(os.environ["SHARD_COUNT"])
+          seconds = json.loads(pathlib.Path(".github/ci/macos-test-seconds.json").read_text(encoding="utf-8"))["seconds"]
+          default = statistics.median(seconds.values())
+          weight = {path: seconds.get(path.as_posix(), default) for path in modules}
+          loads = [0.0] * count
+          assigned = [[] for _ in range(count)]
+          for path in sorted(modules, key=lambda item: (-weight[item], item.as_posix())):
+              shard = min(range(count), key=lambda index: (loads[index], index))
+              loads[shard] += weight[path]
+              assigned[shard].append(path)
+          for path in sorted(assigned[int(os.environ["SHARD_INDEX"])]):
+              print(path.as_posix())
+          SHARD
+          selected=()
+          while IFS= read -r module; do selected+=("$module"); done < "$RUNNER_TEMP/core-shard-files.txt"
+          test "${#selected[@]}" -gt 0
+          echo "shard ${SHARD_INDEX}/${SHARD_COUNT}: ${#selected[@]} modules"
+          python scripts/getzilla_cli.py test --require-parallel "${selected[@]}" --max-worker-restart=0 --durations=20 -ra 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+      - name: Require core tests to leave the exact checkout clean
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        env:
+          GETZILLA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GETZILLA_EXPECTED_HEAD"
+          dirty=$(git status --porcelain)
+          if [ -n "$dirty" ]; then
+            printf '%s\n' "$dirty"
+            echo '::error title=core-tests::core tests changed the checkout'
+            exit 1
+          fi
+      - name: Retain core test log for 30 days
+        if: always() && steps.source_checkout.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: getzilla-core-tests-log-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-tests.log
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Annotate failing core tests
+        if: failure() && steps.source_checkout.outcome == 'success'
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import re
+
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "core-tests.log"
+          if path.is_file():
+              blocks = re.split(r"^={50,}$", path.read_text(encoding="utf-8", errors="replace"), flags=re.MULTILINE)
+              for block in blocks[1:41]:
+                  lines = [line for line in block.strip().splitlines() if line.strip()]
+                  if lines:
+                      detail = " | ".join(line.strip() for line in lines[-25:])[:6000]
+                      print(f"::error title=core-tests::{lines[0][:200]} -- {detail}".replace("\n", " "))
 
   live-acceptance:
     runs-on: ubuntu-24.04
@@ -422,14 +634,8 @@ jobs:
           python - <<'PYTHON'
           import json, pathlib, subprocess, sys
           sys.path.insert(0, '.getzilla')
-          from getzilla.disposable_resources import image_pins
-          for name, pin in image_pins(pathlib.Path('.')).items():
-              if not isinstance(pin, dict):
-                  continue
-              subprocess.run(['docker', 'pull', '--platform', 'linux/amd64', pin['reference']], check=True, timeout=120)
-              image = json.loads(subprocess.run(['docker', 'image', 'inspect', pin['reference']], check=True, capture_output=True, text=True, timeout=30).stdout)[0]
-              if image['Id'] != pin['image_id'] or pin['reference'] not in image.get('RepoDigests', []):
-                  raise SystemExit('pulled image does not match the approved manifest and configuration digests')
+          from getzilla.disposable_resources import ensure_images
+          ensure_images(pathlib.Path('.'))
           PYTHON
       - name: Run bounded isolated acceptance with cleanup observer
         shell: bash
@@ -486,15 +692,44 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - name: Record fresh security job capacity before heavy work
+        id: security_startup
+        working-directory: trusted-checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python -I -B scripts/getzilla_startup_cpu.py --no-probe --json > "$RUNNER_TEMP/security-startup.json"
+          python -I -B - "$RUNNER_TEMP/security-startup.json" <<'PYCPU'
+          import json, os, pathlib, sys
+          sys.path.insert(0, str(pathlib.Path.cwd() / '.getzilla'))
+          from getzilla.startup_cpu import parse_cpu_list, format_cpu_list
+          try:
+              from getzilla.security_image_job import _memory_admission
+          except ImportError:
+              raise SystemExit('BLOCKED: operator must select an exact reviewed checker/producer SHA with CI memory admission; candidate HEAD is never selected automatically')
+          memory = _memory_admission(pathlib.Path('/sys/fs/cgroup/system.slice'))
+          (pathlib.Path(os.environ['RUNNER_TEMP']) / 'security-memory.json').write_text(json.dumps(memory, sort_keys=True))
+          record = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          capacity = record['chosen_capacity']
+          if type(capacity) is not int or capacity <= 0:
+              raise SystemExit('BLOCKED: fresh startup capacity is unavailable')
+          cpus = set(sorted(parse_cpu_list(record['verified_cpus']) & set(os.sched_getaffinity(0)))[:min(6, capacity)])
+          if not cpus:
+              raise SystemExit('BLOCKED: no verified security job CPUs')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write('cpus=' + format_cpu_list(cpus) + '\n')
+          PYCPU
       - name: Verify checker identity and install trusted quality tools
         shell: bash
         env:
           CHECKER_REF: ${{ steps.checker_ref.outputs.sha }}
+          SECURITY_CPUS: ${{ steps.security_startup.outputs.cpus }}
         run: |
           set -euo pipefail
           test "$(git -C trusted-checker rev-parse HEAD)" = "$CHECKER_REF"
           test -f trusted-checker/scripts/getzilla_security.py || { echo 'BLOCKED: reviewed checker bootstrap is incomplete'; exit 1; }
-          python -I -m pip install --disable-pip-version-check -r trusted-checker/.getzilla/config/python-quality-requirements.txt
+          taskset -c "$SECURITY_CPUS" python -I -m pip install --disable-pip-version-check -r trusted-checker/.getzilla/config/python-quality-requirements.txt
       - name: Run all expanded checks with trusted tools and fresh security data
         timeout-minutes: 30
         shell: bash
@@ -502,6 +737,7 @@ jobs:
           SELECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           GETZILLA_EVENT_SHA: ${{ github.sha }}
+          SECURITY_CPUS: ${{ steps.security_startup.outputs.cpus }}
         run: |
           export GITHUB_SHA="$SELECTED_SOURCE_SHA"
           python - <<'PYCONTEXT'
@@ -516,9 +752,10 @@ jobs:
           path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'security-event.json'
           path.write_text(json.dumps(provenance, sort_keys=True))
           PYCONTEXT
-          python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --write-input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-profile-declaration.json"
-          python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --input-profile "$RUNNER_TEMP/security-input-profile.json" --prepare-inputs --refresh --provision-tools --json-out "$RUNNER_TEMP/security-input-preparation.json"
-          python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-expanded.json"
+          test -f trusted-checker/.getzilla/getzilla/security_image_provision.py || { echo 'BLOCKED: operator must accept an exact reviewed checker/producer SHA and configure GETZILLA_SECURITY_CHECKER_SHA; candidate HEAD is never selected automatically'; exit 1; }
+          selected_python="$(command -v python)"
+          taskset -c "$SECURITY_CPUS" "$selected_python" -I -S -B -c 'import sys;sys.path.insert(0,sys.argv[1]);from getzilla.security_image_provision import provision;provision(sys.argv[2])' "$GITHUB_WORKSPACE/trusted-checker/.getzilla" "$RUNNER_TEMP/security-buildkit"
+          sudo -n /usr/bin/env GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_SHA="$GITHUB_SHA" "$selected_python" -I -S -B -c 'import sys,sysconfig;sys.path.insert(0,sys.argv.pop(1));sys.path.extend(sorted(set(sysconfig.get_paths()[k] for k in ("purelib","platlib"))));from getzilla.security_cli import main;raise SystemExit(main())' "$GITHUB_WORKSPACE/trusted-checker/.getzilla" --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --produce-images --ci-image-corpus --backend-tool-pins "$RUNNER_TEMP/security-buildkit/toolchain.json" --input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-expanded.json"
       - name: Bind scanner observations to this workflow and source
         if: always()
         shell: bash
@@ -537,7 +774,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: [linux-core, live-acceptance, security-expanded]
+    needs: [linux-core, linux-core-tests, live-acceptance, security-expanded]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -561,6 +798,7 @@ jobs:
         if: always()
         env:
           GETZILLA_NEEDS: ${{ toJSON(needs) }}
+          GETZILLA_OPERATOR_CHECKER: ${{ vars.GETZILLA_SECURITY_CHECKER_SHA }}
         run: python scripts/getzilla_ci_admission.py --artifacts "${{ runner.temp }}/required-evidence"
 
   windows:
@@ -589,7 +827,7 @@ jobs:
       - name: Doctor
         run: python scripts/getzilla_doctor.py
       - name: Windows-ported tests
-        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source tests.test_neutral_hooks
+        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source tests.test_neutral_hooks tests.test_windows_snapshot_store tests.test_windows_hook_launchers tests.test_installer_cache_cleanup tests.test_installer_windows_current tests.test_installer_windows_nonadmin tests.test_managed_pyyaml tests.test_local_grants tests.test_workflow_baseline_fresh_install
       - name: Hooks and CLI smoke
         env:
           GETZILLA_SESSION_ID: ci
@@ -649,9 +887,9 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  macos:
+  macos-install:
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -667,6 +905,8 @@ jobs:
         with:
           python-version: "3.13"
       - name: Installer from this commit (non-interactive, no agent)
+        env:
+          GETZILLA_GITHUB_METADATA_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           exec > >(tee "$RUNNER_TEMP/install.log") 2>&1
@@ -702,20 +942,103 @@ jobs:
           python3 scripts/getzilla_doctor.py
           python3 scripts/getzilla_route.py --show
           python3 scripts/getzilla_status.py > /dev/null
+      - name: Annotate macOS install failures
+        if: failure()
+        shell: python
+        run: |
+          import os
+          import pathlib
+
+          temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          for name in ("install.log", "smoke.log"):
+              path = temp / name
+              if path.is_file():
+                  lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+                  print(f"::error title=macos-{name}::" + " | ".join(line.strip() for line in lines[-40:])[:8000])
+
+  macos-core:
+    # GitHub runs at most 5 macOS jobs at once on the Free, Pro and Team plans
+    # (docs.github.com/en/actions/reference/limits). Four shards plus macos-install fill that limit
+    # in one wave; more shards only wait in the queue.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: macos-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the exact commit with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Keep the checkout Git identity used by earlier shard runs
+        run: |
+          git config user.name ci
+          git config user.email ci@example.invalid
+          git branch -f ci-macos-install HEAD
       - name: Record startup capacity
         run: python scripts/getzilla_startup_cpu.py --no-probe
       - name: Install test requirements
         if: success() || failure()
         run: |
-          python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
-          python -m pip install --disable-pip-version-check --require-hashes -r trust-ci/requirements-build.txt
+          python trust-ci/lock_profiles.py --check
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r trust-ci/requirements-runner.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
-          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.3 bandit==1.9.4 tomli==2.4.1
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation "$RUNNER_TEMP/trust-ci-source"
       - name: Core tests on macOS
         if: success() || failure()
+        env:
+          TMPDIR: ${{ runner.temp }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ strategy.job-total }}
         run: |
-          set -o pipefail
-          python -m unittest discover -s tests 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+          set -euo pipefail
+          python - <<'PYTEST' 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          import json
+          import statistics
+
+          modules = sorted(pathlib.Path("tests").rglob("test*.py"))
+          count = int(os.environ["SHARD_COUNT"])
+          # Balance shards by measured macOS seconds per module (longest first, least loaded shard).
+          # A module without a measurement gets the median, so every module is still assigned once.
+          seconds = json.loads(pathlib.Path(".github/ci/macos-test-seconds.json").read_text(encoding="utf-8"))["seconds"]
+          default = statistics.median(seconds.values())
+          weight = {path: seconds.get(path.as_posix(), default) for path in modules}
+          loads = [0.0] * count
+          assigned = [[] for _ in range(count)]
+          for path in sorted(modules, key=lambda item: (-weight[item], item.as_posix())):
+              shard = min(range(count), key=lambda index: (loads[index], index))
+              loads[shard] += weight[path]
+              assigned[shard].append(path)
+          selected = sorted(assigned[int(os.environ["SHARD_INDEX"])])
+          print(f"shard {os.environ['SHARD_INDEX']}/{count}: {len(selected)} modules, estimated {loads[int(os.environ['SHARD_INDEX'])] / 60:.1f} min", flush=True)
+          if not selected:
+              raise SystemExit("Empty macOS test shard")
+          failed = []
+          # Isolate each module while making the checkout package available to the test loader.
+          launch = "import sys, unittest; sys.path.insert(0, '.getzilla'); unittest.main(module=None)"
+          for path in selected:
+              module = ".".join(path.with_suffix("").parts)
+              result = subprocess.run([sys.executable, "-c", launch, "-v", module])
+              if result.returncode:
+                  failed.append(module)
+          print(f"{len(selected)} modules executed. Failed modules: {failed}", flush=True)
+          raise SystemExit(bool(failed))
+          PYTEST
       - name: Annotate macOS failures
         if: failure()
         shell: python
@@ -745,7 +1068,19 @@ jobs:
         if: always() && steps.export_evidence.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: getzilla-macos-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: getzilla-macos-shard-${{ matrix.shard }}-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/getzilla-evidence/
           retention-days: 30
           if-no-files-found: error
+
+  macos:
+    needs: [macos-install, macos-core]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the native macOS installer and every native macOS test shard
+        env:
+          MACOS_INSTALL_RESULT: ${{ needs.macos-install.result }}
+          MACOS_RESULT: ${{ needs.macos-core.result }}
+        run: test "$MACOS_INSTALL_RESULT" = success && test "$MACOS_RESULT" = success

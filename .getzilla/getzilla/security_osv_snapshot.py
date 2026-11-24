@@ -29,11 +29,11 @@ from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
-from .architecture_diff import (ArchitectureError, MAX_GIT_OUTPUT_BYTES, _git_command,
-                                _git_environment, _run_capped)
-from .package_status import _git_read
+from .architecture_diff import (ArchitectureError, MAX_GIT_OUTPUT_BYTES)
+from . import fsx
+from .package_status import _git_read, _git_registration_absent
 from .security_data import (OSV_BUCKET, OSV_ECOSYSTEMS, SecurityDataError,
-                            osv_aliases, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
+                            osv_aliases, osv_decision_ids, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
 
 try:
     import tomllib
@@ -51,8 +51,7 @@ MAX_DETAIL_FETCHES = 300
 Fetch = Callable[[str, bytes | None], bytes]
 
 
-class VulnerabilityError(RuntimeError):
-    pass
+from .security_artifacts import VulnerabilityError as VulnerabilityError
 
 
 @dataclass(frozen=True, order=True)
@@ -72,6 +71,7 @@ class Finding:
     severity: str = ''
     fixed: list[str] = field(default_factory=list)
     accepted_until: str | None = None
+    raw_aliases: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -85,15 +85,11 @@ class Finding:
             'severity': self.severity,
             'fixed': self.fixed,
             'accepted_until': self.accepted_until,
+            'raw_aliases': list(self.aliases if self.raw_aliases is None else self.raw_aliases),
         }
 
 
-def normalize_name(ecosystem: str, name: str) -> str:
-    if ecosystem == 'PyPI':
-        return re.sub(r'[-_.]+', '-', name).lower()
-    if ecosystem in {'Packagist', 'npm'}:
-        return name.lower()
-    return name
+from .security_artifacts import normalize_name as normalize_name
 
 
 def _pairs_from_requirements(text: str) -> Iterable[tuple[str, str]]:
@@ -346,11 +342,17 @@ def _source_git_root(root: Path) -> bool:
     A completed Git observation of a nested selection is always a refusal.
     """
     try:
+        if _git_registration_absent(root):
+            # A selected subdirectory cannot borrow its parent's Git identity,
+            # including when it is ignored or that registration is malformed.
+            if any(not _git_registration_absent(parent) for parent in root.parents):
+                raise VulnerabilityError('selected security source must be the exact Git worktree root')
+            return False
         code, output = _git_read(root, ['rev-parse', '--show-prefix', '--is-inside-work-tree'])
     except (OSError, ValueError) as exc:
         raise VulnerabilityError('cannot establish the exact selected Git worktree root') from exc
     if code:
-        return False
+        raise VulnerabilityError('cannot establish the exact selected Git worktree root')
     if output != b'\ntrue\n':
         raise VulnerabilityError('selected security source must be the exact Git worktree root')
     return True
@@ -358,10 +360,23 @@ def _source_git_root(root: Path) -> bool:
 
 def _tracked_files(root: Path) -> list[str]:
     root_proven = _source_git_root(root)
+    if not root_proven:
+        try:
+            with fsx.ReadOnlyBoundRoot(root) as bound:
+                files = []
+                for path in root.rglob('*'):
+                    if path.is_file() and not path.is_symlink() and '.git' not in path.relative_to(root).parts:
+                        files.append(path.relative_to(root).as_posix())
+                bound.check()
+                if _source_git_root(root):
+                    raise VulnerabilityError('selected security source changed during filesystem inventory')
+                return sorted(files)
+        except (OSError, ValueError) as exc:
+            raise VulnerabilityError('cannot establish standalone security filesystem inventory') from exc
     try:
-        code, output, _ = _run_capped(
-            _git_command(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], safe_directory=root),
-            cwd=root, env=_git_environment(), stdout_limit=MAX_GIT_OUTPUT_BYTES,
+        from .architecture_diff import run_git_read
+        code, output, _ = run_git_read(
+            root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], stdout_limit=MAX_GIT_OUTPUT_BYTES,
             stderr_limit=4096, timeout=60,
         )
     except (ArchitectureError, OSError) as exc:
@@ -372,13 +387,7 @@ def _tracked_files(root: Path) -> list[str]:
         if output and not output.endswith(b'\0'):
             raise VulnerabilityError('security Git inventory is incomplete')
         return sorted({item for item in output.decode('utf-8', 'surrogateescape').split('\0') if item})
-    if root_proven:
-        raise VulnerabilityError('security Git inventory did not complete for the selected root')
-    files = []
-    for path in root.rglob('*'):
-        if path.is_file() and not path.is_symlink() and '.git' not in path.relative_to(root).parts:
-            files.append(path.relative_to(root).as_posix())
-    return sorted(files)
+    raise VulnerabilityError('security Git inventory did not complete for the selected root')
 
 
 def collect_dependencies(root: Path, *, exclude: Iterable[str] = DEFAULT_EXCLUDE) -> tuple[list[Dependency], list[str]]:
@@ -451,58 +460,10 @@ def load_config(root: Path) -> dict[str, Any]:
     return {'exclude': exclude, 'accept': accept}
 
 
-def _semver_key(version: str) -> tuple[Any, ...]:
-    """SemVer 2.0.0 precedence; build metadata never changes precedence."""
-    if not isinstance(version, str) or len(version) > 512:
-        raise VulnerabilityError('unsupported SemVer version')
-    match = re.fullmatch(
-        r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
-        r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
-        r'(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?', version)
-    if match is None:
-        raise VulnerabilityError(f'unsupported SemVer version: {version!r}')
-    pre = []
-    if match[4] is not None:
-        for part in match[4].split('.'):
-            if part.isdigit():
-                if len(part) > 1 and part[0] == '0':
-                    raise VulnerabilityError(f'unsupported SemVer prerelease: {version!r}')
-                pre.append((0, int(part)))
-            else:
-                pre.append((1, part))
-    return (int(match[1]), int(match[2]), int(match[3]),
-            (0, tuple(pre)) if match[4] is not None else (1, ()))
+from .security_artifacts import _semver_key as _semver_key
 
 
-def _pypi_key(version: str) -> tuple[Any, ...]:
-    """Qualified canonical PEP 440 subset, not a full PEP 440 normalizer.
-
-    Supports [epoch!]release[a|b|rcN][.postN][.devN][+local]. Alternative
-    suffix spellings/separators and leading v/whitespace are refused.
-    """
-    if not isinstance(version, str) or len(version) > 512:
-        raise VulnerabilityError('unsupported PyPI version (canonical PEP 440 subset)')
-    match = re.fullmatch(
-        r'(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)'
-        r'(?:(?P<pre>a|b|rc)(?P<pre_n>[0-9]+))?'
-        r'(?:\.post(?P<post>[0-9]+))?(?:\.dev(?P<dev>[0-9]+))?'
-        r'(?:\+(?P<local>[a-z0-9]+(?:\.[a-z0-9]+)*))?', version.lower())
-    if match is None:
-        raise VulnerabilityError(f'unsupported PyPI version (canonical PEP 440 subset): {version!r}')
-    release = [int(part) for part in match['release'].split('.')]
-    while len(release) > 1 and release[-1] == 0:
-        release.pop()
-    if match['pre']:
-        pre = (0, {'a': 0, 'b': 1, 'rc': 2}[match['pre']], int(match['pre_n']))
-    elif match['dev'] is not None and match['post'] is None:
-        pre = (-1, 0, 0)
-    else:
-        pre = (1, 0, 0)
-    post = (-1, 0) if match['post'] is None else (0, int(match['post']))
-    dev = (1, 0) if match['dev'] is None else (0, int(match['dev']))
-    local = (0, ()) if match['local'] is None else (1, tuple(
-        (1, int(part)) if part.isdigit() else (0, part) for part in match['local'].split('.')))
-    return int(match['epoch'] or 0), tuple(release), pre, post, dev, local
+from .security_artifacts import _pypi_key as _pypi_key
 
 
 def _range_key(version: str, *, kind: str, ecosystem: str) -> tuple[Any, ...]:
@@ -568,8 +529,10 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
         raise VulnerabilityError('malformed OSV package')
     ecosystem = ecosystem if ecosystem is not None else package.get('ecosystem', '')
     ranges = affected.get('ranges', [])
-    if not isinstance(ranges, list) or (not ranges and not versions):
-        raise VulnerabilityError('malformed OSV affected entry: versions or ranges required')
+    if not isinstance(ranges, list):
+        raise VulnerabilityError('malformed OSV ranges')
+    if not ranges and not versions:
+        raise VulnerabilityError('OSV affected version coverage is unknown for matched package')
     errors = []
     if versions:
         try:
@@ -598,6 +561,7 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
 def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     try:
         aliases = osv_aliases(record)
+        decision_ids = set(osv_decision_ids({'id': record.get('id'), 'aliases': aliases}))
     except SecurityDataError as exc:
         raise VulnerabilityError(str(exc)) from exc
     severity = ''
@@ -632,7 +596,8 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     return Finding(
         dependency=dependency,
         vuln_id=str(record.get('id', '')),
-        aliases=sorted(aliases),
+        aliases=sorted(alias for alias in aliases if alias in decision_ids),
+        raw_aliases=list(aliases),
         summary=str(record.get('summary') or record.get('details') or '')[:300],
         severity=severity,
         fixed=fixed,
@@ -667,7 +632,12 @@ def query_online(dependencies: list[Dependency], *, fetch: Fetch = _default_fetc
             next_pending = []
             for index, result in zip(pending, results):
                 for vuln in result.get('vulns') or []:
-                    hits.append((chunk[index], str(vuln['id'])))
+                    identifier = vuln.get('id') if isinstance(vuln, dict) else None
+                    try:
+                        osv_decision_ids({'id': identifier})
+                    except SecurityDataError as exc:
+                        raise VulnerabilityError(str(exc)) from exc
+                    hits.append((chunk[index], identifier))
                 if result.get('next_page_token'):
                     tokens[index] = result['next_page_token']
                     next_pending.append(index)
@@ -770,7 +740,10 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
             accepted_ids[str(item['id'])] = str(item['expires'])
     open_findings = []
     for finding in findings:
-        names = {finding.vuln_id, *finding.aliases}
+        try:
+            names = osv_decision_ids(finding.to_dict())
+        except SecurityDataError as exc:
+            raise VulnerabilityError(str(exc)) from exc
         expiry = next((accepted_ids[name] for name in names if name in accepted_ids), None)
         if expiry:
             finding.accepted_until = expiry

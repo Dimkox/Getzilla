@@ -1,0 +1,31 @@
+{
+  "change_id": "20261013-task-e2e30c",
+  "decisions": [
+    {
+      "action": null,
+      "actor": "owner-standing-L5",
+      "change_id": "20261013-task-e2e30c",
+      "decided_at": "2026-10-13T01:20:13+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner explicitly requests all open issues fixed before final run. Routine bounded source repairs and mock tests authorized under L5; no paid provider operation, credential extraction, deployed policy or production mutation granted.",
+      "resource": null,
+      "route_id": "e2e30c9f2878",
+      "scope_digest": "dff3e2fda4e9008deb7cad7def32358f56ff551987bed97ff4ef5051653b39a5"
+    },
+    {
+      "action": null,
+      "actor": "owner-explicit-issue-repair",
+      "change_id": "20261013-task-e2e30c",
+      "decided_at": "2026-10-13T07:16:44+00:00",
+      "decision": "approved",
+      "gate": "scope_and_design_approval",
+      "reason": "Owner explicitly ordered all twelve issues read and repaired, followed by clean-start acceptance. This records that source and local fixture scope, including concrete schema/invariants; no paid call, credential access, deployed policy or production mutation is granted.",
+      "resource": null,
+      "route_id": "e2e30c9f2878",
+      "scope_digest": "34c08896095ce2a728fb2252db092c326b45092a6dbcf50734af12f49a2bcca7"
+    }
+  ],
+  "route_id": "e2e30c9f2878",
+  "schema_version": 1
+}

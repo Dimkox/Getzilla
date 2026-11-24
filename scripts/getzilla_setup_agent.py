@@ -4,6 +4,7 @@ import argparse
 import getpass
 import os
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f'configured: {item}')
     for step in result.next_steps:
         print(f'next: {step}')
-    return 0
+    print(f'agent setup: {result.status}')
+    return 0 if result.status == 'configured' else 3
 
 
 if __name__ == '__main__':

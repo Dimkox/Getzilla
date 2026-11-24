@@ -262,6 +262,7 @@ class LandingApplicationService:
         profile_digest: str,
         artifact_builder: LandingArtifactBuilder | None = None,
         clock: Callable[[], datetime] | None = None,
+        factory_service=None,
     ) -> None:
         if not isinstance(store, LandingJobStore):
             raise LandingServiceError("store", 500, "landing store unavailable")
@@ -275,6 +276,7 @@ class LandingApplicationService:
         self._profile_digest = profile_digest
         self._artifact_builder = artifact_builder
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._factory_service = factory_service
         self._lock = threading.RLock()
 
     def submit(
@@ -287,17 +289,21 @@ class LandingApplicationService:
         media_type: str,
         chunks: Iterable[bytes],
         actor: Actor,
+        control_binding=None,
+        control_source=None,
     ) -> LandingSubmitResult:
         self._authorize(actor, repository_id)
         if exact_base_sha != TARGET_BASE_SHA or exact_base_tree != TARGET_BASE_TREE:
             raise LandingServiceError("source_identity", 409, "landing source identity mismatch")
         media_kind = _media_kind(media_type)
-        with self._lock:
+        with self._lock, self._blobs.submission_guard():
             existing = self._store.find(actor.actor_id, repository_id, job_id)
-            received_at = existing.source.received_at if existing else self._now()
-            expires_at = existing.source.expires_at if existing else received_at + timedelta(days=1)
+            if control_source is not None and (type(control_source) is not LandingInputV1 or control_binding is None):
+                raise LandingServiceError('shared_source_invalid',422,'shared source invalid')
+            received_at = existing.source.received_at if existing else (control_source.received_at if control_source is not None else self._now())
+            expires_at = existing.source.expires_at if existing else (control_source.expires_at if control_source is not None else received_at + timedelta(days=1))
             try:
-                source = self._blobs.accept(
+                source, owns_intake = self._blobs.accept_for_submission(
                     job_id=job_id,
                     tenant_id=actor.actor_id,
                     repository_id=repository_id,
@@ -309,6 +315,7 @@ class LandingApplicationService:
                     chunks=chunks,
                     received_at=received_at,
                     expires_at=expires_at,
+                    expected_source=control_source,
                 )
             except LandingContractError as exc:
                 raise _service_error(exc) from exc
@@ -318,22 +325,45 @@ class LandingApplicationService:
                     accepted,
                     command_key=job_id,
                     request_digest=source.input_digest,
+                    **({"control_binding": control_binding} if control_binding is not None else {}),
                 )
             except Exception:
-                self._purge(source, "rejected")
+                if owns_intake:
+                    # A failed result can follow a committed create. The shared
+                    # intake guard keeps this authoritative check and cleanup
+                    # in one cut across profiles. Unknown ownership retains input.
+                    try:
+                        current = self._store.find(actor.actor_id, repository_id, job_id)
+                        unreferenced = (current is None or current.source.quarantine_ref_digest
+                                        != source.quarantine_ref_digest)
+                    except Exception:
+                        unreferenced = False
+                    if unreferenced:
+                        self._purge(source, "rejected")
                 raise
             if not created:
-                self._purge(source, "normalized")
+                if accepted.state in _TERMINAL_STATES or accepted.state == 'cancelled':
+                    self._purge(source, "normalized")
                 return LandingSubmitResult(accepted, False)
-            try:
-                final = self._process(accepted)
-            except Exception:
+        # The durable create/replay cut is above. No service/task lock spans
+        # provider IO; cancellation and observation must make progress.
+        try:
+            final = self._process(accepted, actor=actor)
+        except Exception:
+            with self._lock:
                 current = self._store.get(
                     source.tenant_id, source.repository_id, source.job_id
                 )
-                final = replace(
+                final = current if current.state == 'cancelled' else replace(
                     current, state="needs_human", reason_code="internal_failure"
                 )
+        with self._lock:
+            current = self._store.get(source.tenant_id, source.repository_id, source.job_id)
+            if current.state == 'cancelled':
+                # Keep actual usage/unknown outcome, but never turn a cancelled
+                # local job into a late success or publish a late artifact.
+                final = replace(current, observation=final.observation,
+                                provider_evidence_digest=final.provider_evidence_digest)
             final = self._store.put(final)
             self._purge(source, "normalized")
             return LandingSubmitResult(final, True)
@@ -392,12 +422,25 @@ class LandingApplicationService:
             raise LandingServiceError("not_terminal", 409, "landing result is not terminal")
         return current
 
-    def _process(self, accepted: LandingJobRecord) -> LandingJobRecord:
+    def _process(self, accepted: LandingJobRecord, *, actor: Actor) -> LandingJobRecord:
         source = accepted.source
         processing = self._store.put(replace(accepted, state="normalizing"))
+        capability = None
+        if self._factory_service is not None:
+            from .factory_stop import FactoryStopError
+            try:
+                # Re-read the actual durable source/creator. Request Actor labels
+                # cannot replace an existing record's immutable tenant/source.
+                current = self._store.get(source.tenant_id, source.repository_id, source.job_id)
+                if current.source != source or current.source.tenant_id != actor.actor_id:
+                    raise FactoryStopError('factory_stop_binding_required')
+                capability = self._factory_service.landing_stop_capability(current.source, actor=actor,
+                                                                           landing_store=self._store)
+            except FactoryStopError as error:
+                return replace(processing, state='needs_human', reason_code=error.code)
         try:
             outcome = self._provider.normalize(
-                LandingNormalizationRequest(source, self._profile_digest),
+                LandingNormalizationRequest(source, self._profile_digest, stop_capability=capability),
                 lambda: self._blobs.read(
                     source,
                     tenant_id=source.tenant_id,
@@ -525,7 +568,7 @@ def _service_error(error: LandingContractError) -> LandingServiceError:
         return LandingServiceError(error.code, 413, "landing input too large")
     if error.code == "media_type":
         return LandingServiceError(error.code, 415, "landing media type unsupported")
-    if error.code in {"idempotency_conflict", "quarantine_collision"}:
+    if error.code in {"idempotency_conflict", "quarantine_collision", "shared_source_mismatch"}:
         return LandingServiceError(error.code, 409, "landing input conflicts")
     return LandingServiceError(error.code, 422, "landing input rejected")
 

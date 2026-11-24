@@ -1,0 +1,256 @@
+{
+  "$comment": "Closed pure economics query. This request confers no access rights. Current protected read is unavailable pending genuine150151 host integration. Runtime semantic/bound validation is mandatory.",
+  "$defs": {
+    "TaskRef": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "domain": {
+                "const": "core_native"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "task_id": {
+                "pattern": "^task:[0-9a-f]{32}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "domain": {
+                "const": "factory"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "task_id": {
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "domain": {
+          "enum": [
+            "core_native",
+            "factory"
+          ]
+        },
+        "project_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "domain",
+        "project_digest",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end_exclusive": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "start": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end_exclusive"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:getzilla:report:economics-query:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accounting_interval": {
+      "$ref": "#/$defs/TimeRange"
+    },
+    "as_of": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+      "type": "string"
+    },
+    "cache_pair_refs": {
+      "items": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "cohort": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "task_ids"
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/$defs/TaskRef"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "tasks"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "selection_window"
+            },
+            "selection_interval": {
+              "$ref": "#/$defs/TimeRange"
+            }
+          },
+          "required": [
+            "kind",
+            "selection_interval"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "verified_pr_ids"
+            },
+            "pr_numbers": {
+              "items": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "repository_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "repository_digest",
+            "pr_numbers"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "fx_refs": {
+      "items": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "group_by": {
+      "items": {
+        "enum": [
+          "task",
+          "provider",
+          "model",
+          "cache_mode",
+          "runner_kind",
+          "disposition"
+        ]
+      },
+      "maxItems": 2,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "money_bases": {
+      "items": {
+        "enum": [
+          "confirmed_billed",
+          "tariff_estimate"
+        ]
+      },
+      "maxItems": 2,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "scope_ids": {
+      "items": {
+        "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+        "type": "string"
+      },
+      "maxItems": 8,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "snapshot_ref": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "views": {
+      "items": {
+        "enum": [
+          "task_lifetime",
+          "period_spend",
+          "cache_comparison",
+          "friction138"
+        ]
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "accounting_interval",
+    "as_of",
+    "cache_pair_refs",
+    "cohort",
+    "fx_refs",
+    "group_by",
+    "money_bases",
+    "scope_ids",
+    "views",
+    "snapshot_ref"
+  ],
+  "type": "object"
+}

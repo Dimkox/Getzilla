@@ -51,8 +51,10 @@ Existing `PostToolUse` results must include an integer `exit_code`, `exitCode`, 
 `returncode`. Conflicting aliases, boolean/string codes, running/yielded sessions,
 interrupted/timed-out results and unsupported response shapes are ignored. An
 error-looking log or `is_error` alone is insufficient. The bounded output signature
-uses each text output field's length and first/last 8 KiB; volatile timestamps can
-prevent an exact match, and changes only in the middle of a large log can be missed.
+uses each text output field's first/last 8 KiB and an overflow flag. Before hashing,
+durations, timestamps, memory addresses, temporary directory names and pytest progress
+counters are normalized, so these alone do not make two failures different. Test names,
+assertions and line numbers stay; changes only in the middle of a large log can be missed.
 
 Canonical hooks accept result envelopes `tool_response`, `toolResponse`, or
 `tool_result`. They do not register a separate native `PostToolUseFailure` event.
@@ -65,6 +67,64 @@ unchanged repository: the guard emits warnings only. It needs no commit history
 scan and makes no LLM calls. Several concurrent starts can be admitted before the
 third failure completes; this version does not reserve or cancel in-flight work.
 
+## GitHub CI actions
+
+A second guard, `ci_progress`, observes simple `gh` commands with the same session
+scope. It stops a paid action that cannot give a different result. It never calls the
+network and never grants a write: `gh run rerun` and `gh run cancel` still need their
+exact grant, and workflow dispatch stays forbidden.
+
+| Kind | Commands |
+| --- | --- |
+| poll | `gh run view <id> [--json ...]`, `gh run list [--json ...]`, `gh pr checks [<n>]`, `gh api` GET of `repos/<o>/<r>/actions/runs/<id>[/attempts/<n>][/jobs]` |
+| wait | `gh run watch <id>`, `gh pr checks --watch` — never refused |
+| mutation | `gh run rerun <id>`, `gh run cancel <id>`, `gh api -X POST .../runs/<id>/rerun`, `rerun-failed-jobs`, `cancel` |
+| log | `gh run view <id> --log` or `--log-failed`, `gh api .../runs/<id>/logs` |
+
+A command with pipes, substitutions, unknown options or a missing ID is not classified
+and is never refused by this guard.
+
+State comes only from JSON output: `--json`, or `gh api` without `--jq`, `--template`
+or `--include`. Text output gives no state. A run state is the run ID, attempt, head
+SHA, status, conclusion and update time; a failure signature is the sorted failed job
+and first failed step names from `jobs`.
+
+An observation is **historical** when its head differs from the current
+`git rev-parse HEAD`, its attempt is older than the newest attempt seen for the run,
+or it is an older replay of the same attempt. Historical observations add a hint,
+never count, never block and never satisfy a resume condition. A log of a run that
+was not observed with `--json` is labelled unbound evidence.
+
+Rules:
+
+- **Unresolved mutation.** After a rerun or cancel of run R, the next identical request
+  is refused until a later non-historical observation shows R completed. The refusal
+  names the condition, for example `gh-run:.:7:attempt>=2:completed`. A successful
+  rerun raises the expected attempt, so a duplicate rerun cannot start a third attempt.
+- **Deterministic CI failure.** A rerun is refused when the two newest completed
+  attempts on the current head failed with the same signature.
+- **Transient network failure.** HTTP 429/5xx, connection reset, ECONNRESET,
+  ETIMEDOUT, TLS handshake timeout, RPC failed and name-resolution errors get 2 extra
+  retries, after 30 s and 120 s (60 s and 300 s for rate limits). A deterministic
+  pattern (HTTP 4xx other than 429, "not found", traceback, assertion) wins, so it gets
+  no budget. After the budget, the next unchanged attempt needs a recovery; a failure
+  after that recovery starts a new budget. A success ends the budget.
+- **Unchanged polls.** The 4th poll with an unchanged non-terminal state is refused.
+  Wait without model calls with `gh run watch <id> --exit-status --interval 30` in the
+  foreground, then poll once with `--json`. A wait that ends with success, or with the
+  watched run failing, resets the poll count; a wait that fails with a network or `gh`
+  error does not.
+
+`progress-inspect` lists these blocks under `external`; `progress-recover` accepts
+their loop IDs with the same one-shot, revision-bound diagnosis rules.
+
+State is `.getzilla/runtime/session-external.json` (version 1, 64 runs, 64 blocks,
+one-hour TTL), under the same lock and atomic publication. `session-progress.json`
+keeps version 1, so an older engine still reads it after a rollback. The normalized
+failure signature differs from the old one, so an open repeated-failure count restarts
+once at upgrade or rollback; this only delays a stop within the one-hour TTL. An older
+engine leaves `session-external.json` unread and unpruned; it is inert and bounded.
+
 ## Isolation, storage and limits
 
 Records are isolated by repository, explicit owner session, stable logical task
@@ -74,8 +134,9 @@ same task bucket. A deliberate new task or cross-session handoff creates a disti
 scope. Missing/manual sessions and unrelated global route fallbacks are never pooled. Harnesses that omit
 child identity cannot distinguish that child from the session's main bucket.
 
-The ignored runtime files are `session-progress.json` and the stable
-`.session-progress.guard` lock. State contains hashes, bounded counters, timestamps
+The ignored runtime files are `session-progress.json`, `session-external.json` and the
+stable `.session-progress.guard` lock. `session-external.json` also stores repository
+owner/name strings and run IDs. State contains hashes, bounded counters, timestamps
 and the one-retry flag, with no raw command, output, identity or diagnosis. The
 total limit is 128 operation records / 256 KiB; records expire after one hour.
 At capacity, harmless old observations are removed first. Active blocked records

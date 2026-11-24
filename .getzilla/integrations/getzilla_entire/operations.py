@@ -53,8 +53,11 @@ def assess_checks(value: object, expected_head: str) -> dict:
 
 
 class EntireAdapter:
-    def __init__(self, root: Path, client: EntireClient, *, authorize: Callable = has_valid_approval):
-        self.root, self.client, self.authorize = root, client, authorize
+    def __init__(self, root: Path, client: EntireClient, *, authorize: Callable = has_valid_approval, authority=None):
+        from .authority import EntireCheckAuthority
+        if authority is not None and type(authority) is not EntireCheckAuthority:
+            raise EntireError("ci_authority", "an operator-pinned Entire check authority is required")
+        self.root, self.client, self.authorize, self.authority = root, client, authorize, authority
         self.journal = RequestJournal(root)
 
     def git(self, *args: str, allowed_codes: tuple[int, ...] = (0,)):
@@ -268,7 +271,7 @@ class EntireAdapter:
                 raise EntireError('creation_unverified', 'Trail creation requires reconciliation; the returned state or branch HEAD differs')
             return {**{key: value for key, value in record.items() if key != 'title'},
                     'status': 'created', 'repository': repo.identity.resource, 'head': expected_head,
-                    'notice': 'Branch link is not an atomic HEAD CAS; merge remains unsupported.'}
+                    'notice': 'Branch link is not an atomic HEAD CAS; merge needs separate accepted-check authority and an exact grant.'}
         return self.write(request_id, self.intent(repo, 'trail-create', branch, expected_head,
                                                   payload_digest=payload_digest), operation)
 
@@ -291,7 +294,89 @@ class EntireAdapter:
             result['reasons'].append('merge_action_blocked_or_unknown')
         return {**record, **result}
 
-    def merge(self, trail_id: str, expected_head: str) -> dict:
-        raise EntireError('unsupported', 'Entire automated merge is unsupported: a trusted external CI producer '
-                          'bound to this forge, repository, Trail and exact commit is not implemented; '
-                          'Entire checks and local grants cannot substitute for that authority')
+    def _merge_target(self, repo, trail_id, head, branch, base, base_head):
+        record = self.show(repo, trail_id)
+        detail = self.client.change_detail(repo, record['change_number'])
+        parent = detail.get('parent')
+        if (record['status'] != 'open' or record['change_status'] != 'open' or record['branch'] != branch
+                or detail.get('id') != record['change_id'] or detail.get('number') != record['change_number']
+                or detail.get('branch') != branch or detail.get('base') != base
+                or not isinstance(parent, dict) or parent.get('id') != trail_id):
+            raise EntireError('change_mismatch', 'Trail, change, source branch or base mapping changed')
+        snapshot = detail.get('mergeability')
+        assessment = assess_checks(snapshot, head)
+        actions = detail.get('actions')
+        action = actions.get('merge') if isinstance(actions, dict) else None
+        if (assessment['provider_preflight'] != 'passed' or not isinstance(action, dict)
+                or action.get('state') != 'enabled'):
+            raise EntireError('merge_blocked', 'provider-required gates do not permit an ordinary merge')
+        if self.remote_head(repo, branch) != head or self.remote_head(repo, base) != base_head:
+            raise EntireError('stale_source', 'source or base branch no longer matches the accepted check')
+        tree = self.text(self.git('rev-parse', '--verify', head + '^{tree}'))
+        if not SHA.fullmatch(tree):
+            raise EntireError('stale_source', 'source tree identity is unavailable')
+        mirror = repo.identity.mode == 'mirror'
+        authoritative = 'https://github.com/' + repo.identity.repository if mirror else repo.identity.resource
+        if mirror:
+            # A forge-local branch has no independently matching upstream ref.
+            if (self.authority.upstream_head(authoritative, branch) != head
+                    or self.authority.upstream_head(authoritative, base) != base_head):
+                raise EntireError('upstream_mismatch', 'Entire and authoritative GitHub branch heads differ')
+        return {'repository': repo.identity.resource, 'mode': repo.identity.mode, 'repo_id': repo.repo_id,
+                'api_url': repo.api_url, 'context': self.client.context, 'trail_id': trail_id,
+                'change_id': record['change_id'], 'change_number': record['change_number'],
+                'branch': branch, 'base': base, 'head': head, 'base_head': base_head, 'tree': tree,
+                'authority_repository': authoritative, 'authority_branch': branch,
+                'branch_mode': 'github-upstream' if mirror else 'native'}
+
+    def merge(self, trail_id: str, expected_head: str, *, branch=None, base=None,
+              base_head=None, proof=None, request_id=None) -> dict:
+        if self.authority is None:
+            raise EntireError('unsupported', 'Entire merge requires an explicitly configured protected CI authority; '
+                              'provider display checks and local grants cannot substitute')
+        if (not isinstance(trail_id, str) or not ULID.fullmatch(trail_id)
+                or not isinstance(expected_head, str) or not SHA.fullmatch(expected_head)
+                or not isinstance(base_head, str) or not SHA.fullmatch(base_head)
+                or not isinstance(request_id, str)):
+            raise EntireError('merge_identity', 'exact Trail, source HEAD and base HEAD are required')
+        branch, base = self.branch(branch), self.branch(base)
+        if not branch.startswith('getzilla/') or branch == base:
+            raise EntireError('branch_scope', 'merge requires a distinct getzilla/ task branch and explicit base')
+        repo = self.client.discover(self.identity())
+        resource = repo.identity.resource + '#trails/' + trail_id
+        self.guard_write(repo, expected_head, 'production', 'pull-request-merge', resource)
+        from .authority import canonical
+        proof = json.loads(canonical(proof))
+        intent = self.intent(repo, 'merge', branch, expected_head, trail_id=trail_id, base=base,
+                             base_head=base_head, proof_sha256=hashlib.sha256(
+                                 canonical(proof)).hexdigest())
+
+        def operation():
+            self.guard_write(repo, expected_head, 'production', 'pull-request-merge', resource)
+            target = self._merge_target(repo, trail_id, expected_head, branch, base, base_head)
+            accepted = self.authority.verify(proof, target)
+            fresh = self.client.discover(self.identity())
+            if fresh != repo or self._merge_target(fresh, trail_id, expected_head, branch, base, base_head) != target:
+                raise EntireError('stale_source', 'repository processing placement or branch mapping changed')
+            self.authority.verify(proof, target)
+            payload = {'expectedHeadSha': expected_head, 'bypass': False}
+            if repo.identity.mode == 'native':
+                payload['deleteBranch'] = False
+            result = self.client.command_json(['api', '--to', 'cell', '--method', 'POST', '--input', '-',
+                f'/api/v1/repos/{repo.repo_id}/trails/{target["change_number"]}/merge'],
+                api_url=repo.api_url, input_data=json.dumps(payload, separators=(',', ':')).encode())
+            merged = result.get('mergeCommitSha')
+            if result.get('ok') is not True or not isinstance(merged, str) or (merged and not SHA.fullmatch(merged)):
+                raise EntireError('merge_unknown', 'merge response requires reconciliation; no automatic retry')
+            merged = merged or expected_head  # Native fast-forward has no separate merge commit.
+            if self.remote_head(repo, base) != merged:
+                raise EntireError('merge_unknown', 'merged base cannot be confirmed; reconcile before retrying')
+            mirror = repo.identity.mode == 'mirror'
+            if mirror and self.authority.upstream_head(target['authority_repository'], base) != merged:
+                raise EntireError('merge_unknown', 'authoritative GitHub merge cannot be confirmed; reconcile before retrying')
+            return {'status': 'merged', 'repository': repo.identity.resource, 'trail_id': trail_id,
+                    'change_number': target['change_number'], 'branch': branch, 'base': base,
+                    'head': expected_head, 'merge_commit': merged, 'trusted_ci_verified': True,
+                    'producer_id': accepted['producer_id'], 'upstream_verified': mirror,
+                    'hosted_e2e_verified': False}
+        return self.write(request_id, intent, operation)

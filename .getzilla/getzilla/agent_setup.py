@@ -42,6 +42,7 @@ _KEY_SHAPE = re.compile(r'^[A-Za-z0-9._\-]{16,512}$')
 class SetupResult:
     written: tuple[str, ...]
     next_steps: tuple[str, ...]
+    status: str = 'configured'
 
 
 def validate_key(key: str, *, label: str = 'the OpenRouter key') -> str:
@@ -402,15 +403,15 @@ def configure(agent: str, provider: str, home: Path, *, key: str | None, model: 
             written = _store_env(home, {AGENT_KEY_ENV[agent]: validate_key(key, label=AGENT_KEY_ENV[agent])})
             return SetupResult(tuple(written), (f'open a new terminal so the agent sees {AGENT_KEY_ENV[agent]}',
                                                 f"run '{agent}' in your project"))
-        return SetupResult((), (NATIVE_LOGIN[agent],))
+        return SetupResult((), (NATIVE_LOGIN[agent],), 'pending-authentication')
     if provider == 'native':
         undo = {'qwen': _unconfigure_qwen, 'claude': _unconfigure_claude, 'codex': _unconfigure_codex}[agent]
-        return SetupResult(tuple(undo(home)), (NATIVE_LOGIN[agent],))
+        return SetupResult(tuple(undo(home)), (NATIVE_LOGIN[agent],), 'pending-authentication')
     if not key:
         return SetupResult((), (
             'create a key at https://openrouter.ai/keys, then run: '
             f'python3 scripts/getzilla_setup_agent.py --agent {agent} --provider openrouter (it asks for the key)',
-        ))
+        ), 'pending-credentials')
     key = validate_key(key)
     chosen = model or DEFAULT_MODELS.get(agent)
     if agent == 'qwen':

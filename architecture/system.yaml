@@ -552,6 +552,14 @@
       "path": "engineering/contracts/openapi/trust-ci.public.v1.json",
       "role": "bidirectional",
       "version": "1"
+    },
+    {
+      "compatibility": "bidirectional",
+      "id": "CONTRACT-PAID-EXECUTION-AUTHORITY-V1",
+      "kind": "json_schema",
+      "path": "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json",
+      "role": "bidirectional",
+      "version": "1"
     }
   ],
   "data_classifications": [
@@ -1738,7 +1746,9 @@
     },
     {
       "allowed_data": [
-        "DATA-ATTESTATION"
+        "DATA-ATTESTATION",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-REPOSITORY-SOURCE"
       ],
       "authentication": "none",
       "direction": "from_to",
@@ -1944,6 +1954,30 @@
       "protocol": "https",
       "sync_or_async": "synchronous",
       "to": "NODE-PYPI-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-NPM",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-NPM-REGISTRY",
       "type": "dependency"
     },
     {
@@ -3186,6 +3220,175 @@
       "sync_or_async": "synchronous",
       "to": "NODE-GITHUB",
       "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-LOCAL-ROUTE-POLICY",
+      "id": "EDGE-LOCAL-CURRENT-ARTIFACT-REVALIDATION",
+      "network_policy": "no_network",
+      "protocol": "python_call",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-SUPPLY-CHAIN-UPDATER",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 900000
+      },
+      "from": "NODE-SECURITY-ACQUISITION",
+      "id": "EDGE-SECURITY-IMAGE-GRAPHS",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 1800000
+      },
+      "from": "NODE-SECURITY-ACQUISITION",
+      "id": "EDGE-SECURITY-OWNED-IMAGE-JOB",
+      "network_policy": "isolated_executor",
+      "protocol": "local_subprocess",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SECURITY-IMAGE-EXECUTOR",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 900000
+      },
+      "from": "NODE-SECURITY-IMAGE-EXECUTOR",
+      "id": "EDGE-IMAGE-BUILD-HTTPS-INPUTS",
+      "network_policy": "isolated_executor",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 900000
+      },
+      "from": "NODE-SECURITY-IMAGE-EXECUTOR",
+      "id": "EDGE-IMAGE-BUILD-HTTP-INPUTS",
+      "network_policy": "isolated_executor",
+      "protocol": "http",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
+      "id": "EDGE-PAID-EXECUTOR-ADMISSION",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-PAID-ADMISSION",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-PAID-ADMISSION",
+      "id": "EDGE-PAID-AUTHORITY-JOURNAL",
+      "network_policy": "no_network",
+      "protocol": "sqlite",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-SQLITE",
+      "type": "data_flow"
     }
   ],
   "nodes": [
@@ -3336,6 +3539,16 @@
         "factory/src/getzilla_factory/__init__.py",
         "factory/src/getzilla_factory/_fpf_snapshot_data.py",
         "factory/src/getzilla_factory/admin.py",
+        "factory/src/getzilla_factory/access_authority.py",
+        "factory/src/getzilla_factory/access_release.py",
+        "factory/src/getzilla_factory/retrieval_access.py",
+        "factory/src/getzilla_factory/retrieval_receiver.py",
+        "factory/src/getzilla_factory/retrieval_retention.py",
+        "factory/src/getzilla_factory/factory_stop.py",
+        "factory/src/getzilla_factory/local_writer.py",
+        "factory/src/getzilla_factory/native_access.py",
+        "factory/src/getzilla_factory/qwen_native_handoff.py",
+        "factory/src/getzilla_factory/payload_access.py",
         "factory/src/getzilla_factory/bb_contracts.py",
         "factory/src/getzilla_factory/context_contracts.py",
         "factory/src/getzilla_factory/contracts.py",
@@ -3346,13 +3559,16 @@
         "factory/src/getzilla_factory/model_rotator_registry.py",
         "factory/src/getzilla_factory/prediction_contracts.py",
         "factory/src/getzilla_factory/recovery.py",
+        "factory/src/getzilla_factory/retrieval_context_contracts.py",
         "factory/src/getzilla_factory/vibevm_store.py",
         "factory/src/getzilla_factory/service.py",
         "factory/src/getzilla_factory/state.py",
         "factory/src/getzilla_factory/store.py",
         "factory/src/getzilla_factory/v15_contracts.py",
         "factory/tests",
-        "tests/test_factory_v15_decisions.py"
+        "tests/test_factory_v15_decisions.py",
+        "factory/src/getzilla_factory/local_network.py",
+        "factory/src/getzilla_factory/workflow.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3469,6 +3685,8 @@
         "factory/src/getzilla_factory/landing_runtime.py",
         "factory/src/getzilla_factory/landing_service.py",
         "factory/src/getzilla_factory/landing_sse.py",
+        "factory/src/getzilla_factory/shared_landing_contracts.py",
+        "factory/src/getzilla_factory/shared_landing_control.py",
         "factory/src/getzilla_factory/resources/landing-normalization-draft.v1.schema.json",
         "factory/src/getzilla_factory/resources/landing_pdf_worker.py",
         "factory/contracts/jsonschema/landing-provider-observation.v1.schema.json",
@@ -3560,7 +3778,10 @@
       "owner": "local factory operators",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/getzilla_factory/landing_sqlite_store.py"
+        "factory/src/getzilla_factory/landing_sqlite_store.py",
+        "factory/sqlite",
+        "factory/src/getzilla_factory/landing_sqlite",
+        "factory/src/getzilla_factory/landing_sqlite/migrations"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3652,7 +3873,8 @@
       "repository_paths": [
         "factory/src/getzilla_factory/brokers.py",
         "factory/src/getzilla_factory/result_broker.py",
-        "factory/src/getzilla_factory/result_contracts.py"
+        "factory/src/getzilla_factory/result_contracts.py",
+        "factory/src/getzilla_factory/_payload_engine.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3816,67 +4038,7 @@
       "id": "NODE-GOVERNANCE-VALIDATOR",
       "owner": "repository engineering",
       "public_contracts": [
-        "CONTRACT-APPROVAL-ENVELOPE",
-        "CONTRACT-GITHUB-PR-PROJECTION",
-        "CONTRACT-TRUST-CI-OPENAPI"
-      ],
-      "repository_paths": [
-        "trust-ci/src/adaptive_trust_ci/api.py",
-        "trust-ci/src/adaptive_trust_ci/metrics.py",
-        "trust-ci/src/adaptive_trust_ci/public_merge.py",
-        "trust-ci/src/adaptive_trust_ci/public_publisher.py",
-        "trust-ci/src/adaptive_trust_ci/webhooks.py",
-        "trust-ci/src/adaptive_trust_ci/public_admission_legacy.py",
-        "trust-ci/src/adaptive_trust_ci/public_runtime.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "container",
-        "lifecycle": "long_running",
-        "network": "declared_egress"
-      },
-      "secrets": [
-        "SECRET-DATABASE",
-        "SECRET-READ-TOKEN",
-        "SECRET-WEBHOOK"
-      ],
-      "trust_domain": "TD-TRUST-CI-CONTROL",
-      "type": "service"
-    },
-    {
-      "data_classification": "DATA-JOB-STATE",
-      "id": "NODE-TRUST-CI-POSTGRES",
-      "owner": "Trust CI operators",
-      "public_contracts": [],
-      "repository_paths": [
-        "trust-ci/postgres",
-        "trust-ci/sql",
-        "trust-ci/src/adaptive_trust_ci/backup.py",
-        "trust-ci/src/adaptive_trust_ci/lease.py",
-        "trust-ci/src/adaptive_trust_ci/migrations.py",
-        "trust-ci/src/adaptive_trust_ci/resources",
-        "trust-ci/src/adaptive_trust_ci/store.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "postgresql",
-        "lifecycle": "long_running",
-        "network": "local_only"
-      },
-      "secrets": [
-        "SECRET-DATABASE"
-      ],
-      "trust_domain": "TD-TRUST-CI-CONTROL",
-      "type": "datastore"
-    },
-    {
-      "data_classification": "DATA-ATTESTATION",
-      "id": "NODE-LOCAL-SECURITY-BUNDLE",
-      "owner": "repository engineering; local validation only, no App, DB or mandatory observer",
-      "public_contracts": [],
-      "repository_paths": [
-        "trust-ci/src/adaptive_trust_ci/public_admission.py",
-        "trust-ci/src/adaptive_trust_ci/security_bundle.py"
+        "CONTRACT-GOVERNANCE-HANDOFF-V1"
       ],
       "repository_paths": [
         ".getzilla/getzilla/governance.py",
@@ -3897,37 +4059,11 @@
       "type": "local_component"
     },
     {
-      "data_classification": "DATA-ATTESTATION",
-      "id": "NODE-TRUST-CI-WORKER",
-      "owner": "Trust CI operators",
-      "public_contracts": [
-        "CONTRACT-ATTESTATION-ENVELOPE",
-        "CONTRACT-ATTESTATION-ENVELOPE-V2"
-      ],
-      "repository_paths": [
-        "trust-ci/compose.yaml",
-        "trust-ci/src/adaptive_trust_ci/__init__.py",
-        "trust-ci/src/adaptive_trust_ci/cli.py",
-        "trust-ci/src/adaptive_trust_ci/customers.py",
-        "trust-ci/src/adaptive_trust_ci/github.py",
-        "trust-ci/src/adaptive_trust_ci/github_app.py",
-        "trust-ci/src/adaptive_trust_ci/lookup.py",
-        "trust-ci/src/adaptive_trust_ci/models.py",
-        "trust-ci/src/adaptive_trust_ci/onboarding.py",
-        "trust-ci/src/adaptive_trust_ci/policy.py",
-        "trust-ci/src/adaptive_trust_ci/runner.py",
-        "trust-ci/src/adaptive_trust_ci/settings.py",
-        "trust-ci/src/adaptive_trust_ci/signing.py",
-        "trust-ci/src/adaptive_trust_ci/worker.py",
-        "trust-ci/src/adaptive_trust_ci/http_response.py",
-        "trust-ci/src/adaptive_trust_ci/public_http.py",
-        "trust-ci/src/adaptive_trust_ci/public_producer.py",
-        "trust-ci/src/adaptive_trust_ci/public_preparation.py",
-        "trust-ci/src/adaptive_trust_ci/public_process.py",
-        "trust-ci/src/adaptive_trust_ci/public_dispatch.py",
-        "trust-ci/lock_profiles.py",
-        "trust-ci/lock_profile_validation.py"
-      ],
+      "data_classification": "DATA-APPROVAL",
+      "id": "NODE-HUMAN-APPROVAL",
+      "owner": "human security approvers",
+      "public_contracts": [],
+      "repository_paths": [],
       "runtime": {
         "evidence": "source_described",
         "kind": "external_managed",
@@ -3947,6 +4083,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/config/ci-images.json",
+        ".getzilla/config/ci-image-blobs",
         ".getzilla/getzilla/disposable_resources.py",
         ".getzilla/getzilla/factory_tests.py",
         "trust-ci/scripts/postgres-integration.sh",
@@ -4158,15 +4295,20 @@
         ".getzilla/config",
         ".getzilla/cursor-rules",
         ".getzilla/getzilla",
+        ".getzilla/getzilla/queue_refusal.py",
         ".getzilla/getzilla/component_state.py",
         ".getzilla/getzilla/model_data_admission.py",
         ".getzilla/hooks",
         ".getzilla/managed-components.json",
         ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
         ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
+        ".getzilla/optional-modules/reverse-engineering/0.1.0/elf.py",
+        ".getzilla/optional-modules/mcp-jira/0.1.0",
+        ".getzilla/optional-modules/retrieval-research/0.1.0",
         ".getzilla/templates",
         ".grok",
-        ".qwen"
+        ".qwen",
+        "scripts/getzilla_hook.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4203,8 +4345,21 @@
       "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
+        ".getzilla/getzilla/current_workflows.py",
+        ".getzilla/getzilla/latest_releases.py",
+        ".getzilla/getzilla/managed_environment.py",
+        ".getzilla/getzilla/managed_npm.py",
+        ".getzilla/getzilla/managed_pyyaml.py",
+        ".getzilla/getzilla/managed_runtime.py",
+        ".getzilla/getzilla/managed_software.py",
+        ".getzilla/getzilla/managed_source_build.py",
+        ".getzilla/getzilla/opengrep_releases.py",
         ".getzilla/getzilla/updater.py",
-        "scripts/getzilla_update.py"
+        "scripts/getzilla_baseline.py",
+        "scripts/getzilla_install_managed.py",
+        "scripts/getzilla_update.py",
+        "scripts/install.ps1",
+        "scripts/install.sh"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4331,6 +4486,9 @@
       "repository_paths": [
         ".getzilla/getzilla/security_acquisition.py",
         ".getzilla/getzilla/security_license_acquisition.py",
+        ".getzilla/getzilla/security_action_inputs.py",
+        ".getzilla/getzilla/security_action_npm_fetch.py",
+        ".getzilla/getzilla/security_release_tool_inputs.py",
         ".getzilla/getzilla/security_osv_snapshot.py"
       ],
       "runtime": {
@@ -4537,6 +4695,22 @@
       "type": "external_system"
     },
     {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-NPM-REGISTRY",
+      "owner": "public npm registry and package source endpoints",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
       "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
       "id": "NODE-SEARCH-BRAVE",
       "owner": "api.search.brave.com",
@@ -4668,7 +4842,10 @@
       "repository_paths": [
         ".getzilla/getzilla/security_cli.py",
         ".getzilla/getzilla/public_security_context.py",
-        "scripts/getzilla_security.py"
+        "scripts/getzilla_security.py",
+        ".getzilla/getzilla/security_image_producer.py",
+        ".getzilla/getzilla/security_image_registry.py",
+        ".getzilla/getzilla/security_image_provision.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4706,6 +4883,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/getzilla/security_data.py",
+        ".getzilla/getzilla/security_data_windows.py",
         ".getzilla/getzilla/security_intelligence.py",
         ".getzilla/getzilla/security_inventory.py",
         ".getzilla/getzilla/security_artifacts.py",
@@ -4713,7 +4891,8 @@
         ".getzilla/getzilla/security_licenses.py",
         ".getzilla/getzilla/expanded_security.py",
         ".getzilla/config/license-policy.json",
-        ".getzilla/getzilla/security_osv_diagnostics.py"
+        ".getzilla/getzilla/security_osv_diagnostics.py",
+        ".getzilla/getzilla/security_build_inputs.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4854,6 +5033,7 @@
         "trust-ci/src/adaptive_trust_ci/cli.py",
         "trust-ci/src/adaptive_trust_ci/customers.py",
         "trust-ci/src/adaptive_trust_ci/github.py",
+        "trust-ci/src/adaptive_trust_ci/http_response.py",
         "trust-ci/src/adaptive_trust_ci/github_app.py",
         "trust-ci/src/adaptive_trust_ci/lookup.py",
         "trust-ci/src/adaptive_trust_ci/models.py",
@@ -4872,7 +5052,9 @@
         "trust-ci/ops/public-worker-cgroup.conf",
         "trust-ci/public-checker-inputs",
         "trust-ci/Dockerfile.worker",
-        ".github/workflows/getzilla-public-producer.yml"
+        ".github/workflows/getzilla-public-producer.yml",
+        "trust-ci/lock_profiles.py",
+        "trust-ci/lock_profile_validation.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4950,6 +5132,68 @@
       "secrets": [],
       "trust_domain": "TD-TRUST-CI-CONTROL",
       "type": "datastore"
+    },
+    {
+      "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-SECURITY-IMAGE-EXECUTOR",
+      "owner": "repository engineering / explicitly allocated ephemeral job",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/security_image_backend.py",
+        ".getzilla/getzilla/security_image_job.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "job",
+        "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-RESEARCH-EVIDENCE",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        "engineering/benchmarks/issue162",
+        "engineering/benchmarks/issue172",
+        "engineering/benchmarks/issue170"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "none",
+        "lifecycle": "none",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
+      "type": "repository"
+    },
+    {
+      "data_classification": "DATA-FACTORY-LANDING-INPUT",
+      "id": "NODE-FACTORY-PAID-ADMISSION",
+      "owner": "explicit owning server authority",
+      "public_contracts": [
+        "CONTRACT-PAID-EXECUTION-AUTHORITY-V1"
+      ],
+      "repository_paths": [
+        "factory/src/getzilla_factory/paid_admission.py",
+        "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json",
+        "factory/tests/test_paid_admission.py",
+        "factory/tests/test_control_schema_bindings.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
     }
   ],
   "schema_version": 1,
@@ -5091,6 +5335,17 @@
     {
       "description": "Upstream debug event for a failed best-effort public version lookup; the CLI continues without update information and does not expose this as an adapter operation failure. The manifest and GitHub fallback share one 2000 ms budget.",
       "id": "SIG-ENTIRE-VERSION-CHECK-FAILURE"
+    }
+  ],
+  "source_fixtures": [
+    {
+      "consumer_path": "tests/test_reverse_engineering.py",
+      "consumer_sha256": "9ee0499514a7b698103c7ca765b0b5d4b304cf6f2156b0367c6bd1b7e2856583",
+      "owner_node": "NODE-LOCAL-VERIFIER",
+      "path": "tests/fixtures/reverse263/public-probe.c",
+      "profile": "c-public-elf-probe-v1",
+      "purpose": "compile_inspect_only",
+      "sha256": "6126fe8336235c0b2f6adc34cdfa35ab79331306143e4a6cac282f3bd1cd4b5a"
     }
   ],
   "trust_domains": [

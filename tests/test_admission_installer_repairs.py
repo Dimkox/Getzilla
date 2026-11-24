@@ -216,7 +216,7 @@ class AdmissionInstallerRepairs(unittest.TestCase):
         self.assertIn("applicability = retained_parser_contract(root)", consumer)
         self.assertIn(
             "factory_tests.skip_allowance(identifier, context)",
-            (W / ".getzilla/getzilla/live_acceptance.py").read_text(),
+            (W / ".getzilla/getzilla/live_evidence.py").read_text(),
         )
 
     def context(self):

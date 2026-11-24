@@ -134,6 +134,13 @@ def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | N
         raise ValueError('invalid implementation requirement scope')
     current = _now(now)
     route = _owned_route(root)
+    roles = write_roles(root) | {route.get('write_agent')}
+    if agent_type in roles and (route.get('context') or {}).get('version') == 2:
+        try:
+            from .intake_publication import require_intake_ready
+            require_intake_ready(root,route,operation_class='writer-start-or-reuse')
+        except Exception as error:
+            raise ValueError('semantic intake does not admit this writer') from error
     from .continuity import task_identity, _active_workers
     _active_workers(root)
     with _locked(root):
@@ -310,9 +317,58 @@ def stop_agent(root: Path, agent_id: str, agent_type: str, *, generation: str | 
         return True
 
 
+def _report_identity(info):
+    return {name: getattr(info, name) for name in
+            ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_uid', 'st_gid', 'st_nlink')}
+
+
+def _report_binding(root, report_path, dataset_sha256, dataset_path):
+    """Bind local bytes only; no native delivery or independent review claim."""
+    from .trace_storage import native_root
+    if (type(report_path) is not str or not report_path.startswith('.getzilla/runtime/')
+            or type(dataset_path) is not str or not dataset_path.startswith('.getzilla/runtime/')
+            or type(dataset_sha256) is not str or re.fullmatch('[0-9a-f]{64}', dataset_sha256) is None):
+        raise ValueError('invalid-report-binding')
+    with native_root(root) as anchor:
+        before = anchor.stat(report_path)
+        raw = anchor.read(report_path, limit=8 * 1024 * 1024)
+        if _report_identity(anchor.stat(report_path)) != _report_identity(before) or anchor.read(report_path, limit=8 * 1024 * 1024) != raw:
+            raise ValueError('report-bytes-changed')
+        dataset, dataset_bytes = [], 0
+        for name in ('function-universes.json', 'partition.json', 'queries.json', 'full-qrels.json'):
+            path = dataset_path + '/' + name
+            metadata = anchor.stat(path)
+            body = anchor.read(path, limit=8 * 1024 * 1024)
+            dataset_bytes += len(body)
+            if dataset_bytes > 16 * 1024 * 1024:
+                raise ValueError('dataset-bytes-exceeded')
+            if _report_identity(anchor.stat(path)) != _report_identity(metadata) or anchor.read(path, limit=8 * 1024 * 1024) != body:
+                raise ValueError('dataset-bytes-changed')
+            dataset.append({'name': name, 'sha256': hashlib.sha256(body).hexdigest(), 'bytes': len(body),
+                            'identity': _report_identity(metadata)})
+        frozen = [{key: row[key] for key in ('name', 'sha256', 'bytes')} for row in dataset]
+        # The dataset digest covers exact bytes and fixed file order, not inode labels.
+        import json
+        actual_dataset = hashlib.sha256(json.dumps(frozen, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        if actual_dataset != dataset_sha256:
+            raise ValueError('dataset-digest-mismatch')
+        if _report_identity(anchor.stat(report_path)) != _report_identity(before):
+            raise ValueError('report-bytes-changed')
+        for row in dataset:
+            if _report_identity(anchor.stat(dataset_path + '/' + row['name'])) != row['identity']:
+                raise ValueError('dataset-bytes-changed')
+        anchor.check()
+        return {'path': report_path, 'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw),
+                'dataset_sha256': dataset_sha256, 'dataset_path': dataset_path, 'dataset_files': dataset,
+                'qualification': 'local-observation-only',
+                'identity': _report_identity(before)}
+
+
 @serialized_task
 def record_terminal_report(root: Path, agent_id: str, generation: str, route_id: str, task_id: str,
-                           result: str, *, now: datetime | None = None) -> None:
+                           result: str, *, now: datetime | None = None,
+                           report_path: str | None = None, dataset_sha256: str | None = None,
+                           dataset_path: str | None = None) -> None:
     if result not in RESULTS:
         raise ValueError('invalid-result')
     _owned_route(root)
@@ -321,10 +377,37 @@ def record_terminal_report(root: Path, agent_id: str, generation: str, route_id:
         for record in reversed(state.get('history', [])):
             if record.get('event') == 'stop' and record.get('agent_id') == agent_id:
                 _matching(root, record, generation, route_id, task_id)
+                if len({value is None for value in (report_path, dataset_sha256, dataset_path)}) != 1:
+                    raise ValueError('invalid-report-binding')
+                binding = _report_binding(root, report_path, dataset_sha256, dataset_path) if report_path is not None else None
+                previous = record.get('report_binding')
+                if previous is not None and (previous != binding or record.get('result') != result):
+                    raise ValueError('terminal-report-conflict')
+                if binding is not None:
+                    record['report_binding'] = binding
+                _matching(root, record, generation, route_id, task_id)
                 record['result'] = result
                 record['reported_at'] = _now(now).isoformat(timespec='seconds')
                 dump_json(agent_state_path(root), state)
                 return
+        raise ValueError('terminal-instance-not-found')
+
+
+@serialized_task
+def terminal_report_binding(root: Path, agent_id: str, generation: str, route_id: str,
+                            task_id: str, *, dataset_sha256: str) -> dict:
+    """Recheck byte custody of an observation; this never proves native delivery."""
+    _owned_route(root)
+    with _locked(root):
+        for record in reversed(get_agent_state(root).get('history', [])):
+            if record.get('event') == 'stop' and record.get('agent_id') == agent_id:
+                _matching(root, record, generation, route_id, task_id)
+                binding = record.get('report_binding')
+                if type(binding) is not dict or binding.get('dataset_sha256') != dataset_sha256:
+                    raise ValueError('terminal-report-unbound')
+                if _report_binding(root, binding['path'], dataset_sha256, binding['dataset_path']) != binding:
+                    raise ValueError('terminal-report-changed')
+                return copy.deepcopy(binding)
         raise ValueError('terminal-instance-not-found')
 
 

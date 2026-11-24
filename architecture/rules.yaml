@@ -277,6 +277,15 @@
       ],
       "required_phases": [],
       "severity": "error"
+    },
+    {
+      "id": "FIT-FACTORY-SQLITE-HISTORY",
+      "immutable_history": true,
+      "path_prefixes": [
+        "factory/sqlite"
+      ],
+      "required_phases": [],
+      "severity": "error"
     }
   ],
   "network_policies": [

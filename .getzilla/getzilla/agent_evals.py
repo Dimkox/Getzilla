@@ -52,7 +52,7 @@ def _runner_digest():
     # Lean installs keep this module in getzilla.zip and __init__.py outside it.
     # Read through this module's loader, not the package loader or a virtual Path.
     try:
-        loader = globals().get('__loader__')
+        loader = __loader__
         _require(type(loader) in {SourceFileLoader, SourcelessFileLoader, zipimporter}
                  and __name__ == 'getzilla.agent_evals', 'runner_source_unavailable')
         filename = loader.get_filename(__name__)
@@ -63,7 +63,7 @@ def _runner_digest():
         _require(type(raw) is bytes and 0 < len(raw) <= MAX_BYTES, 'runner_source_unavailable')
         compile(raw, source, 'exec', dont_inherit=True)
         return hashlib.sha256(raw).hexdigest()
-    except (OSError, ValueError, SyntaxError, TypeError, AttributeError, RecursionError) as exc:
+    except (OSError, ValueError, SyntaxError, TypeError, AttributeError, RecursionError, NameError) as exc:
         raise EvalError('runner_source_unavailable') from exc
 
 
@@ -462,6 +462,14 @@ def attach_comparison(report, baseline_path):
     return _bounded_report({**report, 'comparison': compare(report, baseline_path)})
 
 
+
+
+
+
+
+
+
+
 def _report(report, *, passing=False):
     _require(isinstance(report, dict) and isinstance(report.get('canonical'), dict)
              and report.get('result_digest') == digest(report['canonical']), 'result_digest_mismatch')
@@ -609,95 +617,9 @@ def compare(report: dict, baseline_path: Path) -> dict:
     return result
 
 
-def _append_baseline(directory, name, check, previous_raw, previous_identity, entry):
-    """Append only to the admitted object; never replace, truncate or unlink a leaf."""
-    prefix = previous_raw if previous_identity is not None else _bytes({'schema_version': 2, 'history': []})
-    appended = (b'' if prefix.endswith(b'\n') else b'\n') + _bytes(entry) + b'\n'
-    commit = _bytes({'schema_version': 2, 'commit': entry['acceptance_digest']}) + b'\n'
-    expected = prefix + appended + commit
-    _require(len(expected) <= MAX_BASELINE_BYTES, 'baseline_history_limit')
-    flags = os.O_RDWR | os.O_APPEND | fsx.O_NOFOLLOW | fsx.O_NONBLOCK | fsx.O_CLOEXEC
-    if previous_identity is None:
-        flags |= os.O_CREAT | os.O_EXCL
-    descriptor = fsx.open_at(directory, name, flags, 0o600)
-    try:
-        before = os.fstat(descriptor)
-        inode = _inode(before)
-        if previous_identity is not None:
-            _require(_file_identity(before) == previous_identity, 'baseline_file_replaced')
-        def custody():
-            check()
-            info = os.fstat(descriptor)
-            _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and info.st_nlink == 1
-                     and stat.S_IMODE(info.st_mode) in {0o600, 0o644}
-                     and _inode(info) == inode and _inode(fsx.lstat_at(directory, name)) == inode,
-                     'baseline_file_replaced')
-        def write_all(raw):
-            pending = memoryview(raw)
-            while pending:
-                custody()
-                count = os.write(descriptor, pending)
-                _require(type(count) is int and 0 < count <= len(pending), 'baseline_write_unavailable')
-                pending = pending[count:]
-        write_all(appended if previous_identity is not None else prefix + appended)
-        os.fsync(descriptor)  # No commit marker is issued before the prepared entry is durable.
-        custody()
-        write_all(commit)
-        os.fsync(descriptor)
-        os.fsync(directory)
-        custody()
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        chunks, total = [], 0
-        while True:
-            custody()
-            chunk = os.read(descriptor, min(65536, MAX_BASELINE_BYTES + 1 - total))
-            if not chunk:
-                break
-            total += len(chunk)
-            _require(total <= MAX_BASELINE_BYTES, 'baseline_file_replaced')
-            chunks.append(chunk)
-        custody()
-        _require(b''.join(chunks) == expected, 'baseline_file_replaced')
-    finally:
-        os.close(descriptor)
 
 
 
-def accept_baseline(path: Path, report: dict, *, reason: str, scope: str) -> dict:
-    """Local acceptance with lock-mediated append visibility, not atomic leaf-CAS."""
-    canonical = _report(report, passing=True)
-    _require(all(isinstance(v, str) and 1 <= len(v) <= 512 and '\0' not in v for v in (reason, scope)), 'acceptance_reason_and_scope_required')
-    with _baseline_parent(path) as (directory, name, check):
-        with _baseline_lock(directory, exclusive=True):
-            check()
-            try:
-                fsx.lstat_at(directory, name + '.lock')
-            except FileNotFoundError:
-                pass
-            else:
-                raise EvalError('baseline_acceptance_busy')  # Never remove a legacy or foreign lock.
-            try:
-                previous_raw, _sha, previous_identity = _read_at(directory, name, MAX_BASELINE_BYTES, check, raw_bytes=True)
-                stored = _decode_baseline(previous_raw)
-            except EvalError as exc:
-                if str(exc) != 'input_missing':
-                    raise
-                stored, previous_identity = {'schema_version': 1, 'history': []}, None
-                previous_raw = b''
-            _require(len(stored['history']) < MAX_HISTORY, 'baseline_history_limit')
-            previous = stored['history'][-1]['acceptance_digest'] if stored['history'] else None
-            entry = {'canonical': canonical, 'result_digest': report['result_digest'], 'reason': reason, 'scope': scope,
-                     'accepted_at': datetime.now(timezone.utc).isoformat(), 'previous_digest': previous}
-            entry['acceptance_digest'] = digest(entry)
-            try:
-                _append_baseline(directory, name, check, previous_raw, previous_identity, entry)
-            except FileExistsError as exc:
-                raise EvalError('baseline_file_replaced') from exc
-            except OSError as exc:
-                raise EvalError('baseline_write_unavailable') from exc
-            check()
-            return {'status': 'accepted', 'baseline_id': entry['acceptance_digest'], 'result_digest': report['result_digest'],
-                    'previous_digest': previous, 'release_authority': False}
 
 
 def render_text(report: dict) -> str:
@@ -749,3 +671,8 @@ def required_suites(root: Path, mode: str) -> list[dict]:
         return checks
     except EvalError as exc:
         return [{'name': 'agent-eval:configuration', 'status': 'fail', 'summary': str(exc), 'details': []}]
+
+
+from .agent_eval_authoring import (  # noqa: E402, F401 exact CLI compatibility exports
+    _append_baseline, _critic_provenance, _review_measurements, _study, accept_baseline, review_quality,
+)

@@ -21,11 +21,14 @@ import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
+
+from tests._support import fixture_descriptor_path
 from unittest.mock import patch
 
 import yaml  # Load the qualified syntax reader before closing fixture I/O.
 from getzilla import expanded_security as expanded
 from getzilla import pytest_progress
+from getzilla import public_security_context
 from getzilla import security_cli as cli
 from getzilla import security_inventory as inventory
 from getzilla import security_oci as oci
@@ -66,10 +69,10 @@ def fixture_guard(base):
 
     def target(path, dir_fd=None):
         if isinstance(path, int):
-            return Path(os.readlink('/proc/self/fd/' + str(path))).resolve()
+            return Path(fixture_descriptor_path(path)).resolve()
         value = Path(os.fsdecode(path))
         if not value.is_absolute() and dir_fd is not None:
-            value = Path(os.readlink('/proc/self/fd/' + str(dir_fd))) / value
+            value = Path(fixture_descriptor_path(dir_fd)) / value
         return value.resolve()
 
     def check(path, *, directory=False, dir_fd=None):
@@ -132,6 +135,7 @@ class CoreApiTests(unittest.TestCase):
         self.guards.enter_context(fixture_guard(self.base))
         self.guards.enter_context(patch.object(inventory, '_tracked_files', side_effect=self.tracked))
         self.guards.enter_context(patch.object(cli, 'source_binding', side_effect=self.observed_source))
+        self.guards.enter_context(patch.object(public_security_context, 'source_binding', side_effect=self.observed_source))
         self.guards.enter_context(patch.object(cli, 'TRUSTED_ROOT', self.root))
         self.guards.enter_context(patch.object(tools, 'TRUSTED_ROOT', self.root))
         self.addCleanup(self.guards.close)
@@ -282,7 +286,7 @@ class CoreApiTests(unittest.TestCase):
                 public.project_catalog(json.loads(selected['image_artifacts'].read_text()), 'a' * 64)
             with self.assertRaises(SecurityDataError):
                 expanded.selected_inventory(self.root, environ=selected['environ'], now=NOW + timedelta(days=4))
-            with self.assertRaises(ValueError), patch.object(cli, 'source_binding', return_value=dict(source(), head_sha='f' * 40)):
+            with self.assertRaises(ValueError), patch.object(public_security_context, 'source_binding', return_value=dict(source(), head_sha='f' * 40)):
                 expanded.selected_inventory(self.root, environ=selected['environ'], now=NOW)
             selection = selected['image_selection']
             selection.write_text(selection.read_text().replace('TRUST_CI_RUNNER_IMAGE', 'ABSENT_RUNNER_IMAGE'))

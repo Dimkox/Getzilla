@@ -5,6 +5,8 @@ description: Use for routed software-development tasks. Keep one writer, indepen
 
 # Getzilla delivery
 
+Classify the final product inventory and select exactly one qualifying verifier. Use `--mode focused-static-seo-landing` for the single landing admitted by the static landing contract in AGENTS.md. For full delivery use `--mode pr` and for release work use `--mode release`. Do not run a preliminary full PR gate before a focused gate.
+
 Read the canonical route selected by the caller’s explicitly bound session and load its workflow skills. Use only selected agents. Keep exactly one writer per isolated task; review fixes return to that writer. Measure startup capacity before dispatch and bound concurrent workers to that capacity. Dispatch all independent selected analyses in one wave, then synthesize their findings before implementation. Give each analysis the route ID, canonical root, selected package, narrow question and runtime report destination.
 
 The initial route is provisional. After committing source and before reviewer dispatch, run `python3 scripts/getzilla_route.py --reconcile --json`. The complete assessment binds the trusted comparison bases, HEAD/tree, rule digest and review plan. Each change has one ordinary code review covering correctness and test adequacy. Security, data and release audits require both a changed sensitivity category and risk threshold from the diff policy; prompt wording and repository domains do not select them. Incomplete source inventory blocks qualification. The final verifier rederives the plan and rejects stale evidence.

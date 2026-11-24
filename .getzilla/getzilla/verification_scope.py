@@ -29,9 +29,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
-from pathlib import PurePosixPath
-from typing import Iterable
+from pathlib import Path, PurePosixPath
+from typing import Iterable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .git_ranges import GitRangeSelection
+
 
 SCHEMA_VERSION = 1
 DOCS_STATE_PROFILE = 'docs-state-focused'
@@ -383,3 +388,555 @@ def focused_command(test_targets: list[str]) -> list[str]:
         'unittest',
         *test_targets,
     ]
+
+
+# Shared source inventory and tool applicability. These selectors execute no checks.
+
+_STATIC_LANDING_PREFIX = 'side-projects/seo-landings/'
+
+
+_FOCUSED_LANDING_TEST_NAME = re.compile(
+    r'^test_(?P<landing>[A-Za-z0-9][A-Za-z0-9_-]*?)_seo_landing(?:_[A-Za-z0-9_-]+)?\.py$'
+)
+
+
+_CHANGE_PACKAGE_PREFIX = re.compile(
+    r'^(?:engineering|\.getzilla/runtime)/changes/[A-Za-z0-9][A-Za-z0-9._-]*$'
+)
+
+
+_SAFE_FOCUSED_FILE_STATUSES = {'A', 'M', '??'}
+
+
+QUALITY_PY_PATHS = (
+    '.getzilla/getzilla',
+    '.getzilla/integrations',
+    'scripts',
+    'tests',
+    '.getzilla/hooks',
+    'user_prompt_submit.py',
+    'pre_tool_use.py',
+    'post_tool_use.py',
+    'pre_compact.py',
+    'session_start.py',
+    'session_end.py',
+    'stop_gate.py',
+    'subagent_start.py',
+    'subagent_stop.py',
+    'factory/src/getzilla_factory',
+)
+
+
+_SEMGREP_CONFIGS = ('semgrep.yaml', '.semgrep.yml', '.semgrep.yaml')
+
+
+_TRIVY_FILES = ('Dockerfile', 'dockerfile', 'Containerfile')
+
+
+NODE_LOCKFILES = (('package-lock.json', 'npm'), ('npm-shrinkwrap.json', 'npm'), ('pnpm-lock.yaml', 'pnpm'),
+                  ('yarn.lock', 'yarn'))
+
+
+def _changed_file_inventory(
+    root: Path,
+    route: dict[str, object] | None,
+    mode: str,
+    selection: GitRangeSelection,
+) -> tuple[list[str], dict[str, object]]:
+    from .git_ranges import FOCUSED_STATIC_SEO_LANDING_MODE, _RANGE_MODES
+    from .util import changed_files, changed_file_statuses
+    if mode not in _RANGE_MODES:
+        route_base = route.get('base_commit') if route else None
+        files = changed_files(root, route_base if isinstance(route_base, str) else None)
+        return files, {
+            'mode': 'route-base',
+            'bases': ([{
+                'kind': 'route',
+                'source': 'route.base_commit',
+                'base': route_base,
+                'target': route_base,
+                'count': len(files),
+            }] if isinstance(route_base, str) else []),
+            'worktree_count': len(changed_files(root)),
+            'union_count': len(files),
+        }
+
+    if mode == FOCUSED_STATIC_SEO_LANDING_MODE:
+        worktree_files = set(changed_files(root))
+        union = set(worktree_files)
+        status_records = changed_file_statuses(root)
+        status_inventory_trusted = status_records is not None
+        status_findings: list[dict[str, str]] = []
+        if status_records is None:
+            status_findings.append({
+                'severity': 'error',
+                'code': 'file-status-inventory-unavailable',
+                'path': 'git',
+                'message': 'focused verification could not obtain a status-preserving Git inventory',
+            })
+            status_records = []
+        for item in status_records:
+            for key in ('path', 'original_path'):
+                path = item.get(key)
+                if isinstance(path, str):
+                    union.add(path)
+
+        bases: list[dict[str, object]] = []
+        for selected in selection.bases:
+            files = set(changed_files(root, selected.comparison_base_sha))
+            union.update(files)
+            ranged_statuses = changed_file_statuses(
+                root,
+                selected.comparison_base_sha,
+                include_worktree=False,
+                include_untracked=False,
+            )
+            if ranged_statuses is None:
+                status_inventory_trusted = False
+                status_findings.append({
+                    'severity': 'error',
+                    'code': 'file-status-inventory-unavailable',
+                    'path': selected.source,
+                    'message': 'focused verification could not obtain status for the selected Git range',
+                })
+            else:
+                for item in ranged_statuses:
+                    item['source'] = f'range:{selected.comparison_base_sha}'
+                    status_records.append(item)
+                    for key in ('path', 'original_path'):
+                        path = item.get(key)
+                        if isinstance(path, str):
+                            union.add(path)
+            bases.append({
+                'kind': selected.kind,
+                'source': selected.source,
+                'base': selected.comparison_base_sha,
+                'target': selected.target_sha,
+                'count': len(files),
+            })
+        return sorted(union), {
+            'mode': 'range-union',
+            'bases': bases,
+            'worktree_count': len(worktree_files),
+            'union_count': len(union),
+            'selection_findings': list(selection.findings),
+            'status_records': status_records,
+            'status_inventory_trusted': status_inventory_trusted,
+            'status_findings': status_findings,
+        }
+
+    worktree_files = set(changed_files(root))
+    union = set(worktree_files)
+    bases: list[dict[str, object]] = []
+    for selected in selection.bases:
+        files = set(changed_files(root, selected.comparison_base_sha))
+        union.update(files)
+        bases.append({
+            'kind': selected.kind,
+            'source': selected.source,
+            'base': selected.comparison_base_sha,
+            'target': selected.target_sha,
+            'count': len(files),
+        })
+    return sorted(union), {
+        'mode': 'range-union',
+        'bases': bases,
+        'worktree_count': len(worktree_files),
+        'union_count': len(union),
+        'selection_findings': list(selection.findings),
+    }
+
+
+def _is_valid_inventory_path(value: object) -> bool:
+    return is_valid_inventory_path(value)
+
+
+def _is_focused_landing_test(path: str, change_package: str | None) -> bool:
+    basename = PurePosixPath(path).name
+    if _FOCUSED_LANDING_TEST_NAME.fullmatch(basename) is None:
+        return False
+    if path.startswith('tests/'):
+        return True
+    return (
+        change_package is not None
+        and path.startswith(f'{change_package}/evidence/')
+        and path.startswith('engineering/changes/')
+    )
+
+
+def _normalize_landing_key(value: str) -> str:
+    return re.sub(r'[-_]+', '_', value).strip('_').lower()
+
+
+def _focused_test_landing_key(path: str) -> str | None:
+    match = _FOCUSED_LANDING_TEST_NAME.fullmatch(PurePosixPath(path).name)
+    if match is None:
+        return None
+    return _normalize_landing_key(match.group('landing'))
+
+
+def _safe_inventory_value(value: object) -> str:
+    try:
+        rendered = repr(value)
+    except Exception:
+        rendered = f'<unrepresentable {type(value).__name__}>'
+    if not isinstance(rendered, str):
+        rendered = f'<unrepresentable {type(value).__name__}>'
+    rendered = ''.join(
+        character if ord(character) >= 32 else f'\\x{ord(character):02x}'
+        for character in rendered
+    )
+    return rendered[:512]
+
+
+def _focused_file_status_findings(
+    file_statuses: object,
+    status_inventory_trusted: bool | None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    """Validate the status side-channel used only by focused classification."""
+    invalid: list[dict[str, str]] = []
+    unsafe: list[dict[str, str]] = []
+    if status_inventory_trusted is False:
+        return invalid, unsafe, [{
+            'severity': 'error',
+            'code': 'file-status-inventory-unavailable',
+            'path': 'git',
+            'message': 'focused verification requires a trusted status-preserving Git inventory',
+        }]
+    if not isinstance(file_statuses, list):
+        invalid.append({
+            'severity': 'error',
+            'code': 'file-status-ambiguous',
+            'path': 'git',
+            'message': 'status-preserving Git inventory is not a list of records',
+        })
+        return invalid, unsafe, []
+
+    for raw in file_statuses:
+        if not isinstance(raw, dict):
+            invalid.append({
+                'severity': 'error',
+                'code': 'file-status-ambiguous',
+                'path': _safe_inventory_value(raw),
+                'message': 'Git status record is not an object',
+            })
+            continue
+        status = raw.get('status')
+        path = raw.get('path')
+        original_path = raw.get('original_path')
+        if (
+            not isinstance(status, str)
+            or not status
+            or not isinstance(path, str)
+            or not _is_valid_inventory_path(path)
+            or (
+                original_path is not None
+                and (
+                    not isinstance(original_path, str)
+                    or not _is_valid_inventory_path(original_path)
+                )
+            )
+        ):
+            invalid.append({
+                'severity': 'error',
+                'code': 'file-status-ambiguous',
+                'path': _safe_inventory_value(path),
+                'message': 'Git status record has a missing or malformed path/status',
+            })
+            continue
+        if status in _SAFE_FOCUSED_FILE_STATUSES and original_path is not None:
+            invalid.append({
+                'severity': 'error',
+                'code': 'file-status-ambiguous',
+                'path': path,
+                'message': 'a safe Git status record unexpectedly has an original path',
+            })
+            continue
+        if status not in _SAFE_FOCUSED_FILE_STATUSES:
+            finding = {
+                'severity': 'error',
+                'code': 'unsafe-file-status',
+                'status': status,
+                'path': path,
+                'message': 'focused verification rejects deleted, renamed, copied, or ambiguous Git statuses',
+            }
+            if isinstance(original_path, str):
+                finding['original_path'] = original_path
+            source = raw.get('source')
+            if isinstance(source, str):
+                finding['source'] = source
+            unsafe.append(finding)
+    return invalid, unsafe, []
+
+
+def select_static_seo_landing_scope(
+    files: list[object],
+    *,
+    change_package: str | None = None,
+    range_findings: list[dict[str, str]] | None = None,
+    range_base_count: int | None = None,
+    file_statuses: object = None,
+    status_inventory_trusted: bool | None = None,
+) -> dict[str, object]:
+    """Classify an inventory for the explicit static-landing verifier.
+
+    This is intentionally a closed selector.  A focused run is eligible only when
+    it has landing-source paths, exactly one explicitly named landing contract, and
+    no unrecognized product path or unresolved comparison inventory.  The caller
+    must use the existing PR verifier for every ``full-pr`` result.
+    """
+    scope: dict[str, object] = {
+        'eligible': False,
+        'profile': 'full-pr',
+        'reason': '',
+        'landing_files': [],
+        'landing_directories': [],
+        'selected_landing_directory': None,
+        'focused_tests': [],
+        'focused_test_landing': None,
+        'ignored_files': [],
+        'rejected_files': [],
+        'reason_code': 'inventory-unclassified',
+        'rejection': None,
+        'status_inventory_trusted': status_inventory_trusted,
+        'status_findings': [],
+        'unsafe_file_statuses': [],
+    }
+    if not isinstance(files, list) or not files:
+        scope['reason'] = 'changed-file inventory is missing or empty'
+        return scope
+
+    if change_package is not None and (
+        not isinstance(change_package, str)
+        or not _CHANGE_PACKAGE_PREFIX.fullmatch(change_package)
+    ):
+        scope['reason'] = 'active change-package path is invalid'
+        return scope
+
+    landing_files: list[str] = []
+    focused_tests: list[str] = []
+    ignored_files: list[str] = []
+    rejected_files: list[str] = []
+    normalized_files: list[str] = []
+    for raw in files:
+        if not isinstance(raw, str):
+            rejected_files.append(_safe_inventory_value(raw))
+            continue
+        rel = str.__str__(raw)
+        if not _is_valid_inventory_path(rel):
+            rejected_files.append(_safe_inventory_value(raw))
+            continue
+        normalized_files.append(rel)
+
+    for rel in sorted(set(normalized_files)):
+        if rel.startswith(_STATIC_LANDING_PREFIX):
+            landing_files.append(rel)
+        elif _is_focused_landing_test(rel, change_package):
+            focused_tests.append(rel)
+        elif change_package and rel.startswith(f'{change_package}/'):
+            # The active change package is workflow evidence, not product scope.
+            ignored_files.append(rel)
+        else:
+            rejected_files.append(rel)
+
+    scope['landing_files'] = landing_files
+    scope['landing_directories'] = sorted({
+        rel[len(_STATIC_LANDING_PREFIX):].split('/', 1)[0]
+        for rel in landing_files
+    })
+    if len(scope['landing_directories']) == 1:
+        scope['selected_landing_directory'] = scope['landing_directories'][0]
+    scope['focused_tests'] = focused_tests
+    if len(focused_tests) == 1:
+        scope['focused_test_landing'] = _focused_test_landing_key(focused_tests[0])
+    scope['ignored_files'] = ignored_files
+    scope['rejected_files'] = rejected_files
+
+    status_metadata_supplied = file_statuses is not None or status_inventory_trusted is not None
+    if status_metadata_supplied:
+        invalid_statuses, unsafe_statuses, status_findings = _focused_file_status_findings(
+            file_statuses,
+            status_inventory_trusted,
+        )
+        scope['status_findings'] = invalid_statuses + status_findings
+        scope['unsafe_file_statuses'] = unsafe_statuses
+
+    if scope['status_findings']:
+        first = scope['status_findings'][0]
+        scope['reason_code'] = str(first['code'])
+        scope['reason'] = str(first['message'])
+    elif scope['unsafe_file_statuses']:
+        scope['reason_code'] = 'unsafe-file-status'
+        scope['reason'] = 'deleted, renamed, copied, or ambiguous Git file status is present'
+    elif range_findings:
+        scope['reason_code'] = 'comparison-inventory-incomplete'
+        scope['reason'] = 'comparison inventory is incomplete or ambiguous'
+    elif range_base_count is not None and range_base_count < 1:
+        scope['reason_code'] = 'comparison-inventory-untrusted'
+        scope['reason'] = 'comparison inventory has no trusted base'
+    elif rejected_files:
+        scope['reason_code'] = 'out-of-scope-or-invalid-paths'
+        scope['reason'] = 'out-of-scope or invalid changed paths are present'
+    elif not landing_files:
+        scope['reason_code'] = 'landing-source-missing'
+        scope['reason'] = 'no static SEO landing source changed'
+    elif len(scope['landing_directories']) != 1:
+        scope['reason_code'] = 'landing-directory-ambiguous'
+        scope['reason'] = 'multiple static SEO landing directories are ambiguous'
+    elif not focused_tests:
+        scope['reason_code'] = 'focused-test-missing'
+        scope['reason'] = 'focused test is missing'
+    elif len(focused_tests) != 1:
+        scope['reason_code'] = 'focused-test-ambiguous'
+        scope['reason'] = 'focused landing test path is ambiguous'
+    elif scope['focused_test_landing'] != _normalize_landing_key(str(scope['selected_landing_directory'])):
+        scope['reason_code'] = 'focused-test-landing-mismatch'
+        scope['reason'] = 'focused test does not match the selected landing directory'
+        scope['rejection'] = {
+            'code': 'focused-test-landing-mismatch',
+            'message': scope['reason'],
+            'landing_directory': scope['selected_landing_directory'],
+            'focused_test': focused_tests[0],
+            'focused_test_landing': scope['focused_test_landing'],
+        }
+    else:
+        scope['eligible'] = True
+        scope['profile'] = 'static-seo-landing'
+        scope['reason_code'] = 'eligible'
+        scope['reason'] = 'landing-only inventory with one focused contract'
+    scope['checked_files'] = sorted(landing_files + focused_tests)
+    return scope
+
+
+def composer_check_selection(root: Path) -> list[tuple[str, list[str]]]:
+    """The exact existing installed Composer tools; no tool is installed or executed."""
+    return [(name, args) for name, path, args in (
+        ('phpunit', 'vendor/bin/phpunit', ['vendor/bin/phpunit']),
+        ('phpstan', 'vendor/bin/phpstan', ['vendor/bin/phpstan', 'analyse', '--no-progress']),
+        ('phpcs', 'vendor/bin/phpcs', ['vendor/bin/phpcs']),
+        ('deptrac', 'vendor/bin/deptrac', ['vendor/bin/deptrac', 'analyse']),
+    ) if (root / path).is_file()]
+
+
+def _existing_quality_paths(root: Path) -> list[str]:
+    """Getzilla's own Python paths plus every top-level tree that holds the project's tracked Python."""
+    from .util import run
+    paths = [rel for rel in QUALITY_PY_PATHS if (root / rel).exists()]
+    proc = run(['git', 'ls-files', '-z', '--', '*.py'], cwd=root, timeout=60)
+    if proc.returncode == 0:
+        for rel in proc.stdout.split('\0'):
+            # Dot directories hold generated hook mirrors and tool state, not product code.
+            # A name that starts with '-' would read as an option of ruff or bandit.
+            if not rel or rel.startswith(('.', '-')) or not (root / rel).is_file():
+                continue
+            top = rel.split('/', 1)[0]
+            if top not in paths:
+                paths.append(top)
+    return [rel for rel in paths if not any(rel.startswith(other + '/') for other in paths)]
+
+
+def _semgrep_config(root: Path) -> str | None:
+    config: str | None = None
+    for name in _SEMGREP_CONFIGS:
+        if (root / name).is_file():
+            config = name
+            break
+    if config is None:
+        semgrep_dir = root / '.semgrep'
+        if semgrep_dir.is_dir():
+            try:
+                next(semgrep_dir.iterdir())
+            except StopIteration:
+                pass
+            else:
+                config = '.semgrep'
+    return config
+
+
+def _trivy_config_present(root: Path) -> bool:
+    return any((root / name).is_file() for name in _TRIVY_FILES) or bool(
+        list(root.glob('docker-compose*.yml')) or list(root.glob('docker-compose*.yaml'))
+    )
+
+
+def node_check_selection(root: Path, mode: str) -> tuple[dict, str, str | None, list[str]]:
+    """Declare the same manifest, lock and script IDs used below, without running tools."""
+    scripts = json.loads((root / 'package.json').read_text(encoding='utf-8')).get('scripts', {})
+    if not isinstance(scripts, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in scripts.items()):
+        raise ValueError('invalid package scripts')
+    manager, lockfile = node_lockfile(root)
+    names = ['package-json', 'node-tooling']
+    if mode in {'pr', 'release'}:
+        names.append('node-lockfile')
+        if lockfile is not None:
+            names.append(manager + '-install')
+    names.extend(manager + '-' + name for name in ('lint', 'typecheck', 'test', 'prettier', 'format',
+                 *(['build'] if mode in {'pr', 'release'} else [])) if name in scripts)
+    if 'typecheck' not in scripts and (root / 'tsconfig.json').is_file() and mode in {'pr', 'release'}:
+        names.append('tsc')
+    return scripts, manager, lockfile, names
+
+
+def node_lockfile(root: Path) -> tuple[str, str | None]:
+    """The package manager the lockfile implies, and the lockfile (None: not reproducible)."""
+    for name, manager in NODE_LOCKFILES:
+        if (root / name).is_file():
+            return manager, name
+    return 'npm', None
+
+
+def python_check_selection(root: Path) -> tuple[bool, bool]:
+    from .util import command_exists
+    has_project = any((root / item).exists() for item in ('pyproject.toml', 'requirements.txt', 'setup.py'))
+    tests_dir = root / 'tests'
+    return (has_project and command_exists('pytest') and tests_dir.is_dir(),
+            tests_dir.is_dir() and any(tests_dir.glob('test*.py')))
+
+
+def _docs_state_status_inventory(
+    root: Path,
+    selection: GitRangeSelection,
+) -> tuple[list[dict[str, object]], bool]:
+    """Collect status records for the documentation/state decision only.
+
+    This read deliberately disables rename and copy detection, while the landing selector's
+    shared helper keeps them on. Git scores a freshly scaffolded change package as a copy of
+    an older one (`C085` plus an `original_path`), so with copy detection every pull request
+    that carries its own evidence would be pushed to the full suite and the focused profile
+    would never fire at all. Under `--no-renames` a scaffolded package is what it actually
+    is — additions — while any *removed* path still reports `D`, which is the one shape that
+    could hide a source file behind a documentation name.
+
+    The records come from the shared name-status helper in `util`, called with rename/copy
+    detection off and with the same untracked collection the changed-file inventory performs,
+    so this veto channel spans exactly the path domain it guards instead of a subset of it.
+    The PR/release changed-file inventory itself stays byte-unchanged: this side channel
+    feeds a scope decision and must not widen what the full suite already inspects.
+    """
+    from .util import changed_file_statuses
+    records: list[dict[str, object]] = []
+    trusted = True
+
+    def merge(part: list[dict[str, str]] | None, source: str | None) -> None:
+        nonlocal trusted
+        if part is None:
+            trusted = False
+            return
+        for item in part:
+            if source is not None:
+                item['source'] = source
+            records.append(item)
+
+    merge(changed_file_statuses(root, rename_detection=False), None)
+    for selected in selection.bases:
+        merge(
+            changed_file_statuses(
+                root,
+                selected.comparison_base_sha,
+                include_worktree=False,
+                include_untracked=False,
+                rename_detection=False,
+            ),
+            f'range:{selected.comparison_base_sha}',
+        )
+    return records, trusted

@@ -175,6 +175,8 @@ class ReviewPlanTests(unittest.TestCase):
         self.write('app.py', 'value = 2\n')
         self.commit()
         self.route()
+        from tests._support import synchronize_fixture_scope
+        synchronize_fixture_scope(self.root)
         current = self.reconcile()
         from tests._support import observed_context
         write_receipt(self.root, 'verification', 'pass', expected_context=observed_context(self.root))

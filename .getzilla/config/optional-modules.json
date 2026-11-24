@@ -30,6 +30,96 @@
           "sha256": "0230f21451c0c26196dac38ac88c7661b0aa9de4c470e2be91ff0adcdac7351b"
         }
       }
+    },
+    "reverse-engineering": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/reverse-engineering/0.1.0/module.json",
+          "sha256": "fbd153fdd83b6f44645158ca97fe749b730522fe7f6fb308169f3928c8e44b62"
+        }
+      }
+    },
+    "context-retrieval": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/context-retrieval/0.1.0/module.json",
+          "sha256": "8fe30af96235f740cdf13f6b26a9532f77eb0c32a612d871a52846d57662f84c"
+        }
+      }
+    },
+    "context-hook-grok": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/context-hook-grok/0.1.0/module.json",
+          "sha256": "4d7ca1492041dbecbb9284888d803d8a087348e3a9aa8a3f76dd0478e6115555"
+        }
+      }
+    },
+    "context-hook-claude": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/context-hook-claude/0.1.0/module.json",
+          "sha256": "a479da661692a37f75aade2986182bfd18a38e97d1c7cb6aa99c0fb685d04367"
+        }
+      }
+    },
+    "context-hook-codex": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/context-hook-codex/0.1.0/module.json",
+          "sha256": "f1f95d27613bf32734552240e062e8b6498241e7b15f9856d37fd96a92b0b353"
+        }
+      }
+    },
+    "context-hook-copilot": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/context-hook-copilot/0.1.0/module.json",
+          "sha256": "9ada326676465cb5dc8b11c1ad4703bb2d40439a32d5eac6e2166588de812610"
+        }
+      }
+    },
+    "context-hook-gemini": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/context-hook-gemini/0.1.0/module.json",
+          "sha256": "0e7852f421afd15448b4532d301f04e1275391aac9aa458d6eaa3c53a230def8"
+        }
+      }
+    },
+    "context-hook-qwen": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/context-hook-qwen/0.1.0/module.json",
+          "sha256": "0873a2cc87d05172ed5c25aeabf9478ff7e80faefdaeebce0e0fcc78552acb01"
+        }
+      }
+    },
+    "mcp-jira": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/mcp-jira/0.1.0/module.json",
+          "sha256": "f9dfb1f6c33f9f6ea6523af001b19335212c60f653951a855b59c821de3f51c9"
+        }
+      }
+    },
+    "retrieval-research": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/retrieval-research/0.1.0/module.json",
+          "sha256": "b6b337b7dd2f275c5972d710dc96c61c6369bce1c8782e3eb1505e71f92590d7"
+        }
+      }
     }
   }
 }

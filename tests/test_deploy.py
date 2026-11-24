@@ -69,7 +69,15 @@ class DeployTests(unittest.TestCase):
         self.assertTrue(result['ok'])
         self.assertFalse(result['recorded'])
         self.assertEqual(result['head_sha'], 'a' * 40)
-        self.assertIn('adaptive-trust-ci/verified', result['notice'])
+        self.assertIn('GitHub Actions', result['notice'])
+        self.assertIn('getzilla-security/verified@<policy-sha12>', result['notice'])
+        self.assertIn('adaptive-trust-ci/verified@<policy-sha12>', result['notice'])
+        self.assertFalse(result['external_checks_observed'])
+        contracts = result['external_status_contracts']
+        self.assertEqual(contracts['public']['gate'], 'github-actions')
+        self.assertEqual(contracts['private']['gate'], 'trust-ci')
+        self.assertEqual(contracts['public']['security_context_condition'], 'only if separately selected and qualified')
+        self.assertFalse(contracts['local_evidence_is_remote_authority'])
 
     def test_recording_prepare_requires_exact_github_release_grant(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -104,7 +112,13 @@ class DeployTests(unittest.TestCase):
         approval.assert_called_once_with(root, 'production', action='github-release')
         details = write_receipt.call_args.kwargs['details']
         self.assertEqual(details['head_sha'], 'a' * 40)
-        self.assertEqual(details['external_status_required'], 'adaptive-trust-ci/verified')
+        self.assertFalse(details['external_checks_observed'])
+        self.assertIn('repository-selected', details['external_status_required'])
+        contracts = details['external_status_contracts']
+        self.assertEqual(contracts['public']['security_context'], 'getzilla-security/verified@<policy-sha12>')
+        self.assertEqual(contracts['private']['security_context'], 'adaptive-trust-ci/verified@<policy-sha12>')
+        self.assertEqual(contracts['public']['app_binding'], 'approved numeric GitHub App ID')
+        self.assertTrue(contracts['exact_head_required'])
 
 
 if __name__ == '__main__':

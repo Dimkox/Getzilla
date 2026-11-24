@@ -24,6 +24,34 @@ FAIL = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self):
 @unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
 class FactoryDiscoveryTests(unittest.TestCase):
 
+    def test_new_database_cases_keep_exact_unit_only_applicability(self):
+        groups = (
+            'test_access_release_postgres.AccessReleasePostgresTests',
+            'test_factory_stop.FactoryStopAuthorityTests',
+            'test_factory_stop_migration.FactoryStopMigrationTests',
+            'test_result_grade_postgres.ResultGradePostgresTests',
+        )
+        cases = ['factory.tests.' + group + '.test_database' for group in groups]
+        cases.append('factory.tests.test_landing_failover_cli.UnixCallerTests.'
+                     'test_absent_primary_real_unix_secondary_lost_post_recovers_existing_winner')
+        for identifier in cases:
+            with self.subTest(identifier=identifier):
+                allowed = factory_tests.skip_allowance(identifier, {'unit_database_bindings': 'scrubbed'})
+                self.assertIsNotNone(allowed)
+                self.assertEqual(allowed[0], 'separate-disposable-postgres')
+                self.assertIsNone(factory_tests.skip_allowance(identifier, {'unit_database_bindings': 'present',
+                    'host_supported': True, 'jsonschema_cli': True}))
+        self.assertIsNone(factory_tests.skip_allowance(
+            'factory.tests.test_landing_failover_cli.UnixCallerTests.test_other',
+            {'unit_database_bindings': 'scrubbed', 'host_supported': True, 'jsonschema_cli': True}))
+
+    def test_linux_only_factory_cases_require_exact_id_and_observed_platform(self):
+        known = 'factory.tests.test_local_writer.LocalWriterTests.test_out_of_scope_change_is_refused'
+        self.assertIsNotNone(factory_tests.skip_allowance(known, {'linux_kernel': False}))
+        self.assertIsNone(factory_tests.skip_allowance(known, {'linux_kernel': True}))
+        self.assertIsNone(factory_tests.skip_allowance(known, {}))
+        self.assertIsNone(factory_tests.skip_allowance(known + '_other', {'linux_kernel': False}))
+
     def test_readonly_source_binding_import_does_not_load_component_owner(self):
         source_root = Path(__file__).resolve().parents[1] / '.getzilla'
         script = (

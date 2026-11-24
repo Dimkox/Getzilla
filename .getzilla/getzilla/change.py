@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from . import package_status as _package_status
 from .package_status import (collect_worktree, read_package_file,
                              synchronize_accounting as synchronize_accounting)
 from .state import (get_active_route, set_active_change, update_route, serialized_task,
@@ -14,6 +15,8 @@ from .state import (get_active_route, set_active_change, update_route, serialize
 from .spec import dump_canonical_spec, generate_spec
 from .util import dump_json, now_utc
 from .workflow_storage import change_directory
+
+_sync_receipt_obligations = _package_status.synchronize_review_accounting
 
 GOVERNANCE_AUTHORITY_NOTICE = (
     "Canonical governance JSON under `governance/` remains separately reviewed "
@@ -140,6 +143,7 @@ def _complete_package(root: Path, path: Path, route: dict[str, Any], change_id: 
     return value
 
 
+
 def _create_package(root: Path, path: Path, route: dict[str, Any], change_id: str, title: str) -> dict[str, Any]:
     template = root / '.getzilla/templates/change'
     if any(item.is_symlink() for item in template.rglob('*')):
@@ -212,6 +216,12 @@ def transition(root: Path, change_id: str, target: str, reason: str, *,
     require_route_owner(root, route)
     if route.get('change_id') != change_id:
         raise ValueError('package transition requires its canonical task owner')
+    if target in {'implementing','verifying','reviewing','ready','released'} and (route.get('context') or {}).get('version') == 2:
+        try:
+            from .intake_publication import require_intake_ready
+            require_intake_ready(root,route,operation_class='implementation-transition')
+        except Exception as error:
+            raise ValueError('semantic intake does not admit this transition') from error
     if target in {'verifying', 'reviewing', 'ready', 'released'}:
         gaps = scope_gaps(root, route)
         if gaps:

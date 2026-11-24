@@ -3,8 +3,8 @@
 A generation is written and verified inside one IMMEDIATE transaction; the pointer moves only after
 the rows read back to the same generation id, and only if it still names the generation the
 writer started from (so concurrent writers cannot publish a mixed or lost update). Readers see
-the old or the new complete generation. A corrupt file or another schema version is moved aside
-and rebuilt; correctness never depends on the cache surviving. The default path
+the old or the new complete generation. Unrecognized or incompatible files are preserved and
+refused; a caller can select a fresh cache path. The default path
 `.getzilla/index/graph.sqlite` is local state: Zero-Git writes it into `.git/info/exclude` and the
 repository ignores it, so it is never part of a source digest or a commit.
 """
@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sqlite3
-import time
 from pathlib import Path
 from typing import Any
 
+from .. import fsx
 from .builder import build_generation
+from .cache_custody import CacheCustody
 from .models import (
     CallEdge, FileNode, GraphCoverage, GraphError, GraphGeneration, GraphInput, ImportEdge, ParsedFile, RawCall,
     RawImport, Span, SymbolNode,
@@ -25,6 +27,12 @@ from .models import (
 
 STORE_SCHEMA = 'getzilla-code-graph-store-v1'
 DEFAULT_CACHE = Path('.getzilla') / 'index' / 'graph.sqlite'
+_TABLES = {
+    'meta': 'CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+    'generations': 'CREATE TABLE generations(id TEXT PRIMARY KEY, input_identity TEXT NOT NULL,'
+                   ' body TEXT NOT NULL, parsed TEXT NOT NULL, complete INTEGER NOT NULL)',
+    'active': 'CREATE TABLE active(slot INTEGER PRIMARY KEY CHECK (slot = 1), generation_id TEXT NOT NULL)',
+}
 
 
 def _symbol(data: dict[str, Any]) -> SymbolNode:
@@ -71,70 +79,108 @@ def generation_from_record(body: dict[str, Any], parsed: dict[str, Any]) -> Grap
 
 
 class GraphStore:
-    def __init__(self, path: Path) -> None:
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, path: Path, *, readonly: bool = False, private_parent: int | None = None) -> None:
+        self.readonly = readonly
+        self._read_guard = None
+        self.db = None
         self.rebuilt_reason: str | None = None
-        self._open()
+        self._custody = CacheCustody(path, create=not readonly, private_parent=private_parent)
+        self.path = self._custody.path
+        try:
+            if private_parent is not None and not self._custody.missing:
+                self.path = fsx.held_directory_address(self._custody.parent) / self._custody.name
+            if self._custody.missing:
+                return
+            if readonly:
+                # immutable SQLite must see an unchanged file. Cooperating
+                # writers retain exclusive custody through each checkpoint.
+                self._read_guard = self._custody.locked(exclusive=False)
+                self._read_guard.__enter__()
+            with contextlib.nullcontext() if readonly else self._custody.locked():
+                if not self._custody.created and self._recognize() != STORE_SCHEMA:
+                    raise GraphError('CACHE_SCHEMA_MISMATCH')
+                self.db = self._connect()
+                if not readonly:
+                    self._create()
+        except BaseException:
+            self.close()
+            raise
+
+    def _recognize(self) -> str:
+        if self._custody.header() != b'SQLite format 3\x00':
+            raise GraphError('CACHE_UNRECOGNIZED')
+        connection = None
+        try:
+            self._custody.check()
+            connection = sqlite3.connect(self.path.as_uri() + '?mode=ro&immutable=1',
+                                         uri=True, isolation_level=None)
+            self._custody.check()
+            rows = connection.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").fetchall()
+            if {row[1]: row for row in rows} != {
+                name: ('table', name, name, sql) for name, sql in _TABLES.items()
+            } or connection.execute('PRAGMA user_version').fetchone() != (0,):
+                raise GraphError('CACHE_UNRECOGNIZED')
+            row = connection.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+            if row is None or re.fullmatch(r'getzilla-code-graph-store-v[0-9]+', row[0]) is None:
+                raise GraphError('CACHE_UNRECOGNIZED')
+            if connection.execute('PRAGMA quick_check').fetchone() != ('ok',):
+                raise GraphError('CACHE_CORRUPT')
+            self._custody.check()
+            return row[0]
+        except sqlite3.Error as error:
+            raise GraphError('CACHE_UNRECOGNIZED') from error
+        finally:
+            if connection is not None:
+                connection.close()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.path), timeout=30, isolation_level=None)
+        self._custody.check()
+        suffix = '?mode=ro&immutable=1' if self.readonly else '?mode=rw'
+        connection = sqlite3.connect(self.path.as_uri() + suffix, uri=True, timeout=30, isolation_level=None)
         try:
-            connection.execute('PRAGMA journal_mode=WAL')
-            connection.execute('PRAGMA synchronous=FULL')
-        except sqlite3.Error:
+            self._custody.check()
+            if not self.readonly:
+                connection.execute('PRAGMA journal_mode=WAL')
+                self._custody.check()
+                connection.execute('PRAGMA synchronous=FULL')
+        except BaseException:
             connection.close()  # Windows cannot move a file that an open handle still holds
             raise
         return connection
 
-    def _open(self) -> None:
-        try:
-            self.db = self._connect()
-            if self.db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
-                raise sqlite3.DatabaseError('quick_check failed')
-            tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if tables and 'meta' not in tables:
-                raise sqlite3.DatabaseError('not a graph store')
-            if 'meta' in tables:
-                row = self.db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
-                if row is None or row[0] != STORE_SCHEMA:
-                    self._discard('SCHEMA_MISMATCH')
-                    return
-        except sqlite3.DatabaseError:
-            self._discard('CORRUPT_CACHE')
-            return
-        self._create()
-
-    def _discard(self, reason: str) -> None:
-        handle = getattr(self, 'db', None)  # absent when the first connect already failed
-        if handle is not None:
-            with contextlib.suppress(sqlite3.Error):
-                handle.close()
-        aside = self.path.with_name(f'{self.path.name}.{reason.lower()}-{time.time_ns()}')
-        for suffix in ('', '-wal', '-shm'):
-            candidate = Path(str(self.path) + suffix)
-            if candidate.exists():
-                candidate.replace(Path(str(aside) + suffix))
-        self.rebuilt_reason = reason
-        self.db = self._connect()
-        self._create()
-
     def _create(self) -> None:
-        self.db.executescript(
-            "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-            "CREATE TABLE IF NOT EXISTS generations(id TEXT PRIMARY KEY, input_identity TEXT NOT NULL,"
-            " body TEXT NOT NULL, parsed TEXT NOT NULL, complete INTEGER NOT NULL);"
-            "CREATE TABLE IF NOT EXISTS active(slot INTEGER PRIMARY KEY CHECK (slot = 1), generation_id TEXT NOT NULL);")
+        self._custody.check()
+        self.db.executescript(';'.join(sql.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS ', 1)
+                                      for sql in _TABLES.values()) + ';')
         self.db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema', ?)", (STORE_SCHEMA,))
+        self.db.execute('PRAGMA wal_checkpoint(PASSIVE)')
 
     def close(self) -> None:
-        self.db.close()
+        if self.db is not None:
+            with contextlib.nullcontext() if self.readonly else self._custody.locked():
+                self.db.close()
+            self.db = None
+        if self._read_guard is not None:
+            self._read_guard.__exit__(None, None, None)
+            self._read_guard = None
+        self._custody.close()
 
     def active_id(self) -> str | None:
+        if self.db is None:
+            return None
+        self._custody.check()
         row = self.db.execute('SELECT generation_id FROM active WHERE slot = 1').fetchone()
         return None if row is None else row[0]
 
     def publish(self, generation: GraphGeneration, *, expected_active: str | None, _fail_before_commit: bool = False) -> str:
+        if self.readonly:
+            raise GraphError('CACHE_READ_ONLY')
+        with self._custody.locked():
+            return self._publish(generation, expected_active=expected_active, _fail_before_commit=_fail_before_commit)
+
+    def _publish(self, generation: GraphGeneration, *, expected_active: str | None, _fail_before_commit: bool) -> str:
+        self._custody.check()
         generation_id = generation.generation_id
         body = json.dumps(generation.body(), sort_keys=True, separators=(',', ':'))
         parsed = json.dumps({path: _parsed_to_dict(item) for path, item in generation.parsed.items()},
@@ -156,9 +202,13 @@ class GraphStore:
         except BaseException:
             self.db.execute('ROLLBACK')
             raise
+        self.db.execute('PRAGMA wal_checkpoint(PASSIVE)')
         return generation_id
 
     def read_generation(self, generation_id: str) -> GraphGeneration:
+        if self.db is None:
+            raise GraphError('GENERATION_NOT_FOUND', generation_id)
+        self._custody.check()
         row = self.db.execute('SELECT body, parsed, complete FROM generations WHERE id = ?', (generation_id,)).fetchone()
         if row is None or not row[2]:
             raise GraphError('GENERATION_NOT_FOUND', generation_id)

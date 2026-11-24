@@ -7,6 +7,7 @@ installers are recorded instead of run. Nothing starts updates on its own.
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import io
 import json
 import os
@@ -31,8 +32,8 @@ from tests._support import offline_mirror, project_copy, run_hook
 
 
 
-def _zip_bytes(name: str, padding: int = 64) -> bytes:
-    ecosystem = next((item for item in updater.OSV_ECOSYSTEMS if f'/{item}/' in name), 'PyPI')
+def _zip_bytes(name: str, padding: int = 64, *, ecosystem: str | None = None) -> bytes:
+    ecosystem = ecosystem or next((item for item in updater.OSV_ECOSYSTEMS if f'/{item}/' in name), 'PyPI')
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as archive:
         archive.writestr('osv-test.json', json.dumps({'id': name, 'padding': 'x' * padding, 'affected': [{
@@ -41,13 +42,71 @@ def _zip_bytes(name: str, padding: int = 64) -> bytes:
     return buffer.getvalue()
 
 
+def _qualified_zip(url):
+    from getzilla.security_acquisition import FetchResult
+    return FetchResult(_zip_bytes(url), url, url, 200)
+
+
 def _git(*args: str, cwd: Path) -> str:
     return subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
 
+class QualifiedOSVUpdaterTests(unittest.TestCase):
+    def test_public_mirror_uses_production_contract_and_copy_keeps_original_time(self):
+        from getzilla import security_data
+        with tempfile.TemporaryDirectory(prefix='osv-public-mirror-') as temporary:
+            base = Path(temporary).resolve()
+            source = offline_mirror(base)
+            self.assertTrue((source / 'osv/PyPI/snapshot.json').is_file(), 'public mirror fixture lacks qualified acquisition metadata')
+            before = security_data.read_snapshot(source / 'osv', 'osv:PyPI')[1]
+            self.assertEqual(before['acquisition']['producer'], 'synthetic-public-offline-mirror')
+            mirror = updater.Mirror.from_environ({updater.MIRROR_ENV: str(source)})
+            results = updater._run_from_mirror(base / 'state', mirror, run=lambda *_: None,
+                                              which=lambda _: None, components=('osv',))
+            self.assertTrue(all(result.status == 'ok' for result in results if result.component.startswith('osv:')), results)
+            freshness = [result for result in results if result.component == 'freshness']
+            self.assertEqual(len(freshness), 1)
+            self.assertEqual(freshness[0].status, 'fail')
+            self.assertIn('current official targets are unestablished', freshness[0].detail)
+            after = security_data.read_snapshot(base / 'state/osv', 'osv:PyPI')[1]
+            self.assertEqual(after['acquisition'], before['acquisition'])
+
+    def test_raw_zip_fetch_cannot_create_verified_acquisition(self):
+        from tests.test_security_data import archive, record
+        with tempfile.TemporaryDirectory(prefix='osv-public-updater-') as temporary:
+            root = Path(temporary).resolve()
+            target = root / 'osv/PyPI/all.zip'
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'public legacy bytes')
+            results = updater.update_osv(lambda _url: archive([record()]), root)
+            self.assertTrue(all(result.status == 'fail' for result in results), 'raw ZIP was relabelled as an acquired source')
+            self.assertEqual(target.read_bytes(), b'public legacy bytes')
+            self.assertFalse((target.parent / 'snapshot.json').exists())
+
+    def test_qualified_transport_publishes_through_shared_store(self):
+        from getzilla.security_acquisition import FetchResult
+        from getzilla import security_data
+        from tests.test_security_data import archive, record
+        with tempfile.TemporaryDirectory(prefix='osv-public-updater-') as temporary:
+            root = Path(temporary).resolve()
+            def fetch(url):
+                ecosystem = url.split('/')[-2]
+                return FetchResult(archive([record('PUBLIC-' + ecosystem, ecosystem)]), url, url, 200)
+            results = updater.update_osv(fetch, root)
+            self.assertTrue(all(result.status == 'ok' for result in results), results)
+            for ecosystem in updater.OSV_ECOSYSTEMS:
+                _, evidence = security_data.read_snapshot(root / 'osv', f'osv:{ecosystem}', required_scope={ecosystem})
+                self.assertEqual(evidence['coverage']['scopes'], [ecosystem])
+            before = (root / 'osv/PyPI/snapshot.json').read_bytes()
+            updater.update_osv(lambda _url: b'public raw ZIP cannot refresh time', root)
+            self.assertEqual((root / 'osv/PyPI/snapshot.json').read_bytes(), before)
+
+
 class UpdaterTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
+        scratch = ROOT/'.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        self._tmp = tempfile.TemporaryDirectory(prefix='owned-updater-fixture-', dir=scratch)
         self.root = Path(self._tmp.name) / 'state'
 
     def tearDown(self) -> None:
@@ -77,25 +136,24 @@ class UpdaterTests(unittest.TestCase):
             self.assertTrue(acquired)
 
     def test_sources_follow_the_latest_upstream_commit(self) -> None:
-        upstream = Path(self._tmp.name) / 'upstream'
-        upstream.mkdir()
-        _git('init', '-q', cwd=upstream)
-        _git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'one', cwd=upstream)
-        sources = {'superpowers': upstream.as_uri()}
-        first = updater.update_sources(updater._default_runner, self.root, sources)
-        self.assertEqual(first[0].status, 'ok')
-        self.assertEqual(first[0].detail, _git('rev-parse', '--short=12', 'HEAD', cwd=upstream))
-        _git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'two', cwd=upstream)
-        second = updater.update_sources(updater._default_runner, self.root, sources)
-        self.assertEqual(second[0].detail, _git('rev-parse', '--short=12', 'HEAD', cwd=upstream))
-        broken = updater.update_sources(updater._default_runner, self.root, {'bmad': (upstream / 'missing').as_uri()})
-        self.assertEqual(broken[0].status, 'fail')
+        """Historical ID: current now means official release commit/payload, never HEAD."""
+        from getzilla.current_workflows import Step
+        with mock.patch('getzilla.current_workflows.prepare_latest', return_value=[Step('baseline:spec-kit', 'ok', 'current exact source')]) as acquire:
+            first = updater.update_sources(mock.Mock(side_effect=AssertionError('no ambient git')), self.root, fetch=mock.sentinel.fetch)
+        self.assertEqual(first[0].detail, 'current exact source')
+        acquire.assert_called_once_with(self.root, fetch=mock.sentinel.fetch)
+        result = updater.update_sources(mock.Mock(side_effect=AssertionError('no vendor reset')), self.root,
+                                        {'superpowers': 'file:///snapshot'})
+        self.assertEqual(result[0].status, 'fail')
+        self.assertFalse((self.root/'vendor').exists())
 
     def test_osv_mirror_is_replaced_per_ecosystem(self) -> None:
-        def fetch(url: str) -> bytes:
+        from getzilla.security_acquisition import FetchResult
+        def fetch(url: str):
             if '/npm/' in url:
                 raise OSError('offline')
-            return _zip_bytes(url)
+            ecosystem = url.split('/')[-2]
+            return FetchResult(_zip_bytes('PUBLIC-' + ecosystem, ecosystem=ecosystem), url, url, 200)
         results = {item.component: item for item in updater.update_osv(fetch, self.root)}
         self.assertEqual(results['osv:npm'].status, 'fail')
         self.assertEqual(results['osv:PyPI'].status, 'ok')
@@ -105,22 +163,23 @@ class UpdaterTests(unittest.TestCase):
         self.assertTrue((self.root / 'osv/PyPI/all.zip').read_bytes().startswith(b'PK'))
 
     def test_osv_archive_with_bad_crc_is_rejected(self) -> None:
+        from getzilla.security_acquisition import FetchResult
         good = _zip_bytes('x', padding=64 * 1024)
-        updater.update_osv(lambda url: good, self.root)
+        updater.update_osv(lambda url: FetchResult(good, url, url, 200), self.root)
         corrupt = bytearray(good)
         # ZIP_STORED keeps the payload verbatim. Flip one byte near the end of a member larger
         # than zipfile's read chunk: headers and filename stay intact, and a reader that stops
         # after the first chunk never sees it -- only a full CRC check (testzip) does.
         corrupt[good.rindex(b'x' * 64) + 32] ^= 0x01
-        results = updater.update_osv(lambda url: bytes(corrupt), self.root)
+        results = updater.update_osv(lambda url: FetchResult(bytes(corrupt), url, url, 200), self.root)
         self.assertTrue(all(item.status == 'fail' for item in results), results)
         self.assertEqual((self.root / 'osv/PyPI/all.zip').read_bytes(), good)
-        truncated = updater.update_osv(lambda url: b'PK\x03\x04' + b'x' * 32, self.root)
+        truncated = updater.update_osv(lambda url: FetchResult(b'PK\x03\x04' + b'x' * 32, url, url, 200), self.root)
         self.assertTrue(all(item.status == 'fail' for item in truncated))
 
     def test_failed_refresh_keeps_original_verified_time_and_payload(self) -> None:
         now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
-        updater.update_osv(_zip_bytes, self.root, now=now)
+        updater.update_osv(_qualified_zip, self.root, now=now)
         pointer = self.root / 'osv/PyPI/snapshot.json'
         original = pointer.read_bytes()
         failed = updater.update_osv(lambda url: b'PKpartial', self.root, now=now + timedelta(hours=1))
@@ -132,7 +191,7 @@ class UpdaterTests(unittest.TestCase):
     def test_mirror_copy_cannot_refresh_an_old_valid_archive(self) -> None:
         now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
         source = Path(self._tmp.name) / 'mirror'
-        updater.update_osv(_zip_bytes, source, now=now - timedelta(hours=71))
+        updater.update_osv(_qualified_zip, source, now=now - timedelta(hours=71))
         mirror = updater.Mirror(source, {}, {})
         copied = updater.update_osv(mirror.fetch, self.root, now=now)
         self.assertTrue(all(item.status == 'ok' for item in copied), copied)
@@ -143,10 +202,16 @@ class UpdaterTests(unittest.TestCase):
         self.assertTrue(all(item.status == 'fail' for item in rejected))
         self.assertEqual((self.root / 'osv/PyPI/snapshot.json').read_bytes(), before)
 
-    def _pinned(self, payload: bytes) -> mock._patch:
-        return mock.patch.dict(updater.OPENGREP_ASSETS, {
-            ('linux', 'x86_64'): ('opengrep_manylinux_x86', hashlib.sha256(payload).hexdigest()),
-        })
+    @contextlib.contextmanager
+    def _pinned(self, payload: bytes):
+        # Explicit legacy snapshot API only. Default current acquisition has its
+        # own full release/integrity/consumer controls in opengrep_latest.
+        original = updater.update_opengrep
+        assets = {('linux', 'x86_64'): ('opengrep_manylinux_x86', hashlib.sha256(payload).hexdigest())}
+        def snapshot(*args, **kwargs):
+            return original(*args, **kwargs, assets=assets)
+        with mock.patch.dict(updater.OPENGREP_ASSETS, assets), mock.patch.object(updater, 'update_opengrep', side_effect=snapshot):
+            yield
 
     def test_opengrep_pinned_release_is_verified_and_installed_executable(self) -> None:
         urls: list[str] = []
@@ -164,7 +229,7 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(binary.read_bytes(), b'\x7fELF')
         if os.name != 'nt':
             self.assertTrue(stat.S_IMODE(binary.stat().st_mode) & stat.S_IXUSR)
-        self.assertEqual(updater.update_opengrep(fetch, self.root, ('sunos', 'sparc'))[0].status, 'skip')
+        self.assertEqual(updater.update_opengrep(fetch, self.root, ('sunos', 'sparc'), assets=updater.OPENGREP_ASSETS)[0].status, 'skip')
 
     def test_opengrep_checksum_mismatch_is_not_installed(self) -> None:
         with self._pinned(b'\x7fELF'):
@@ -194,12 +259,13 @@ class UpdaterTests(unittest.TestCase):
                     self.assertEqual(stat.S_IMODE(quarantined.stat().st_mode) & 0o111, 0)
 
     def test_opengrep_never_follows_the_latest_release(self) -> None:
+        """Historical ID: explicit reviewed snapshot API never follows a latest pointer."""
         urls: list[str] = []
         def fetch(url: str) -> bytes:
             urls.append(url)
             raise OSError('offline')
         for key in updater.OPENGREP_ASSETS:
-            updater.update_opengrep(fetch, self.root, key)
+            updater.update_opengrep(fetch, self.root, key, assets=updater.OPENGREP_ASSETS)
         self.assertTrue(urls)
         self.assertFalse([url for url in urls if 'latest' in url or 'api.github.com' in url], urls)
 
@@ -236,22 +302,16 @@ class UpdaterTests(unittest.TestCase):
             self.assertRegex(sha256, r'^[0-9a-f]{64}$', asset)
 
     def test_only_installed_agents_are_updated(self) -> None:
-        calls: list[list[str]] = []
-        def run(command, cwd=None):
-            calls.append(command)
-            return subprocess.CompletedProcess(command, 0, 'ok', '')
-        installed = {'npm': '/bin/npm', 'qwen': '/bin/qwen', 'copilot': '/bin/copilot', 'claude': '/bin/claude',
-                     'specify': '/bin/specify', 'uv': '/bin/uv'}
-        results = updater.update_agents(run, installed.get)
-        self.assertIn(['/bin/npm', 'install', '-g', '@qwen-code/qwen-code@latest'], calls)
-        self.assertIn(['/bin/npm', 'install', '-g', '@github/copilot@latest'], calls)
-        self.assertIn(['/bin/claude', 'update'], calls)
-        self.assertTrue(any(call[:4] == ['/bin/uv', 'tool', 'install', '--force'] for call in calls))
-        self.assertFalse(any('@openai/codex@latest' in call for call in calls))
-        self.assertEqual({item.component for item in results},
-                         {'agent:qwen', 'agent:copilot', 'agent:claude', 'tool:specify'})
-        no_npm = updater.update_agents(run, {'codex': '/bin/codex'}.get)
-        self.assertEqual(no_npm[0].status, 'skip')
+        """Keep selection guarantee; use bounded exact managed acquisition instead of globals."""
+        installed = {'qwen': '/bin/qwen', 'copilot': '/bin/copilot', 'claude': '/bin/claude'}
+        report = {'components': [dict(component='owned', status='complete')]}
+        runner = mock.Mock(side_effect=AssertionError('no ambient installer'))
+        with mock.patch('getzilla.managed_software.install_software', return_value=report) as activate:
+            results = updater.update_agents(runner, installed.get, root=self.root, fetch=mock.sentinel.fetch)
+        self.assertEqual([c.kwargs['agent'] for c in activate.call_args_list], ['qwen', 'copilot', 'claude'])
+        self.assertTrue(all(c.kwargs['fetch'] is mock.sentinel.fetch for c in activate.call_args_list))
+        self.assertEqual({r.component for r in results}, {'agent:qwen:owned', 'agent:copilot:owned', 'agent:claude:owned'})
+        runner.assert_not_called()
 
     def test_main_records_results_and_status(self) -> None:
         fake = [updater.Result('osv:PyPI', 'ok', '1 KiB'), updater.Result('source:bmad', 'fail', 'offline')]
@@ -261,7 +321,7 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(updater.main(['--now', '--quiet']), 1)
             state = json.loads((self.root / updater.STATE_FILE).read_text())
             self.assertEqual(state['results']['source:bmad'], {'status': 'fail', 'detail': 'offline'})
-            self.assertEqual(updater.main(['--if-due', '--quiet']), 0)
+            self.assertEqual(updater.main(['--if-due', '--quiet']), 1)
 
     def test_session_start_only_reminds_when_tools_are_stale(self) -> None:
         now = 2_000_000.0
@@ -285,8 +345,8 @@ class UpdaterTests(unittest.TestCase):
             self.assertNotIn('getzilla_update.py', text, rel)
         shell = (ROOT / 'scripts/install.sh').read_text(encoding='utf-8')
         powershell = (ROOT / 'scripts/install.ps1').read_text(encoding='utf-8')
-        # Installers install only the pinned baseline (owner decision 2026-10-16); moving tools to their
-        # latest versions is never run by an installer, only printed as a separate command.
+        # The explicit installer uses its bounded managed join, not the broad
+        # updater command that also changes unrelated installed profiles.
         for text in (shell, powershell):
             for latest in ('--only agents', '--only sources', "'--only', 'agents'", "'--only', 'sources'"):
                 for line in text.splitlines():
@@ -328,6 +388,7 @@ class OfflineMirrorTests(unittest.TestCase):
     def test_every_download_comes_from_the_mirror_with_its_pins(self) -> None:
         results = self._update(self._mirror())
         self.assertEqual(results.pop('agents').status, 'skip')
+        self.assertEqual(results.pop('freshness').status, 'fail')
         self.assertEqual({name: item.status for name, item in results.items() if item.status != 'ok'}, {})
         for name, item in results.items():
             self.assertIn(f'[offline mirror {self.mirror_dir}', item.detail, name)
@@ -357,7 +418,7 @@ class OfflineMirrorTests(unittest.TestCase):
         (self.mirror_dir / 'osv/PyPI/snapshot.json').unlink()
         results = self._update(self._mirror())
         self.assertEqual(results['osv:PyPI'].status, 'fail')
-        self.assertIn('refresh', results['osv:PyPI'].detail)
+        self.assertIn('legacy PyPI/all.zip is insufficient', results['osv:PyPI'].detail)
         self.assertFalse((self.root / 'osv/PyPI/snapshot.json').exists())
         self.assertEqual(results['osv:npm'].status, 'ok')
 

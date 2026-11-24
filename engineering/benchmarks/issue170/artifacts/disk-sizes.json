@@ -1,0 +1,26 @@
+{
+  "original": {
+    "files": 60,
+    "logical_bytes": 135624
+  },
+  "core": {
+    "files": 5956,
+    "logical_bytes": 54297397
+  },
+  "model": {
+    "files": 8,
+    "logical_bytes": 91104286
+  },
+  "downloads": {
+    "files": 2,
+    "logical_bytes": 59278570
+  },
+  "work": {
+    "files": 1528,
+    "logical_bytes": 8388691
+  },
+  "artifacts": {
+    "files": 91,
+    "logical_bytes": 4138090
+  }
+}

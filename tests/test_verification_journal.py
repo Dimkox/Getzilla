@@ -4,6 +4,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 import io
+import ast
 import importlib.util
 import json
 import os
@@ -20,6 +21,34 @@ from getzilla import util
 from getzilla import ci_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class JournalDependencyBoundaryTests(unittest.TestCase):
+    def test_new_owners_are_bound_to_actual_source_bytes(self):
+        from getzilla import verification_policy_source as policy
+        from getzilla import verification_unittest, verification_journal_contracts
+        original = policy._module_source
+        before = policy.implementation_source_binding()
+        for module in (verification_unittest, verification_journal_contracts):
+            name = Path(module.__file__).name
+            self.assertIn(name, before)
+            def changed(value):
+                return original(value) + (b'\n# mutation\n' if value is module else b'')
+            with patch.object(policy, '_module_source', side_effect=changed):
+                after = policy.implementation_source_binding()
+            self.assertNotEqual(before[name], after[name])
+            self.assertEqual(set(before), set(after))
+            self.assertTrue(all(before[key] == after[key] for key in before if key != name))
+
+    def test_reader_has_no_unittest_reflection_dependency(self):
+        tree = ast.parse(Path(journal.__file__).read_text())
+        attributes = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        self.assertFalse(attributes & {'__dict__', '__code__', '__func__'})
+        self.assertNotIn('modules', {node.value for node in ast.walk(tree)
+                                    if isinstance(node, ast.Constant) and isinstance(node.value, str)})
+        self.assertFalse(any(isinstance(node, ast.Import) and
+                             any(alias.name == 'unittest' for alias in node.names)
+                             for node in ast.walk(tree)))
 
 
 class RetainedHealthControls(unittest.TestCase):
@@ -84,6 +113,13 @@ Owned.__module__='tests.test_owned'
 try:
  result=private.unittest_runner(writer)(stream=io.StringIO()).run(Owned('test_value'))
  assert result.testsRun==1 and result.wasSuccessful()
+ adapter=sys.modules[private.__package__+'.verification_unittest']
+ assert adapter.bind_sink is private.bind_sink
+ assert adapter._observe is private._observe
+ assert adapter.case_identity is private.case_identity
+ assert adapter is not sys.modules.get('getzilla.verification_unittest')
+ with patch.object(public,'case_identity',side_effect=AssertionError('forged public peer')):
+  assert adapter.case_identity(Owned('test_value'))==private.case_identity(Owned('test_value'))
  before=writer.sequence
  with public.span('after-phase'):pass
  assert writer.sequence==before and public.current() is None
@@ -137,8 +173,8 @@ finally:writer.close()
 
 class JournalColocatedSDKTests(unittest.TestCase):
     def colocated_worlds(self, archive, external=False):
-        members = ('__init__.py', 'fsx.py', 'verification_journal.py', 'python_test_runner.py', 'process_limits.py',
-                   'pytest_progress.py', '_cpu_capacity.py', 'verification_scope.py')
+        members = ('__init__.py', 'fsx.py', 'verification_journal.py', 'verification_unittest.py', 'verification_journal_contracts.py', 'verification_actions.py', 'queue_refusal.py', 'python_test_runner.py', 'process_limits.py',
+                   'pytest_progress.py', '_cpu_capacity.py', 'cpu_budget.py', 'verification_scope.py')
         with tempfile.TemporaryDirectory(prefix='owned-colocated-sdk-', dir=ROOT / '.getzilla/runtime') as temporary:
             fixture = Path(temporary)
             project = fixture / 'project'
@@ -256,7 +292,7 @@ class JournalDecoderBoundaryTests(unittest.TestCase):
         from getzilla import python_test_runner as runner
         with self.owned_run() as run:
             with journal.activate(run), patch.object(journal.json, 'loads', side_effect=RecursionError('owned-decoder')):
-                with patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned')) as launch:
+                with patch.object(runner, 'owned_popen', side_effect=OSError('owned')) as launch:
                     result = self.observe(lambda: runner.execute(['owned-command'], run.root, {'PATH': os.defpath}, timeout=1))
             self.assertIsInstance(result, runner.ProcessResult)
             self.assertEqual(result.returncode, 127)
@@ -343,7 +379,7 @@ class JournalClosedMetadataTests(unittest.TestCase):
                     'duplicate': dict(good, expected=['worker-0', 'worker-0'])}[shape]
                 index.write_text(json.dumps(bad))
                 before = index.read_bytes()
-                with journal.activate(run), patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned')) as launch:
+                with journal.activate(run), patch.object(runner, 'owned_popen', side_effect=OSError('owned')) as launch:
                     try:
                         result = runner.execute(['owned-command'], run.root, {'PATH': os.defpath}, timeout=1)
                     except Exception as exc:
@@ -446,7 +482,7 @@ class JournalPostStartLossTests(unittest.TestCase):
         environment = {'PATH': os.defpath, 'OWNED_FLAG': 'kept'}
         for lost in (False, True):
             with self.subTest(lost=lost), self.owned_run(lost) as (root, run), journal.activate(run), \
-                    patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned backend sentinel')) as launch:
+                    patch.object(runner, 'owned_popen', side_effect=OSError('owned backend sentinel')) as launch:
                 try:
                     result = runner.execute(command, root, environment, timeout=1)
                 except OSError as exc:
@@ -507,7 +543,7 @@ class JournalRuntimeRepairTests(unittest.TestCase):
             'Path(__file__).with_name("initializer-ran").write_text("owned")\n'
             'def unused_application_branch():\n return 9\n')
         members = {name: (ROOT / '.getzilla/getzilla' / name).read_bytes()
-                   for name in ('fsx.py', 'verification_journal.py')}
+                   for name in ('fsx.py', 'queue_refusal.py', 'verification_actions.py', 'verification_journal.py', 'verification_unittest.py', 'verification_journal_contracts.py')}
         if archive:
             with zipfile.ZipFile(sdk / '.getzilla/getzilla.zip', 'w') as stream:
                 for name, content in members.items():
@@ -526,7 +562,11 @@ class JournalRuntimeRepairTests(unittest.TestCase):
         output.mkdir()
         with patch.object(python_test_runner, 'STACK_DIR', sdk / '.getzilla'), \
                 patch.object(python_test_runner.fsx, '__file__', str(origins / 'fsx.py')), \
-                patch.object(python_test_runner.diagnostics, '__file__', str(origins / 'verification_journal.py')):
+                patch.object(python_test_runner.diagnostics, '__file__', str(origins / 'verification_journal.py')), \
+                patch.object(python_test_runner.actions, '__file__', str(origins / 'verification_actions.py')), \
+                patch.object(__import__('getzilla.verification_unittest', fromlist=['owned']), '__file__', str(origins / 'verification_unittest.py')), \
+                patch.object(__import__('getzilla.verification_journal_contracts', fromlist=['owned']), '__file__', str(origins / 'verification_journal_contracts.py')), \
+                patch.object(__import__('getzilla.queue_refusal', fromlist=['owned']), '__file__', str(origins / 'queue_refusal.py')):
             overlay = python_test_runner._application_coverage_config(config, output, root=project)
         run = journal.Run(project, None, 'owned-tests')
         self.addCleanup(run.close)

@@ -117,10 +117,13 @@ features refuse before publication.
 
 The generic `module_runtime` source interfaces bind an activation to the project,
 artifact, task/run/owner/epoch/context, native profile, scope digest and exact
-operations. Trusted host ports supply current task authority, owned runtime
+operations. Runtime activation selects a nonempty subset of declared capabilities;
+read-only activation does not grant writes. Trusted host ports supply current task authority, owned runtime
 identity and transport proof. Project settings cannot supply those ports. There
-is no qualified live native profile in this source slice. The ordinary passive
-`enable` and admission APIs cannot enable or execute a runtime artifact.
+is a bounded `managed-stdio-v1` local-UID Linux profile in the optional
+[`mcp-jira` artifact](../.getzilla/optional-modules/mcp-jira/0.1.0/README.md). It
+requires trusted host composition. The standalone CLI, ordinary passive `enable`
+and admission APIs cannot enable or execute a runtime artifact.
 
 `disable` first records `quiescing` and clears grants. Missing owner-service
 proof leaves the worker count unknown. `module quiesce ID` exposes the same
@@ -131,9 +134,10 @@ runtime. Rollback never restores activation or grants. Failed publication uses
 the same pending journal and recovery API; a runtime owner needs its current
 quiescence proof before recovery can clear that record.
 
-Native-fragment publication and the optional Jira artifact are subsequent
-source slices. Direct remote MCP registration is unavailable as a protected
-runtime profile. The inspected Qwen Code0.24.7 source supports project settings
+Native-fragment publication remains a subsequent source slice. The optional
+Jira artifact contains bounded target/dispatcher checks and a canonical-operation
+effect projection; its real Jira provider and mutation contract remain unqualified.
+Direct remote MCP registration is unavailable as a protected runtime profile. The inspected Qwen Code0.24.7 source supports project settings
 and tool filters, but its hook error path permits execution. A later owned
 native adapter must check the same canonical operation decoder and current
 source, destination and content decisions in its trusted transport before every

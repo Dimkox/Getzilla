@@ -11,9 +11,12 @@ from unittest.mock import patch
 W = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(W / '.getzilla'))
 from getzilla import expanded_security as security
+from getzilla import security_corresponding_source  # noqa: F401 preload before the I/O guard
 from getzilla import security_inventory as inventory
 from getzilla import security_licenses  # preload before the closed fixture boundary
-from getzilla import security_oci
+from getzilla import security_tools
+from getzilla.security_cli import input_profile
+from getzilla.security_data import SecurityDataError
 
 ACTIVE = None
 
@@ -41,6 +44,20 @@ class NativeOCIConsumersTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.reference = 'example.invalid/owned@sha256:' + 'a' * 64
+        self.policy = self.root/'checker'
+        self.policy.mkdir()
+        # An explicit finite observation port, not Git/CI execution evidence.
+        # Keep the real authority/profile validators and all I/O denial active.
+        self.source = dict(head_sha='a'*40, tree_sha='b'*40, checker_sha='c'*40, checker_tree_sha='d'*40,
+                           candidate_clean=True, checker_clean=True, same_project=False)
+        self.run = dict(provider='github-actions', repository='owned/fixture', run_id='1',
+                        run_attempt='1', head_sha=self.source['head_sha'])
+        def observed(root, env):
+            self.assertEqual(root, self.root)
+            self.assertEqual(env['GETZILLA_SECURITY_IMAGE_ARTIFACTS'], str(self.root/'catalog.json'))
+            return dict(self.source), dict(self.run)
+        self.enterContext(patch.object(security, '_selection_authority', side_effect=observed))
+        self.enterContext(patch.object(security_tools, 'TRUSTED_ROOT', self.policy))
 
     def run_owned(self, action):
         global ACTIVE
@@ -84,9 +101,13 @@ class NativeOCIConsumersTests(unittest.TestCase):
                        source_bindings=[self.binding(source)])
         path = self.root / 'catalog.json'
         path.write_text(json.dumps(catalog))
-        profile = dict(security_oci.LIMITS, images=[self.reference], platform='linux/amd64')
+        roots = {name: str(self.root/name) for name in ('database', 'artifacts', 'tools')}
+        profile = input_profile(self.source, current, roots, self.run, security._policy_digest(self.policy),
+                                image_artifacts=catalog)
         return catalog, path, dict(GETZILLA_SECURITY_IMAGE_ARTIFACTS=str(path),
-                                   GETZILLA_SECURITY_IMAGE_PROFILE=json.dumps(profile))
+                                   GETZILLA_SECURITY_INPUT_PROFILE=json.dumps(profile),
+                                   GETZILLA_SECURITY_DB=roots['database'], GETZILLA_SECURITY_ARTIFACTS=roots['artifacts'],
+                                   GETZILLA_SECURITY_TOOLS=roots['tools'])
 
     def test_all_native_default_consumers_forward_fresh_selected_source(self):
         catalog, path, env = self.catalog()
@@ -144,8 +165,26 @@ class NativeOCIConsumersTests(unittest.TestCase):
                 self.run_owned(lambda: security.selected_inventory(self.root, environ=env))
             path.write_text(json.dumps(catalog))
             (self.root / 'Dockerfile').write_text('FROM --platform=linux/arm64 ${OWNED_IMAGE}\n')
-            with self.assertRaises(ValueError):
+            with self.assertRaises(SecurityDataError):
                 self.run_owned(lambda: security.selected_inventory(self.root, environ=env))
+
+    def test_unproved_authority_or_absent_current_profile_refuses(self):
+        _catalog, _path, env = self.catalog()
+        def owned_read(root, name, maximum):
+            self.assertEqual(root / name, _path)
+            raw = _path.read_bytes()
+            self.assertLessEqual(len(raw), maximum)
+            return raw
+        self.enterContext(patch('getzilla.security_artifacts.read_file', side_effect=owned_read))
+        with patch.object(security, '_selection_authority', return_value=(dict(self.source, candidate_clean=False), self.run)), \
+                patch.object(security, 'collect_inventory', side_effect=AssertionError('unproved source reached collector')):
+            with self.assertRaises(SecurityDataError):
+                self.run_owned(lambda: security.selected_inventory(self.root, environ=env))
+        missing = dict(env)
+        missing.pop('GETZILLA_SECURITY_INPUT_PROFILE')
+        with patch.object(inventory, '_tracked_files', return_value=['Dockerfile']):
+            with self.assertRaisesRegex(SecurityDataError, 'current input profile absent'):
+                self.run_owned(lambda: security.selected_inventory(self.root, environ=missing))
 
 
 if __name__ == '__main__':

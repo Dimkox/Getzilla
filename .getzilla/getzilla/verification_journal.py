@@ -4,7 +4,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import functools
@@ -15,11 +14,17 @@ import re
 import stat
 import sys
 import time
-import unittest
-from types import FunctionType, MethodType
 import uuid
 
 from . import fsx
+from .verification_actions import (  # noqa: F401 compatibility exports share exact action/stop state
+    StopMetadata, _CURRENT, _SINK, _STATES, _STOP_FIELDS, _OWNERSHIP_CASE, _OWNERSHIP_FORMS,
+    _OWNERSHIP_FIELDS, _validate_stop, stop_details, updated_stop, retain_stop, child_stop,
+    cancelled_stop, _observe, ownership_case, ownership_mark, _json, test_identity,
+    skip_classification, activate, current, bind_sink, action_sink, _emit, observed as observed, span,
+)
+from .queue_refusal import QueueRefusalCapture, queue_refusal_text
+from .verification_journal_contracts import QUEUE_REFUSAL_CATEGORIES
 
 EVENT_BYTES = 2048
 SEGMENT_BYTES = 128 * 1024
@@ -27,108 +32,20 @@ SEGMENTS = 4
 ACTORS = 65
 RUN_BYTES = 33 * 1024 * 1024
 RUNS = 4
-_CURRENT = ContextVar('verification_journal', default=None)
 _ID = re.compile(r'(?:[a-z][a-z0-9-]{0,63}|tool:[a-z][a-z0-9_-]{0,63})\Z')
 _DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 _RUN = re.compile(r'[0-9a-f]{32}\Z')
-_peer = sys.modules.get('getzilla.verification_journal')
-if __package__ == 'getzilla':
-    _run = os.environ.get('GETZILLA_JOURNAL_RUN', '')
-    _peer = sys.modules.get('_getzilla_observer_' + _run + '.verification_journal') if _RUN.fullmatch(_run) else None
-_SINK = getattr(_peer, '_SINK', None)
-if (not isinstance(_SINK, ContextVar) or (getattr(_peer, '__file__', None),
-        getattr(getattr(_peer, '__spec__', None), 'origin', None),
-        getattr(__spec__, 'origin', None)) != (__file__,) * 3):
-    _SINK = ContextVar('verification_action_sink', default=None)
 _SESSION = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
 _ACTOR = re.compile(r'controller|worker-(?:[0-9]|[1-5][0-9]|6[0-3])\Z')
 _STAGES = {'action', 'command', 'check', 'collection', 'setup', 'call', 'teardown', 'test', 'run', 'cleanup'}
-_STATES = {'start', 'end', 'pass', 'fail', 'skip', 'error', 'cancelled', 'timeout', 'unknown', 'expected-failure', 'unexpected-success'}
+
 _ERRORS = {'AssertionError', 'OSError', 'ValueError', 'TypeError', 'RuntimeError', 'ImportError',
            'ModuleNotFoundError', 'TimeoutError', 'KeyboardInterrupt', 'SystemExit'}
-_OWNERSHIP_CASE = 'tests/test_python_test_runner.py::PythonTestRunnerTests::test_term_resistant_grandchild_is_killed_on_every_stop_path'
-_OWNERSHIP_FORMS = ('exit', 'flood', 'timeout', 'controller')
-_OWNERSHIP_FIELDS = {
-    'form': set(_OWNERSHIP_FORMS),
-    'phase': {'entered', 'execute', 'ready', 'term', 'grace', 'kill', 'reap', 'result',
-              'controller-stop', 'controller-reaped', 'descendant-check', 'finished'},
-    'status': {'active', 'returned', 'failed', 'cancelled', 'unknown'},
-    'cleanup': {'none-reported', 'recorded', 'unavailable'},
-    'descendant': {'absent', 'zombie', 'nonzombie', 'unavailable'},
-}
+
+
 _FAILURE_PHASES = {'setup', 'call', 'teardown', 'unknown'}
 _FAILURE_OPS = {'action', 'command', 'check', 'cleanup', 'owned-command'}
 _OMISSIONS = ('ownership_omitted', 'failure_omitted', 'action_omitted')
-
-
-@dataclass(frozen=True)
-class StopMetadata:
-    version: int = 1
-    decision: str = 'unavailable'
-    result_policy: str = 'unavailable'
-    cancel: str = 'unavailable'
-    late_output: str = 'unavailable'
-    scope: str = 'unavailable'
-
-
-if ((getattr(_peer, '__file__', None), getattr(getattr(_peer, '__spec__', None), 'origin', None),
-        getattr(__spec__, 'origin', None)) == (__file__,) * 3
-        and isinstance(getattr(_peer, 'StopMetadata', None), type)):
-    StopMetadata = _peer.StopMetadata
-
-
-_STOP_FIELDS = {
-    'decision': {'unavailable', 'child_exit', 'child_signal', 'deadline', 'output_limit', 'owned_cancel',
-                 'primary_exception', 'spawn_error'},
-    'result_policy': {'unavailable', 'child_status', 'limit_124', 'cancel_preserve_child', 'cancel_128_signal',
-                      'fallback_1', 'spawn_127', 'aggregate', 'collection_refusal', 'coverage_refusal'},
-    'cancel': {'unavailable', 'none', 'sigint', 'sigterm'},
-    'late_output': {'unavailable', 'not_exceeded', 'exceeded'},
-    'scope': {'process', 'parallel_batch', 'selected_shard', 'coverage_combine', 'unavailable'},
-}
-
-
-def _validate_stop(value):
-    if (type(value) is not dict or set(value) != {'version', *_STOP_FIELDS}
-            or type(value['version']) is not int or value['version'] != 1
-            or any(type(value[k]) is not str or value[k] not in choices for k, choices in _STOP_FIELDS.items())
-            or len(_json(value)) > 256):
-        raise ValueError('stop-metadata-shape')
-    return dict(value)
-
-
-def stop_details(value):
-    try:
-        metadata = getattr(value, 'stop_metadata', None)
-        if metadata is None:
-            metadata = getattr(value, '_getzilla_stop_metadata', None)
-        if type(metadata) is not StopMetadata:
-            return vars(StopMetadata()).copy()
-        return _validate_stop(vars(metadata))
-    except BaseException:
-        return vars(StopMetadata()).copy()
-
-
-def updated_stop(value, **changes):
-    return replace(StopMetadata(**stop_details(value)), **changes)
-
-
-def retain_stop(value, metadata):
-    try:
-        value._getzilla_stop_metadata = metadata
-    except BaseException:
-        return None
-
-
-def child_stop(code, *, scope='process'):
-    decision = ('child_signal' if code < 0 and os.name != 'nt' else 'child_exit') if type(code) is int else 'unavailable'
-    return StopMetadata(decision=decision, result_policy='child_status' if code is not None else 'fallback_1',
-                        cancel='none', scope=scope)
-
-
-def cancelled_stop(value, number):
-    metadata = updated_stop(value, cancel={2: 'sigint', 15: 'sigterm'}.get(number, 'unavailable'))
-    return replace(metadata, decision='owned_cancel') if metadata.decision == 'unavailable' else metadata
 
 
 _CORE_STOP = ContextVar('core_stop_origin', default=None)
@@ -222,7 +139,78 @@ def _validate_first_failure(value):
     return _decode(_json(value))
 
 
+def _validate_queue_refusal(value):
+    fields = {'version', 'kind', 'side', 'category', 'limit', 'observed', 'site', 'witness_scope',
+              'active', 'cached', 'active_omitted', 'cached_omitted', 'cached_witness_unavailable', 'capture_sha256'}
+    if (type(value) is not dict or set(value) != fields or type(value['version']) is not int
+            or value['version'] != 1 or value['kind'] != 'queue-analysis-refusal'
+            or value['side'] not in {'head', 'base', 'unknown'}
+            or value['category'] not in QUEUE_REFUSAL_CATEGORIES
+            or value['site'] not in {'budget', 'cached', 'active', 'declaration', 'resolver'}
+            or value['witness_scope'] != 'ordered-module-request-frames'
+            or type(value['cached_witness_unavailable']) is not bool
+            or type(value['capture_sha256']) is not str or not _DIGEST.fullmatch(value['capture_sha256'])
+            or len(_json(value)) > 640):
+        raise ValueError('journal-queue-refusal-shape')
+    for key in ('limit', 'observed', 'active_omitted', 'cached_omitted'):
+        if value[key] is None and key in {'limit', 'observed'}:
+            continue
+        if type(value[key]) is not int or value[key] < 0:
+            raise ValueError('journal-queue-refusal-counter')
+    for key in ('active', 'cached'):
+        if type(value[key]) is not list or any(type(item) is not str or not re.fullmatch(
+                r'(?:[A-Za-z_][A-Za-z0-9_.]{0,255}|sha256:[0-9a-f]{64})', item) for item in value[key]):
+            raise ValueError('journal-queue-refusal-witness')
+    return _decode(_json(value))
+
+
+def queue_refusal(error):
+    """Observe only an internal owner-bound capture; no inactive-context work or I/O."""
+    writer, node = action_sink()
+    if writer is None:
+        return
+    capture = getattr(error, '_queue_refusal_capture', None)
+    if (type(capture) is not QueueRefusalCapture or capture.owner is not error
+            or type(capture.message) is not str or type(capture.payload) is not str
+            or queue_refusal_text(error) != capture.message + '; ' + capture.payload):
+        return
+    try:
+        detail = json.loads(capture.payload)
+        detail['capture_sha256'] = hashlib.sha256(capture.payload.encode('utf-8')).hexdigest()
+        while len(_json(detail)) > 640:
+            key = 'cached' if detail['cached'] else 'active'
+            if not detail[key]:
+                return
+            detail[key].pop()
+            detail[key + '_omitted'] += 1
+        detail = _validate_queue_refusal(detail)
+    except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
+        return
+    writer._queue_refusal = detail
+    _emit(writer, 'action', 'error', step='arch-queue-refusal', nodeid=node, queue_refusal=detail)
+
+
+def _validated_active_span(value):
+    fields = {'stage', 'step', 'invocation'}
+    if (type(value) is not dict or set(value) not in (fields, fields | {'location'})
+            or type(value['stage']) is not str or value['stage'] not in _STAGES
+            or value['step'] is not None and (type(value['step']) is not str or not _ID.fullmatch(value['step']))
+            or type(value['invocation']) is not int or not 1 <= value['invocation'] <= 2**63 - 1
+            or len(_json(value)) > 512):
+        raise ValueError('journal-active-span-shape')
+    if 'location' in value:
+        _validated_location(value['location'])
+    return _decode(_json(value))
+
+
 def _retained_health(health):
+    if 'queue_refusal' in health:
+        _validate_queue_refusal(health['queue_refusal'])
+    if 'active_span' in health:
+        active = _validated_active_span(health['active_span'])
+        if (type(health.get('open_spans')) is not int or health['open_spans'] <= 0
+                or type(health.get('sequence')) is not int or active['invocation'] > health['sequence']):
+            raise ValueError('journal-active-span-binding')
     flags = health.get('observation_omissions', dict.fromkeys(_OMISSIONS, False))
     if (type(flags) is not dict or set(flags) not in (set(_OMISSIONS), {*_OMISSIONS, 'stop_omitted'})
             or any(type(v) is not bool for v in flags.values())):
@@ -291,13 +279,6 @@ def _observation_projection(owners, failures, complete, flags, stops=()):
     return _fit_observations(value, 1536, public=True)
 
 
-def _observe(writer, method, *args):
-    try:
-        getattr(writer, method)(*args)
-    except Exception:
-        return None
-
-
 def _validate_ownership_snapshot(value):
     if (type(value) is not dict or set(value) != {'version', 'case', 'attempt', 'repeated', 'overflow', 'forms'}
             or type(value['version']) is not int or value['version'] != 1
@@ -328,53 +309,6 @@ def _ownership_projection(values, complete=True):
     if len(values) != 1:
         return {'status': 'ambiguous'}
     return {'status': 'reported', 'snapshot': _validate_ownership_snapshot(values[0])}
-
-
-@contextmanager
-def ownership_case(form):
-    writer, node = action_sink()
-    if writer is None or node != _OWNERSHIP_CASE:
-        yield
-        return
-    previous = getattr(writer, '_ownership_form', None)
-    try:
-        writer._ownership_form = None
-        if type(form) is str and form in _OWNERSHIP_FORMS:
-            snapshot = getattr(writer, '_ownership', None)
-            if snapshot and any(row['form'] == form for row in snapshot['forms']):
-                snapshot['repeated'] = True
-                writer._ownership_blocked = True
-            writer._ownership_form = form
-            ownership_mark('entered')
-    except Exception:
-        try:
-            yield
-        finally:
-            writer._ownership_form = previous
-        return
-    try:
-        yield
-    except BaseException as exc:
-        ownership_mark(None, status='cancelled' if isinstance(exc, (KeyboardInterrupt, SystemExit))
-                       or type(exc).__name__ == 'RunCancelled' else 'failed')
-        raise
-    else:
-        ownership_mark('finished', status='returned')
-    finally:
-        writer._ownership_form = previous
-
-
-def ownership_mark(phase, *, status='active', cleanup='unavailable', descendant='unavailable'):
-    writer, node = action_sink()
-    if writer is not None and node == _OWNERSHIP_CASE and getattr(writer, '_ownership_form', None) is not None:
-        try:
-            writer.record_ownership(phase, status=status, cleanup=cleanup, descendant=descendant)
-        except Exception:
-            return None
-
-
-def _json(value):
-    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('ascii')
 
 
 def _decode(raw, **options):
@@ -448,30 +382,6 @@ def _publish(handle, name, value, limit):
     fsx.replace_at(handle, temporary, handle, name)
 
 
-def test_identity(nodeid):
-    """Strip all parameter text before hashing or validating identity."""
-    if type(nodeid) is not str:
-        return None
-    value = nodeid.partition('[')[0].replace('\\', '/')
-    parts = value.split('::')
-    if (len(value) > 512 or not 1 <= len(parts) <= 3 or len(parts[0]) > 256
-            or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', parts[0])
-            or any(p in {'', '.', '..'} for p in parts[0].split('/'))
-            or any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,127}', p) for p in parts[1:])):
-        return None
-    return {'path': parts[0], 'key': hashlib.sha256(value.encode('ascii')).hexdigest()}
-
-
-def skip_classification(reason):
-    # Classify a closed subset; never publish the arbitrary reason itself.
-    if type(reason) is not str:
-        return 'redacted-unknown'
-    patterns = {'dependency': r'(?:requires|missing|no) (?:pytest|xdist|coverage|PostgreSQL|psycopg|node|npm|git)(?: dependency)?',
-                'platform': r'(?:Windows|POSIX|Linux|macOS) only',
-                'opt-in': r'(?:optional|opt-in) (?:integration|network|database) test'}
-    return next((kind for kind, pattern in patterns.items() if re.fullmatch(pattern, reason)), 'redacted-unknown')
-
-
 def failure(exc, root=None):
     """No exception text, source lines, locals or absolute paths."""
     kind = type(exc).__name__
@@ -508,11 +418,13 @@ class Writer:
         self.generation = self.size = 0
         self.identity = None
         self.active = {}
+        self._active_locations = {}
         self._ownership = self._ownership_form = None
         self._ownership_blocked = False
         self._ownership_counts = {}
         self._first_failure = self._pending = self._action = self._frame = None
         self._core_stop = None
+        self._queue_refusal = None
         self._test_phase = (None, 'unknown')
         self._omissions = dict.fromkeys(_OMISSIONS, False)
         try:
@@ -534,6 +446,7 @@ class Writer:
                 self.attempt = prior['attempt'] + 1
                 self._ownership, self._first_failure, self._omissions = _retained_health(prior)
                 self._core_stop = _health_stop(prior)
+                self._queue_refusal = _validate_queue_refusal(prior['queue_refusal']) if 'queue_refusal' in prior else None
                 self._ownership_blocked = self._ownership is not None
             except FileNotFoundError:
                 pass
@@ -564,6 +477,16 @@ class Writer:
             'attempt': self.attempt,
             'dropped': self.dropped, 'open_spans': sum(map(len, self.active.values())),
             'status': status, 'segment': self.name}
+        latest = max(((number, stage, step) for (stage, step, _key), numbers in self.active.items()
+                      for number in numbers), key=lambda item: item[0], default=None)
+        if latest is not None:
+            number, stage, step = latest
+            active = {'stage': stage, 'step': step, 'invocation': number}
+            if number in self._active_locations:
+                active['location'] = self._active_locations[number]
+            value['active_span'] = _validated_active_span(active)
+        if self._queue_refusal is not None:
+            value['queue_refusal'] = _validate_queue_refusal(self._queue_refusal)
         value['observation_omissions'] = dict(self._omissions)
         if self._core_stop is not None:
             value['core_stop'] = _health_stop({'actor': self.actor, 'core_stop': self._core_stop})
@@ -657,7 +580,7 @@ class Writer:
         if not overflow:
             self.emit('action', 'unknown', step='own-' + form + '-' + row['phase'], nodeid=_OWNERSHIP_CASE)
 
-    def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None, stop=None):
+    def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None, stop=None, queue_refusal=None):
         if error is not None:
             self._frame = None
         if self.disabled:
@@ -673,6 +596,8 @@ class Writer:
                 raise ValueError('journal-clock-or-sequence')
             if step is not None:
                 row['step'] = step
+            if queue_refusal is not None:
+                row['queue_refusal'] = _validate_queue_refusal(queue_refusal)
             if process is not None:
                 if type(process) is not int or not 1 <= process <= 2**31 - 1:
                     raise ValueError('journal-process')
@@ -693,6 +618,9 @@ class Writer:
             elif state == 'end':
                 if self.active.get(identity):
                     row['invocation'] = self.active[identity].pop()
+                    if not self.active[identity]:
+                        self.active.pop(identity)
+                    self._active_locations.pop(row['invocation'], None)
                 else:
                     row['unmatched_end'] = True
             if outcome is not None:
@@ -719,6 +647,8 @@ class Writer:
                         or type(line) is not int or not 1 <= line <= 1000000):
                     raise ValueError('journal-location')
                 row['location'] = {'path': path, 'line': line}
+            if state == 'start' and 'location' in row:
+                self._active_locations[row['invocation']] = _validated_location(row['location'])
             raw = _json(row) + b'\n'
             if stop is not None:
                 row['stop'] = _validate_stop(stop)
@@ -816,7 +746,7 @@ class Run:
                     raise ValueError('journal-unknown-storage')
                 # Never evict active or unknown runs. Exact terminal owned runs alone qualify.
                 if len(registry['runs']) >= RUNS:
-                    candidate = next((r for r in registry['runs'] if r.get('status') == 'closed'), None)
+                    candidate = next((r for r in registry['runs'] if r.get('status') in {'closed', 'incomplete'}), None)
                     if candidate is None:
                         raise OSError('journal-retention-unavailable')
                     _remove_run(history, candidate)
@@ -1010,7 +940,7 @@ class Run:
 
 
 def _remove_run(history, record):
-    if (set(record) != {'run_id', 'nonce', 'status'} or record['status'] != 'closed'
+    if (set(record) != {'run_id', 'nonce', 'status'} or record['status'] not in {'closed', 'incomplete'}
             or not _RUN.fullmatch(record['run_id']) or not _RUN.fullmatch(record['nonce'])):
         raise ValueError('journal-retention-record')
     path = history / record['run_id']
@@ -1018,23 +948,41 @@ def _remove_run(history, record):
     locks = []
     try:
         index = _decode(_read(handle, 'index.json', 16384))
-        if index['run_id'] != record['run_id'] or index['nonce'] != record['nonce'] or index['status'] != 'closed':
+        if (index['run_id'] != record['run_id'] or index['nonce'] != record['nonce']
+                or index['status'] != record['status']):
             raise ValueError('journal-retention-identity')
         names = os.listdir(path)
         if len(names) > ACTORS * 7 + 1:
             raise ValueError('journal-retention-count')
+        actors = {}
         for name in names:
-            if name != 'index.json' and not re.fullmatch(r'(?:controller|worker-(?:[0-9]|[1-5][0-9]|6[0-3]))(?:\.lock|\.json|-[0-3]\.jsonl)', name):
+            if name == 'index.json':
+                continue
+            match = re.fullmatch(r'(controller|worker-(?:[0-9]|[1-5][0-9]|6[0-3]))(\.lock|\.json|-[0-3]\.jsonl|\.json\.tmp)', name)
+            if (match is None or match[1] + '.lock' not in names
+                    or match[2] == '.json.tmp' and record['status'] != 'incomplete'):
                 raise ValueError('journal-retention-shape')
-            _read(handle, name, SEGMENT_BYTES)
+            actors[name] = match[1]
+            # Only _publish's exact health temporary namespace is known. A
+            # failed write may leave partial JSON, never authority or success.
+            _read(handle, name, 2048 if name.endswith(('.json', '.json.tmp')) else SEGMENT_BYTES)
+        # Acquire every lifetime lock before inspecting health or deleting any
+        # leaf. Terminal incomplete health can outlive a still-running actor.
+        for name in names:
             if name.endswith('.lock'):
                 descriptor = fsx.open_at(handle, name, os.O_RDWR | fsx.O_NOFOLLOW)
                 locks.append(descriptor)
+                if not _regular(os.fstat(descriptor)):
+                    raise OSError('journal-retention-lock')
                 fsx.lock_file(descriptor, blocking=False)
-            elif name.endswith('.json') and name != 'index.json':
+        for name in actors:
+            if name.endswith('.json'):
                 health = _decode(_read(handle, name, 2048))
                 if (health['run_id'] != record['run_id'] or health['nonce'] != record['nonce']
-                        or health['status'] != 'closed' or health.get('open_spans', 0)):
+                        or health.get('actor') != actors[name]
+                        or health['status'] not in {'active', 'closed', 'unavailable'}
+                        or type(health.get('open_spans')) is not int or health['open_spans'] < 0
+                        or record['status'] == 'closed' and (health['status'] != 'closed' or health['open_spans'])):
                     raise ValueError('journal-retention-active-stream')
                 _retained_health(health)
         for name in names:
@@ -1079,42 +1027,6 @@ def child_writer(environment=None, ordinal=None, worker_count=None):
 
 
 @contextmanager
-def activate(run):
-    token = _CURRENT.set(run)
-    sink = _SINK.set((getattr(run, 'writer', None), None))
-    try:
-        yield run
-    finally:
-        _SINK.reset(sink)
-        _CURRENT.reset(token)
-
-
-def current():
-    return _CURRENT.get()
-
-
-@contextmanager
-def bind_sink(writer, nodeid):
-    node = nodeid.partition('[')[0].replace('\\', '/') if test_identity(nodeid) else ''
-    token = _SINK.set((writer, node))
-    try:
-        yield
-    finally:
-        _SINK.reset(token)
-
-
-def action_sink():
-    return _SINK.get() or (None, None)
-
-
-def _emit(writer, *args, **fields):
-    try:
-        writer.emit(*args, **fields)
-    except (OSError, ValueError, TypeError):
-        return None
-
-
-@contextmanager
 def session(root, entrypoint, report=None):
     existing = current()
     if existing is not None:
@@ -1154,43 +1066,6 @@ def entrypoint(name):
     return decorate
 
 
-def observed(name, stage='check'):
-    def decorate(function):
-        @functools.wraps(function)
-        def wrapped(*args, **kwargs):
-            with span(name, stage=stage) as details:
-                result = function(*args, **kwargs)
-                if details is not None:
-                    details['stop'] = stop_details(result)
-                    outcome = getattr(result, 'status', None)
-                    code = getattr(result, 'returncode', None)
-                    if code is not None:
-                        outcome = 'pass' if code == 0 else 'fail'
-                    if outcome in _STATES:
-                        details.update(outcome=outcome, code=code)
-                return result
-        return wrapped
-    return decorate
-
-
-@contextmanager
-def span(step, *, stage='check'):
-    writer, node = action_sink()
-    if writer:
-        _emit(writer, stage, 'start', step=step, nodeid=node)
-    try:
-        details = {}
-        yield details
-    except BaseException as exc:
-        if writer:
-            _emit(writer, stage, 'end', step=step, nodeid=node, outcome='skip' if isinstance(exc, unittest.SkipTest) else 'error', error=exc,
-                  skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None, stop=stop_details(exc))
-        raise
-    else:
-        if writer:
-            _emit(writer, stage, 'end', step=step, nodeid=node, **details)
-
-
 def case_identity(test):
     module = type(test).__module__
     if not module.startswith('tests.'):
@@ -1199,118 +1074,19 @@ def case_identity(test):
 
 
 def case_location(test, root=None):
-    try:
-        method = getattr(test, getattr(test, '_testMethodName', ''), None)
-        if isinstance(method, MethodType):
-            method = method.__func__
-        seen = set()
-        for _ in range(8):
-            if not isinstance(method, FunctionType) or id(method) in seen:
-                return None
-            seen.add(id(method))
-            wrapped = method.__dict__.get('__wrapped__')
-            if wrapped is None:
-                break
-            method = wrapped
-        else:
-            return None
-        code = method.__code__
-        if root is not None:
-            path = Path(code.co_filename).relative_to(root).as_posix()
-            if test_identity(path) is not None and test_identity(path)['path'] == path and 1 <= code.co_firstlineno <= 1000000:
-                return (path, code.co_firstlineno)
-    except Exception:
-        return None  # Unsupported metadata cannot change the original skip outcome.
-    return None
+    from .verification_unittest import case_location as locate
+    return locate(test, root)
 
 
 def unittest_runner(writer):
-    """Use the standard runner once; observe its actual call boundaries only."""
-    class Result(unittest.TextTestResult):
-        def startTest(self, test):
-            super().startTest(test)
-            node = case_identity(test)
-            _observe(writer, 'begin_test_phase', node, 'unknown')
-            writer.emit('test', 'start', nodeid=node)
-            originals = {}
-            for name, stage in (('_callSetUp', 'setup'), ('_callTestMethod', 'call'), ('_callTearDown', 'teardown')):
-                original = getattr(test, name)
-                originals[name] = (name in test.__dict__, test.__dict__.get(name))
-                def observed(*args, _original=original, _stage=stage, **kwargs):
-                    _observe(writer, 'begin_test_phase', node, _stage)
-                    try:
-                        with bind_sink(writer, node), span(None, stage=_stage) as detail:
-                            detail['outcome'] = 'pass'
-                            return _original(*args, **kwargs)
-                    except BaseException as error:
-                        _observe(writer, 'note_exception', node, _stage, error)
-                        raise
-                setattr(test, name, observed)
-            self._journal_originals = (test, originals)
-
-        def stopTest(self, test):
-            prior = getattr(self, '_journal_originals', None)
-            if prior is not None and prior[0] is test:
-                for name, (had, value) in prior[1].items():
-                    if had:
-                        setattr(test, name, value)
-                    else:
-                        test.__dict__.pop(name, None)
-            super().stopTest(test)
-
-        def addSuccess(self, test):
-            writer.emit('test', 'end', nodeid=case_identity(test), outcome='pass')
-            super().addSuccess(test)
-
-        def addFailure(self, test, err):
-            writer.emit('test', 'end', nodeid=case_identity(test), outcome='fail', error=err[1])
-            super().addFailure(test, err)
-            _observe(self, '_retain', test, err)
-
-        def addError(self, test, err):
-            writer.emit('test', 'end', nodeid=case_identity(test), outcome='error', error=err[1])
-            super().addError(test, err)
-            _observe(self, '_retain', test, err)
-
-        def _retain(self, test, err=None, phase=None):
-            started = getattr(self, '_journal_originals', (None,))[0] is test
-            node = case_identity(test) if started else None
-            _observe(writer, 'record_test_failure', node, phase if started else 'unknown', _exception_kind(err[1] if err else None))
-
-        def addSkip(self, test, reason):
-            writer.emit('test', 'end', nodeid=case_identity(test), outcome='skip', skip=skip_classification(reason), location=case_location(test, writer.source_root))
-            super().addSkip(test, reason)
-
-        def addExpectedFailure(self, test, err):
-            writer.emit('test', 'end', nodeid=case_identity(test), outcome='expected-failure', error=err[1])
-            super().addExpectedFailure(test, err)
-
-        def addUnexpectedSuccess(self, test):
-            writer.emit('test', 'end', nodeid=case_identity(test), outcome='unexpected-success')
-            super().addUnexpectedSuccess(test)
-            if self.unexpectedSuccesses and self.unexpectedSuccesses[-1] is test:
-                _observe(self, '_retain', test, None, 'call')
-
-        def addSubTest(self, test, subtest, err):
-            writer.emit('call', 'unknown', nodeid=case_identity(test), outcome='pass' if err is None else 'fail',
-                        error=None if err is None else err[1])
-            super().addSubTest(test, subtest, err)
-            if err is not None:
-                _observe(self, '_retain', test, err, 'call')
-
-    class Runner(unittest.TextTestRunner):
-        resultclass = Result
-
-        def run(self, test):
-            writer.emit('collection', 'end')
-            return super().run(test)
-    return Runner
+    from .verification_unittest import unittest_runner as runner
+    return runner(writer)
 
 
 def _validated_events(raw, run_id, actor):
     allowed = {'version', 'run_id', 'actor', 'actor_attempt', 'sequence', 'stage', 'state', 'pid', 'elapsed_ns', 'utc',
                'step', 'path', 'key', 'invocation', 'unmatched_end', 'outcome', 'exit', 'error_class',
-               'frames', 'skip_class', 'location_status', 'location', 'process', 'identity_status', 'stop'}
+               'frames', 'skip_class', 'location_status', 'location', 'process', 'identity_status', 'stop', 'queue_refusal'}
     def closed(pairs):
         result = {}
         for key, value in pairs:
@@ -1332,6 +1108,8 @@ def _validated_events(raw, run_id, actor):
             raise ValueError('journal-record-schema')
         if 'step' in row and (type(row['step']) is not str or not _ID.fullmatch(row['step'])):
             raise ValueError('journal-record-step')
+        if 'queue_refusal' in row:
+            _validate_queue_refusal(row['queue_refusal'])
         if 'stop' in row:
             _validate_stop(row['stop'])
         if 'path' in row:
@@ -1416,7 +1194,7 @@ def export_entries(root, *, binding=None):
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = _decode(_read(handle, actor + '.json', 2048))
-                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions', 'core_stop'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
+                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions', 'core_stop', 'active_span', 'queue_refusal'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
                             or health['run_id'] != row['run_id'] or health['nonce'] != row['nonce'] or health['actor'] != actor
                             or health['status'] not in {'active', 'closed', 'unavailable'}
                             or any(type(health[k]) is not int or not 0 <= health[k] <= 2**63 - 1

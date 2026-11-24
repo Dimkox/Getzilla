@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+sys.dont_write_bytecode = True
 
 try:
     from _lib import agent_generation, agent_id, emit, read_payload, root_from, run_hook, session_id, tool_input, tool_name
@@ -58,10 +59,20 @@ def _progress_hint(payload: dict, root, current: str) -> str:
             return ''
         event = next((payload[key] for key in ('tool_use_id', 'tool_call_id', 'toolCallId') if key in payload), None)
         scope = scope_id(root, session_id(payload), agent_id(payload), agent_generation(payload))
-        return observe(root, scope, data, command_cwd(root, payload, data), responses[0],
-                       current if git_head(root) else None, event_id=event)
+        head = git_head(root)
+        local = observe(root, scope, data, command_cwd(root, payload, data), responses[0],
+                        current if head else None, event_id=event)
     except Exception:
         return 'Getzilla: progress observations unavailable; ordinary authorization still applies.'
+    try:
+        # GitHub CI state and stale CI evidence (#153).
+        from getzilla import ci_progress
+        if ci_progress.classify(data.get('command')) is None:
+            return local
+        external = ci_progress.observe(root, scope, data, responses[0], head)
+    except Exception:
+        external = 'Getzilla: progress observations unavailable; ordinary authorization still applies.'
+    return '\n'.join(filter(None, (local, external)))
 
 
 def _remember_reads(payload: dict, root) -> None:

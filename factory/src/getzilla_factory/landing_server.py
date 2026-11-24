@@ -27,8 +27,16 @@ class OwnedLandingRuntime:
 def compose_server_landing(
     settings: FactorySettings, *, repository_root: Path, qwen_env_file: Path | None = None,
     provider_env_file: Path | None = None,
+    factory_service=None,
+    configure_paid_authority=None,
 ) -> OwnedLandingRuntime | None:
     settings.validate_landing()
+    if settings.landing_live_enabled:
+        from .factory_stop import FactoryStopError, require_factory_service
+        try:
+            require_factory_service(factory_service)
+        except FactoryStopError:
+            raise SettingsError('live landing requires canonical Factory stop authority') from None
     if provider_env_file is not None and qwen_env_file is not None:
         raise SettingsError("select one provider credential file")
     if settings.landing_quarantine_path is None:
@@ -76,9 +84,6 @@ def compose_server_landing(
         else:
             from .landing_http import HttpLandingProfile
             from .landing_live_executors import (
-                GROK_API_KEY_ENV,
-                QWEN_API_KEY_ENV,
-                api_key_from_environ,
                 qwen_api_key,
                 compose_landing_live_grok,
                 compose_landing_live_qwen,
@@ -87,19 +92,29 @@ def compose_server_landing(
             )
 
             profile = HttpLandingProfile.for_provider(settings.landing_provider, available=True)
+            if configure_paid_authority is None:
+                raise SettingsError("explicit paid authority required")
+            if provider_env_file is None and (qwen_env_file is None or profile.provider_id != "qwen"):
+                raise SettingsError("scoped provider credential file required")
             compose = (
                 compose_landing_live_grok if settings.landing_provider in {"grok", "grok-vision"}
                 else compose_landing_live_qwen if profile.provider_id == "qwen"
                 else compose_landing_live_provider
             )
-            key_name = GROK_API_KEY_ENV if settings.landing_provider in {"grok", "grok-vision"} else QWEN_API_KEY_ENV
             # This is runtime-only opt-in acquisition, after all path/source
             # validation and ownership checks. Never persist or log the value.
+            admission = configure_paid_authority(owned_store, profile)
+            from .paid_admission import PaidExecutionAdmission
+            if type(admission) is not PaidExecutionAdmission or admission.store is not owned_store:
+                raise SettingsError("shared durable paid authority required")
+            def credential_loader():
+                return (provider_api_key(profile.provider_id, env_file=provider_env_file)
+                         if provider_env_file is not None
+                         else qwen_api_key(env_file=qwen_env_file))
             service = compose(
-                api_key=(provider_api_key(profile.provider_id, env_file=provider_env_file)
-                         if provider_env_file is not None or profile.provider_id not in {"qwen", "grok"}
-                         else api_key_from_environ(key_name) if profile.provider_id == "grok"
-                         else qwen_api_key(env_file=qwen_env_file)),
+                credential_loader=credential_loader,
+                admission=admission,
+                factory_service=factory_service,
                 binding=implemented_live_binding(enabled=True),
                 profile=profile,
                 source_repository=settings.landing_source_path,
@@ -121,3 +136,32 @@ def _trusted_source(path: Path, *, repository_root: Path) -> None:
     metadata = (path / ".git").lstat()
     if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
         raise SettingsError("landing source must be an independent checkout")
+
+
+def compose_owned_shared_profile(owned, settings, *, profile_id, configure_paid_authority,
+                                 credential_loader, factory_service, transport=None):
+    """Compose another permitted executor inside the existing writer owner.
+
+    The owner supplies its finite authority and loader. This function never opens
+    a database, reads a caller credential, or serializes an admission object.
+    """
+    from .factory_stop import require_factory_service
+    from .landing_http import HttpLandingProfile
+    from .landing_live_executors import compose_landing_live_provider, compose_landing_live_qwen, compose_landing_live_grok
+    from .paid_admission import PaidExecutionAdmission
+    if type(owned) is not OwnedLandingRuntime or owned.store is None:
+        raise SettingsError('shared durable owner required')
+    require_factory_service(factory_service)
+    profile = HttpLandingProfile.for_provider(profile_id,available=True)
+    admission = configure_paid_authority(owned.store,profile)
+    if type(admission) is not PaidExecutionAdmission or admission.store is not owned.store:
+        raise SettingsError('shared durable paid authority required')
+    compose = compose_landing_live_qwen if profile.provider_id == 'qwen' else compose_landing_live_grok if profile.provider_id == 'grok' else compose_landing_live_provider
+    service = compose(
+        credential_loader=credential_loader,admission=admission,factory_service=factory_service,
+        binding=implemented_live_binding(enabled=True),profile=profile,
+        source_repository=settings.landing_source_path,scratch_root=settings.landing_scratch_path,
+        output_directory=settings.landing_output_path,blobs=owned.service._blobs,store=owned.store,
+        transport=transport,clock=None,
+    )
+    return service,admission

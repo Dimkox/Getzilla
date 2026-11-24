@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 from . import fsx
 from .review_source import review_source_binding
+from .git_ranges import _qualified_architecture_comparison  # noqa: F401 compatibility
 from .state import serialized_task, require_route_owner
 from .architecture import (
     ArchitectureError,
@@ -29,7 +30,7 @@ from .architecture import (
     load_architecture,
     parse_adoption_marker,
 )
-from .architecture_diff import _exact_commit, _git, _git_blob, select_architecture_comparison_base
+from .architecture_diff import _exact_commit, _git, _git_blob, git_binding_scope, select_architecture_comparison_base
 from .governance import (
     DEBT_PATH,
     EXAMPLES_PATH,
@@ -57,6 +58,9 @@ RECEIPT_KINDS = frozenset(
         "release_review",
     }
 )
+# Factual publications share storage but can never satisfy required merge evidence.
+PUBLIC_REVIEW_OBSERVATION_KINDS = frozenset({'retrieval-public-witness-a', 'retrieval-public-witness-b', 'retrieval-public-producer-reference',
+    'retrieval-public-inspect-operation', 'retrieval-public-rank-operation', 'retrieval-public-inspection-outcome'})
 MAX_RECEIPT_BYTES = 262_144
 MAX_VERIFICATION_REPORT_BYTES = 8_388_608
 VERIFICATION_REPORT_CONTRACT = 'adaptive-grok.verification-report/v1'
@@ -136,6 +140,21 @@ def _open_receipt_directory(root: Path, route_id: str, *, create: bool = False) 
         raise
 
 
+def _decode_receipt_bytes(content: bytes, label: str) -> dict[str, Any]:
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in items:
+            if key in value:
+                raise RuntimeError(f'{label} contains a duplicate JSON key')
+            value[key] = item
+        return value
+    data = json.loads(content.decode('utf-8', 'strict'), object_pairs_hook=pairs,
+                      parse_constant=lambda token: (_ for _ in ()).throw(RuntimeError(f'invalid {label} value: {token}')))
+    if not isinstance(data, dict):
+        raise RuntimeError(f'{label} must be a JSON object')
+    return data
+
+
 def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str,
                        *, _observation: list | None = None) -> tuple[dict[str, Any], bytes]:
     if fsx.WINDOWS:
@@ -166,19 +185,8 @@ def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label
         if fsx.WINDOWS:
             _windows_confirm_directories([directory_fd])
 
-        def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
-            value: dict[str, Any] = {}
-            for key, item in items:
-                if key in value:
-                    raise RuntimeError(f'{label} contains a duplicate JSON key')
-                value[key] = item
-            return value
-
         content = b''.join(chunks)
-        data = json.loads(content.decode('utf-8', 'strict'), object_pairs_hook=pairs,
-                          parse_constant=lambda token: (_ for _ in ()).throw(RuntimeError(f'invalid {label} value: {token}')))
-        if not isinstance(data, dict):
-            raise RuntimeError(f'{label} must be a JSON object')
+        data = _decode_receipt_bytes(content, label)
         if _observation is not None:
             named = fsx.lstat_at(directory_fd, name)
             fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns')
@@ -313,8 +321,8 @@ def _publish_verification_report(root: Path, route_id: str, receipt: dict[str, A
                 fsx.close_dir(route_fd)
 
 
-def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, receipt: dict[str, Any],
-                                  *, _observation: list | None = None) -> None:
+def _hydrate_verification_report(directory_fd: fsx.DirHandle | None, route_id: str, receipt: dict[str, Any],
+                                  *, _observation: list | None = None, anchor=None) -> None:
     details = receipt.get('details')
     if not isinstance(details, dict) or '_verification_report' not in details:
         return
@@ -330,9 +338,12 @@ def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, rec
         raise RuntimeError('verification report reference is outside the closed contract')
     reports_fd = None
     try:
-        reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
-        artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES,
-                                              'verification report', _observation=_observation)
+        if anchor is not None:
+            content = anchor.read(reference['path'], MAX_VERIFICATION_REPORT_BYTES)
+            artifact = _decode_receipt_bytes(content, 'verification report')
+        else:
+            reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
+            artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report', _observation=_observation)
     except FileNotFoundError as exc:
         raise RuntimeError('referenced verification report is missing') from exc
     finally:
@@ -368,8 +379,35 @@ class _AuthorityState:
     architecture_identity: tuple[int, int, int, int, int] | None
 
 
-def _authority_presence(root: Path, *, root_fd: int | None = None) -> _AuthorityState:
+def _authority_presence(root: Path, *, root_fd: int | None = None, anchor=None) -> _AuthorityState:
     """Establish stable fixed-entry absence without requiring byte-read primitives."""
+    if anchor is not None:
+        anchor.check_root(root)
+        before_root = _metadata_identity(anchor.root_info())
+        try:
+            before = anchor.stat('architecture', private=False, source=True)
+        except FileNotFoundError:
+            try:
+                anchor.stat('architecture', private=False, source=True)
+            except FileNotFoundError:
+                if _metadata_identity(anchor.root_info()) != before_root:
+                    raise ArchitectureError('repository root changed during authority inspection',code='io')
+                return _AuthorityState((False,False,False),before_root,None)
+            raise ArchitectureError('architecture authority appeared during absence inspection',code='io')
+        if not stat.S_ISDIR(before.st_mode):
+            raise ArchitectureError('architecture authority directory is unsafe',code='io')
+        present = []
+        for relative in (ADOPTION_PATH,SYSTEM_PATH,RULES_PATH):
+            try:
+                anchor.stat(relative.as_posix(),private=False,source=True)
+            except FileNotFoundError:
+                present.append(False)
+            else:
+                present.append(True)
+        if (_metadata_identity(anchor.stat('architecture',private=False,source=True)) != _metadata_identity(before)
+                or _metadata_identity(anchor.root_info()) != before_root):
+            raise ArchitectureError('architecture authority changed during inspection',code='io')
+        return _AuthorityState(tuple(present),before_root,_metadata_identity(before))
     resolved = root.resolve(strict=True)
     architecture = resolved / "architecture"
     try:
@@ -442,21 +480,23 @@ def _confirm_legacy_absence(
     root: Path,
     root_fd: int | None,
     initial: _AuthorityState,
+    *, anchor=None,
 ) -> None:
-    current = _authority_presence(root, root_fd=root_fd)
+    current = _authority_presence(root, root_fd=root_fd, anchor=anchor)
     if current != initial or current.entries != (False, False, False):
         raise RuntimeError("architecture authority appeared during legacy detection")
 
 
-def _architecture_adoption(root: Path, *, present: bool | None = None) -> dict[str, str] | None:
+def _architecture_adoption(root: Path, *, present: bool | None = None, anchor=None) -> dict[str, str] | None:
     if present is None:
-        present = _authority_presence(root).entries[0]
+        present = _authority_presence(root,anchor=anchor).entries[0]
     if not present:
         return None
     data = _read_regular_bytes(
         root,
         ADOPTION_PATH.as_posix(),
         label="architecture adoption",
+        anchor=anchor,
     )
     return parse_adoption_marker(data)
 
@@ -501,122 +541,7 @@ def _history_is_shallow(root: Path) -> bool:
     return raw == b"true\n"
 
 
-def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: str):
-    """Reuse an exact completed qualification, never a reconcile-only assessment.
-
-    This reads existing workflow evidence; it grants no new PASS or independent
-    authority. Git ancestry/model/ref currentness is revalidated by the selector.
-    """
-    route_id = route.get('route_id')
-    if not isinstance(route_id, str):
-        return None
-    try:
-        stored_identity = _receipt_storage_identity(root, route_id)
-        receipt = get_receipt(root, route_id, 'verification')
-        if stored_identity is None or _receipt_storage_identity(root, route_id) != stored_identity:
-            return None
-    except (OSError, RuntimeError):
-        return None
-    required = {'schema_version', 'route_id', 'kind', 'status', 'created_at', 'tree_fingerprint',
-                'report', 'details', 'criterion_ids', 'spec_digest', 'spec_fingerprint'}
-    if (not isinstance(receipt, dict) or not required.issubset(receipt)
-            or type(receipt.get('schema_version')) is not int or receipt['schema_version'] != 1
-            or not isinstance(receipt.get('created_at'), str) or not isinstance(receipt.get('criterion_ids'), list)
-            or receipt.get('status') != 'pass' or receipt.get('stale') is True):
-        return None
-    from .continuity import receipt_context_current
-    if (receipt.get('route_id') != route_id or receipt.get('kind') != 'verification'
-            or receipt.get('git_head') != head or receipt.get('tree_fingerprint') != tree_fingerprint(root)
-            or receipt.get('architecture_route_base_sha') != route.get('base_commit')
-            or not receipt_context_current(root, route, receipt)
-            or receipt.get('review_plan_digest') != (route.get('review_plan') or {}).get('digest')):
-        return None
-    report = receipt.get('details')
-    if (not isinstance(report, dict) or report.get('status') != 'pass'
-            or report.get('mode') not in ('pr', 'release') or report.get('terminal_state') != 'completed'):
-        return None
-    architecture = report.get('architecture')
-    if (not isinstance(architecture, dict) or architecture.get('status') != 'pass'
-            or architecture.get('fitness_status') != 'pass'):
-        return None
-    witness = receipt.get('architecture_comparison_witness')
-    if witness is None:
-        return None
-    from .architecture_diff import ArchitectureBaseSelection, _comparison_model_digest, _comparison_ranges_digest, _git
-    names = set(ArchitectureBaseSelection.__dataclass_fields__)
-    if (type(witness) is not dict or set(witness) != names
-            or architecture.get('architecture_comparison_witness') != witness
-            or witness.get('candidate_sha') != head or witness.get('route_base_sha') != route.get('base_commit')
-            or witness.get('base_kind') != 'accepted_target' or witness.get('bootstrap_baseline') is not False
-            or witness.get('range_mode') != report['mode']
-            or witness.get('range_mode') != receipt.get('architecture_range_mode')
-            or witness.get('range_mode') != architecture.get('architecture_range_mode')
-            or 'architecture_invocation_ranges_digest' in receipt
-            or 'architecture_invocation_ranges_digest' in architecture
-            or witness.get('comparison_base_sha') != witness.get('target_sha')
-            or witness.get('comparison_base_sha') == head
-            or receipt.get('architecture_base_sha') != witness.get('comparison_base_sha')
-            or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', witness[key])
-                       for key in ('route_base_sha', 'comparison_base_sha', 'candidate_sha', 'target_sha'))
-            or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{64}', witness[key])
-                       for key in ('ranges_digest', 'model_digest'))
-            or not isinstance(witness.get('target_ref'), str)
-            or not witness['target_ref'].startswith(('refs/remotes/origin/', 'refs/heads/'))):
-        raise ArchitectureError('qualified architecture comparison witness is malformed', code='git')
-    old_range = {'bases': [
-        {'kind': 'route', 'source': 'route.base_commit', 'target_sha': witness['route_base_sha'],
-         'comparison_base_sha': witness['route_base_sha']},
-        {'kind': 'pr-target', 'source': witness['target_ref'], 'target_sha': witness['target_sha'],
-         'comparison_base_sha': witness['comparison_base_sha']}], 'findings': []}
-    anchor = _git(root, ['merge-base', '--all', witness['route_base_sha'], witness['target_sha']])
-    contained = _git(root, ['merge-base', '--all', witness['target_sha'], head])
-    if (anchor is None or anchor.decode().splitlines() != [witness['route_base_sha']]
-            or contained is None or contained.decode().splitlines() != [witness['target_sha']]
-            or _comparison_ranges_digest(ArchitectureBaseSelection(**witness)) != witness['ranges_digest']
-            or _comparison_model_digest(root, (witness['route_base_sha'], witness['target_sha'], head)) != witness['model_digest']):
-        raise ArchitectureError('qualified architecture comparison identity is stale', code='git')
-    for name in ('architecture_base_sha', 'architecture_base_kind', 'architecture_bootstrap_baseline',
-                 'architecture_route_base_sha', 'architecture_head_commit'):
-        if architecture.get(name) != receipt.get(name):
-            raise ArchitectureError('qualification architecture bindings disagree', code='git')
-    # Prove live acceptance separately from the frozen plan's binding ranges.
-    # This lower-level compiler never calls the range/witness reader again.
-    from .verification import GitRangeBase, GitRangeSelection, _select_local_pr_target, _resolve_commit
-    target = _select_local_pr_target(root)
-    if not isinstance(target, tuple) or target[0] != witness['target_ref']:
-        return None
-    accepted = _git(root, ['merge-base', '--all', head, target[1]])
-    if accepted is None or accepted.decode().splitlines() != [head]:
-        return None
-    frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']], mode=witness['range_mode'], head_sha=head)
-    try:
-        from .verification_plan import _compile_required_plan, _report_plan_gaps
-        current = _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
-                                         docs_scope=None, route=route, ranges=frozen)
-        if _report_plan_gaps(root, report, current):
-            return None
-        if _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
-                                  docs_scope=None, route=route, ranges=frozen) != current:
-            return None
-        spec = _active_spec_binding(root, route, 'verification')
-        if spec is not None and any(receipt.get(key) != value for key, value in spec.items()):
-            return None
-    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
-        return None
-    if (_exact_head(root) != head or _select_local_pr_target(root) != target
-            or _resolve_commit(root, witness['target_ref']) != target[1]
-            or tree_fingerprint(root) != receipt['tree_fingerprint']
-            or not receipt_context_current(root, route, receipt)):
-        raise ArchitectureError('qualified comparison changed during validation', code='git')
-    try:
-        if (get_receipt(root, route_id, 'verification') != receipt
-                or _receipt_storage_identity(root, route_id) != stored_identity):
-            return None
-    except (OSError, RuntimeError):
-        return None
-    return ArchitectureBaseSelection(**witness)
-
-
+@git_binding_scope()
 def _active_architecture_binding(
     root: Path,
     route: dict[str, Any],
@@ -897,16 +822,24 @@ def receipt_dir(root: Path, route_id: str) -> Path:
     return path
 
 
-def _active_spec_binding(root: Path, route: dict[str, Any], kind: str) -> dict[str, Any] | None:
-    active = get_active_change(root) or {}
+def _active_spec_binding(root: Path, route: dict[str, Any], kind: str, *, anchor=None) -> dict[str, Any] | None:
+    active = get_active_change(root, anchor=anchor) or {}
     rel = active.get('path')
     if not rel:
         return None
     path = root / str(rel) / 'change-spec.yaml'
-    if not path.is_file():
-        return None
-    spec = load_spec(path, allow_legacy=False)
-    errors = validate_spec(root, path, gate=False, route=route)
+    if anchor is not None:
+        from .spec import MAX_SPEC_BYTES, _parse_canonical_json
+        try:
+            content = anchor.read(str(rel) + '/change-spec.yaml', MAX_SPEC_BYTES)
+        except FileNotFoundError:
+            return None
+        spec = _parse_canonical_json(content, path)
+    else:
+        if not path.is_file():
+            return None
+        spec = load_spec(path, allow_legacy=False)
+    errors = validate_spec(root, path, gate=False, route=route, anchor=anchor)
     if errors:
         raise RuntimeError('active change spec is invalid: ' + '; '.join(errors))
     criterion_ids = sorted({
@@ -917,7 +850,7 @@ def _active_spec_binding(root: Path, route: dict[str, Any], kind: str) -> dict[s
     return {
         'criterion_ids': criterion_ids,
         'spec_digest': canonical_spec_digest(spec),
-        'spec_fingerprint': spec_fingerprint(root, path, spec, route),
+        'spec_fingerprint': spec_fingerprint(root, path, spec, route, anchor=anchor),
     }
 
 
@@ -970,7 +903,7 @@ def _publish_receipt(path: Path, data: dict[str, Any], interrupt_check: Callable
 def _verification_architecture_options(root: Path, route: dict[str, Any], kind: str, details: Any) -> dict[str, Any]:
     if kind != 'verification' or not isinstance(details, dict) or 'mode' not in details:
         return {}
-    from .verification import _git_range_selection, _RANGE_MODES
+    from .git_ranges import _git_range_selection, _RANGE_MODES
     if type(details['mode']) is not str or details['mode'] not in {'fast', *_RANGE_MODES}:
         raise RuntimeError('verification invocation mode is unavailable')
     return {'_trusted_ranges': _git_range_selection(root, route, details['mode'])}
@@ -993,6 +926,8 @@ def write_receipt(
     reviewed_context: str | None = None,
     expected_context: dict[str, Any] | None = None,
 ) -> Path:
+    if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and status != 'observed':
+        raise ValueError('public witness publication must remain observed')
     route = get_active_route(root)
     if not route:
         raise RuntimeError('no active route')
@@ -1125,14 +1060,17 @@ def write_receipt(
     finally:
         if publication is not None:
             publication.close()
-    from .route_metrics import record_receipt
+    if kind in PUBLIC_REVIEW_OBSERVATION_KINDS:
+        # A data witness is not an ordinary review attempt or failed review.
+        return path
+    from .metrics_journal import record_receipt
     from .metrics_journal import digest
     record_receipt(root, route.get('route_id'), kind, status, identity=digest(data))
     return path
 
 
-def get_receipt(root: Path, route_id: str, kind: str) -> dict[str, Any] | None:
-    return _read_receipt(root, route_id, kind)
+def get_receipt(root: Path, route_id: str, kind: str, *, anchor=None) -> dict[str, Any] | None:
+    return _read_receipt(root, route_id, kind, anchor=anchor)
 
 
 def _receipt_storage_identity(root: Path, route_id: str) -> tuple | None:
@@ -1142,22 +1080,30 @@ def _receipt_storage_identity(root: Path, route_id: str) -> tuple | None:
     return tuple(observation) if data is not None else None
 
 
-def _read_receipt(root: Path, route_id: str, kind: str, *, _observation: list | None = None) -> dict[str, Any] | None:
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS:
+def _read_receipt(root: Path, route_id: str, kind: str, *, _observation: list | None = None, anchor=None) -> dict[str, Any] | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS | PUBLIC_REVIEW_OBSERVATION_KINDS:
         raise RuntimeError("receipt route or kind is outside the closed set")
     directory_fd: fsx.DirHandle | None = None
     try:
-        directory_fd = _open_receipt_directory(root, route_id)
-        data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES,
-                                    'receipt', _observation=_observation)
+        if anchor is not None:
+            anchor.check_root(root)
+            content = anchor.read(f'.getzilla/runtime/receipts/{route_id}/{kind}.json', MAX_RECEIPT_BYTES)
+            data = _decode_receipt_bytes(content, 'receipt')
+        else:
+            directory_fd = _open_receipt_directory(root, route_id)
+            data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt', _observation=_observation)
+        if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and data.get('status') != 'observed':
+            raise RuntimeError('public witness publication must remain observed')
+        if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and (data.get('kind') != kind or data.get('route_id') != route_id):
+            raise RuntimeError('public witness publication binding mismatch')
         if kind == 'verification':
-            _hydrate_verification_report(directory_fd, route_id, data, _observation=_observation)
+            _hydrate_verification_report(directory_fd, route_id, data, anchor=anchor, _observation=_observation)
         return data
     except FileNotFoundError:
         return None
     except RuntimeError:
         raise
-    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise RuntimeError(f"receipt cannot be read safely: {exc}") from exc
     finally:
         if directory_fd is not None:
@@ -1236,10 +1182,6 @@ def validate_evidence(
                            for item in report_gaps(root, receipt.get('details')))
         if receipt.get('stale') is True:
             missing.append(f'{kind}: explicitly invalidated')
-        if kind == 'verification' and receipt.get('status') == 'pass':
-            from .verification_plan import report_gaps
-            if report_gaps(root, receipt.get('details')):
-                missing.append('verification: current required plan or individual evidence is unavailable or stale')
         plan_digest = (route.get('review_plan') or {}).get('digest')
         if plan_digest and receipt.get('review_plan_digest') != plan_digest:
             missing.append(f'{kind}: review plan binding stale')

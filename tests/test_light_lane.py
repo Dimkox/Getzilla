@@ -133,6 +133,10 @@ class LightLaneVerificationTests(unittest.TestCase):
                 self.assertTrue(allowed, refusal)
                 self.assertEqual(start_agent(root, 'test-review', reviewer)['lifecycle'], 'running')
 
+    def test_fast_verifier_admits_small_code_without_package_then_restores_full_floor(self):
+        # Retain the original 393/411 identity with the stronger security-floor contract.
+        self.test_light_diff_needs_no_package_but_missing_security_still_blocks_verification()
+
     def test_light_diff_needs_no_package_but_missing_security_still_blocks_verification(self):
         from getzilla.router import build_route
         from getzilla.state import get_active_route
@@ -140,6 +144,9 @@ class LightLaneVerificationTests(unittest.TestCase):
         from getzilla.verification import verify
         from tests._support import project_copy
         with project_copy(git=True, verification_fixture=True) as root:
+            (root / 'requirements.txt').write_text('jinja2==2.11.0\n', encoding='utf-8', newline='\n')
+            git(root, 'add', 'requirements.txt')
+            git(root, 'commit', '-qm', 'owned real dependency baseline')
             base = git(root, 'rev-parse', 'HEAD')
             git(root, 'update-ref', 'refs/remotes/origin/main', base)
             route = build_route(root, 'Fix the greeting text', 'light-e2e').to_dict()

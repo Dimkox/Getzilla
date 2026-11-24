@@ -1,0 +1,89 @@
+{
+  "adapter": {
+    "id": "recorded-output",
+    "version": "1"
+  },
+  "cases": [
+    {
+      "id": "baseline-parent-faulty",
+      "path": "tests/fixtures/agent-evals/incidents-v1/baseline-parent-faulty.json",
+      "sha256": "e72b4dd0c2577e69a64c3e4dd908d157b453eec98374bf1d3743f644e684ed94"
+    },
+    {
+      "id": "baseline-parent-clean",
+      "path": "tests/fixtures/agent-evals/incidents-v1/baseline-parent-clean.json",
+      "sha256": "e9fda2afa99c9adb943b80515a845aa0c88112417519ae8c6e3b89a454ea3d9d"
+    },
+    {
+      "id": "numeric-bound-faulty",
+      "path": "tests/fixtures/agent-evals/incidents-v1/numeric-bound-faulty.json",
+      "sha256": "02034bb8bf49d5da8723eb151dd0afb9e65dac4511bcf23a3e34e8f4dbb068df"
+    },
+    {
+      "id": "numeric-bound-clean",
+      "path": "tests/fixtures/agent-evals/incidents-v1/numeric-bound-clean.json",
+      "sha256": "bee99fc67419286626f19fff061256b952713ae59c85b6994af0102ae458632c"
+    },
+    {
+      "id": "export-bound-faulty",
+      "path": "tests/fixtures/agent-evals/incidents-v1/export-bound-faulty.json",
+      "sha256": "0664086ada4c6ae67b3649c57a70131170fe551e1259ed45cbb222b673d44074"
+    },
+    {
+      "id": "export-bound-clean",
+      "path": "tests/fixtures/agent-evals/incidents-v1/export-bound-clean.json",
+      "sha256": "b3d5c30ae5a735331ec4a30196b4ad20d27e79f0aa415272c35fe14efbb5a208"
+    },
+    {
+      "id": "invented-sha-faulty",
+      "path": "tests/fixtures/agent-evals/incidents-v1/invented-sha-faulty.json",
+      "sha256": "8feb8958e919179104c4ff91d113219cf3573807c7e311239650ea7ded56ca51"
+    },
+    {
+      "id": "invented-sha-clean",
+      "path": "tests/fixtures/agent-evals/incidents-v1/invented-sha-clean.json",
+      "sha256": "c76d90bffe962d49d3f52b51671a581289ad2274ce458de343765f7e69729ef0"
+    },
+    {
+      "id": "body-text-faulty",
+      "path": "tests/fixtures/agent-evals/incidents-v1/body-text-faulty.json",
+      "sha256": "fc46c80c225239df09d1f24dda6a0c77e9e6fd4522fa22a69cbe17eaefacaedb"
+    },
+    {
+      "id": "body-text-clean",
+      "path": "tests/fixtures/agent-evals/incidents-v1/body-text-clean.json",
+      "sha256": "c81559a63558874755e2cbea8a0a4ffd2075695654c073f44d3bd3e1bbec82e5"
+    }
+  ],
+  "comparator": {
+    "id": "paired-verdict",
+    "version": "1"
+  },
+  "dataset": {
+    "id": "historical-incident-pairs",
+    "version": "1"
+  },
+  "grader": {
+    "id": "deterministic",
+    "version": "1"
+  },
+  "identities": {
+    "config": "synthetic:offline-v1",
+    "index": "none",
+    "model": "synthetic:handwritten-critic",
+    "prompt": "sha256:fcd2f595233775350d1568a7a2b5d2a3658590cd3a42a93a97c7e445e40dbabf",
+    "source": {
+      "commit": "537fc28d1ec0360109aa46b0887aa7d6158f8dcc",
+      "tree": "e063d353acc40149be725178f01ea886bcbaa085"
+    },
+    "tool": "none"
+  },
+  "protocol": {
+    "id": "paired-critic-observation",
+    "repetitions": 1,
+    "variables": [],
+    "version": "1"
+  },
+  "schema_version": 1,
+  "suite_id": "incident-critic-algorithm"
+}

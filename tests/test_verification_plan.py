@@ -213,6 +213,23 @@ class RequiredPlanTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 api._module_source(module)
 
+    def test_historical_archive_decoder_body_changes_implementation_hash(self):
+        from getzilla import verification_policy_source as source
+        original = source._module_source
+        before = source.implementation_source_binding()
+        self.assertIn('historical_data.py', before)
+        def changed(module):
+            body = original(module)
+            if module.__name__ == 'getzilla.historical_data':
+                changed_body = body.replace(b'len(body) != 266240', b'len(body) != 266241')
+                self.assertNotEqual(changed_body, body)
+                return changed_body
+            return body
+        with mock.patch.object(source, '_module_source', side_effect=changed):
+            after = source.implementation_source_binding()
+        self.assertEqual(set(before), set(after))
+        self.assertEqual([name for name in before if before[name] != after[name]], ['historical_data.py'])
+
     def test_actual_known_engine_source_closure_has_no_missing_or_null_owner(self):
         api = self.api()
         with tempfile.TemporaryDirectory() as directory:
@@ -470,7 +487,11 @@ class VerificationPlanTests(unittest.TestCase):
 
     def test_required_check_omission_is_not_covered_by_other_passes(self):
         with project_copy(git=True) as root:
-            plan = self.plan(root)
+            inputs = self.inputs()
+            # This scenario requires the whole check; individual criterion
+            # execution has separate source-owned proof controls below.
+            inputs['extra_obligations'][0]['expected_tests'] = []
+            plan = self.module().build_required_plan(root, **inputs)
             results = self.results(plan)
             self.assertEqual(self.gaps(plan, results), [])
             self.assertTrue(self.gaps(plan, [item for item in results if item['name'] != 'python-unittest']))

@@ -29,10 +29,11 @@ def _failure_diagnostic_valid(value):
             and value['reason'] in {'budget', 'grant', 'secret', 'root', 'degraded', 'other'}):
         return True
     try:
-        from .verification_failure_excerpt import valid_factory_diagnostic
+        from . import verification_failure_excerpt as helper
     except ImportError:
         return False
-    return valid_factory_diagnostic(value)
+    return any(callable(validator) and validator(value) is True for validator in
+               (getattr(helper, 'valid_factory_diagnostic', None), getattr(helper, 'valid_update_diagnostic', None)))
 
 
 def _exception_diagnostic(error):
@@ -40,7 +41,7 @@ def _exception_diagnostic(error):
         from . import verification_failure_excerpt as helper
     except ImportError:
         return None
-    for name in ('policy_exception_diagnostic', 'factory_exception_diagnostic'):
+    for name in ('policy_exception_diagnostic', 'factory_exception_diagnostic', 'update_exception_diagnostic'):
         reader = getattr(helper, name, None)
         if callable(reader):
             value = reader(error)

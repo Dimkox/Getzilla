@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 
-from .disposable_resources import OwnedDocker, image_pins
+from .disposable_resources import runtime_image_id, OwnedDocker, image_pins
 from .python_test_runner import RunCancelled, execute, cleanup_details
 from .live_acceptance import _write, _held_bytes, read_document, acknowledge_cleanup, seal_component
 from .live_contracts import cleanup_ledger, cycle_budget
@@ -67,7 +67,7 @@ def _allocate(root, owner):
     network = owner.network("network")
     container = owner.container("worker", pin["reference"], volume=volume, volume_target="/data", network=network,
                                  command=("python3", "-c", "import time; time.sleep(600)"))
-    if container["image_id"] != pin["image_id"]:
+    if container["image_id"] != runtime_image_id(root, pin):
         raise RuntimeError("Lifecycle image configuration does not match its pinned manifest")
     _run("exec", container["id"], "python3", "-c", "from pathlib import Path; Path('/data/payload').write_bytes(b'x'*1024)")
     measured = int(_run("exec", container["id"], "python3", "-c", "from pathlib import Path; print(Path('/data/payload').stat().st_size)"))

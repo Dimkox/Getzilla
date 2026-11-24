@@ -16,6 +16,7 @@ flowchart LR
   node_6716118911fde778["NODE-FACTORY-LANDING-MODEL-PROVIDER | external_system | injected live landing model providers"]
   node_7c8192807445a8a6["NODE-FACTORY-LANDING-SQLITE | datastore | local factory operators"]
   node_93915052ae8a2e67["NODE-FACTORY-LOCAL-API | service | local factory operators"]
+  node_4ceddb2cec544a16["NODE-FACTORY-PAID-ADMISSION | local_component | explicit owning server authority"]
   node_a77de286f8308fd4["NODE-FACTORY-POSTGRES | datastore | local factory operators"]
   node_21b552fdfa11f1c2["NODE-FACTORY-PROPOSAL-BROKER | local_component | local factory operators"]
   node_fae11f6a95d982dc["NODE-FACTORY-PROVIDER-ADAPTERS | local_component | local factory operators"]
@@ -42,6 +43,7 @@ flowchart LR
   node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
   node_e02bf35f8229b0f7["NODE-LOCAL-VULNERABILITY-SCANNER | local_component | repository engineering"]
+  node_744d7e0230f6accd["NODE-NPM-REGISTRY | external_system | public npm registry and package source endpoints"]
   node_11778b266a5a56fd["NODE-OPTIONAL-DESIGN-PREVIEW | local_component | repository engineering; explicit optional fixture capture only"]
   node_99c8497c4eb3c986["NODE-OPTIONAL-GITHUB-OBSERVER | local_component | repository engineering; optional GET-only adapter, source-described not activated"]
   node_2b4705308adeeb3e["NODE-OPTIONAL-SEARCH-GATEWAY | local_component | repository engineering"]
@@ -56,6 +58,7 @@ flowchart LR
   node_814a7fe70af9f16d["NODE-PILOT-SQLITE | datastore | single local pilot operator"]
   node_ce3cdb090a7e25d9["NODE-PUBLIC-SECURITY-FEEDS | external_system | CISA KEV and FIRST EPSS public publishers"]
   node_ed77fd8e957c8e8c["NODE-PYPI-REGISTRY | external_system | public PyPI registry and artifact endpoints"]
+  node_48994ce451ebfe13["NODE-RESEARCH-EVIDENCE | repository | repository engineering"]
   node_78f2d5f6399441fd["NODE-SEARCH-BRAVE | external_system | api.search.brave.com"]
   node_f40e05000fb3838a["NODE-SEARCH-FIRECRAWL | external_system | api.firecrawl.dev"]
   node_4cb2764870a21f3e["NODE-SEARCH-SCRAPINGDOG | external_system | api.scrapingdog.com"]
@@ -64,6 +67,7 @@ flowchart LR
   node_b0214d69d31a7432["NODE-SEARCH-SERPER | external_system | google.serper.dev"]
   node_86424fd6464e012a["NODE-SEARCH-TAVILY | external_system | api.tavily.com"]
   node_b546ff724489580d["NODE-SECURITY-ACQUISITION | local_component | repository engineering"]
+  node_c34615bfcff3f67f["NODE-SECURITY-IMAGE-EXECUTOR | local_component | repository engineering / explicitly allocated ephemeral job"]
   node_e0e0b3eab2228878["NODE-SECURITY-SCANNER-TOOLS | local_component | repository engineering"]
   node_e5ccf49808562648["NODE-SECURITY-SNAPSHOT-EVALUATOR | local_component | repository engineering"]
   node_d4421144c1dd4abe["NODE-SEO-SHOWCASE-LAB | local_component | repository engineering"]
@@ -114,12 +118,15 @@ flowchart LR
   node_dfd1104494c6ab8f -->|"EDGE-GOVERNANCE-REGISTRIES-VALIDATOR | data_flow | filesystem"| node_23677f8757246623
   node_23677f8757246623 -->|"EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https"| node_d0e570b2fbe52f98
+  node_c34615bfcff3f67f -->|"EDGE-IMAGE-BUILD-HTTP-INPUTS | dependency | http"| node_ff513e24cb7ef2d8
+  node_c34615bfcff3f67f -->|"EDGE-IMAGE-BUILD-HTTPS-INPUTS | dependency | https"| node_ff513e24cb7ef2d8
   node_a02e5f5306abe637 -->|"EDGE-ISOLATED-INPUT-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
   node_a02e5f5306abe637 -->|"EDGE-ISOLATED-RESOURCE-CONTROL | dependency | docker_api"| node_29363a281e26c870
   node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-DOCKER | data_flow | docker_api"| node_4e78270f61d78ed8
   node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-OWNED-RESOURCES | dependency | python_import"| node_a02e5f5306abe637
   node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-POSTGRES | data_flow | postgresql"| node_15647433e781e546
   node_47745d4c55496199 -->|"EDGE-LOCAL-CI-GITHUB-VISIBILITY | dependency | https"| node_8b8a8cd21b180532
+  node_770cf3a1783e8525 -->|"EDGE-LOCAL-CURRENT-ARTIFACT-REVALIDATION | dependency | python_call"| node_99bef979b5a89963
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW | dependency | python_call"| node_11778b266a5a56fd
   node_99bef979b5a89963 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-VERIFIER-SEO-LAB | control | tcp"| node_d4421144c1dd4abe
@@ -127,9 +134,12 @@ flowchart LR
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-CISA | dependency | https"| node_662c15ead8b897ee
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-EPSS | dependency | https"| node_57e24ded05c6433e
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-GITHUB-ASSETS | dependency | https"| node_8b8a8cd21b180532
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-NPM | dependency | https"| node_744d7e0230f6accd
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-OSV-API | dependency | https"| node_8acae282d21dd9c2
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-OSV-BUCKET | dependency | https"| node_7b13ed12e8efab1c
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-PYPI | dependency | https"| node_ed77fd8e957c8e8c
+  node_4ceddb2cec544a16 -->|"EDGE-PAID-AUTHORITY-JOURNAL | data_flow | sqlite"| node_7c8192807445a8a6
+  node_956eadd47cc94452 -->|"EDGE-PAID-EXECUTOR-ADMISSION | dependency | python_import"| node_4ceddb2cec544a16
   node_22df40caedcff532 -->|"EDGE-PILOT-CODEX | control | https"| node_69f0245ef987c48b
   node_fd325b0205e2e68b -->|"EDGE-PILOT-CODEX-SUPERVISOR | dependency | python_import"| node_22df40caedcff532
   node_c439f662476a4d4b -->|"EDGE-PILOT-GITHUB | publication | https"| node_8b8a8cd21b180532
@@ -169,7 +179,9 @@ flowchart LR
   node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-INTELLIGENCE | dependency | https"| node_ce3cdb090a7e25d9
   node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-OSV | dependency | https"| node_7b13ed12e8efab1c
   node_e0e0b3eab2228878 -->|"EDGE-SECURITY-DB-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
+  node_b546ff724489580d -->|"EDGE-SECURITY-IMAGE-GRAPHS | dependency | https"| node_ff513e24cb7ef2d8
   node_e0e0b3eab2228878 -->|"EDGE-SECURITY-IMAGE-READ | dependency | docker_api"| node_29363a281e26c870
+  node_b546ff724489580d -->|"EDGE-SECURITY-OWNED-IMAGE-JOB | dependency | local_subprocess"| node_c34615bfcff3f67f
   node_b546ff724489580d -->|"EDGE-SECURITY-SCANNER-DISPATCH | dependency | filesystem"| node_e0e0b3eab2228878
   node_b546ff724489580d -->|"EDGE-SECURITY-SNAPSHOT-READ | dependency | filesystem"| node_e5ccf49808562648
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-EARNED-AUTONOMY | dependency | python_import"| node_379217d10ea012c3

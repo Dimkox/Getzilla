@@ -1,0 +1,341 @@
+{
+  "kind": "bounded native controls; not a qualifying gate or receipt",
+  "head": "ba0ac9c544ee57e91c54486f107007bf7bb041bf",
+  "tree": "b1c2fe7afbbb33ac92fb4138c049b193c8cf210d",
+  "base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+  "secondary_main": "287e64f99b01db44cb6eeeb10f307ccda6f91c1d",
+  "native_changed_file_inventory": {
+    "mode": "range-union",
+    "bases": [
+      {
+        "kind": "route",
+        "source": "route.base_commit",
+        "base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+        "target": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+        "count": 93
+      },
+      {
+        "kind": "pr-target",
+        "source": "refs/remotes/origin/main",
+        "base": "287e64f99b01db44cb6eeeb10f307ccda6f91c1d",
+        "target": "287e64f99b01db44cb6eeeb10f307ccda6f91c1d",
+        "count": 22
+      }
+    ],
+    "worktree_count": 0,
+    "union_count": 93,
+    "selection_findings": []
+  },
+  "checks": [
+    {
+      "name": "architecture-inputs",
+      "status": "pass",
+      "summary": "bounded model and referenced-input preflight executed",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "secret-scan",
+      "status": "pass",
+      "summary": "0 potential secrets; 0 disposed; 0 unresolved",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "disposition-summary",
+          "path": "engineering/verification-dispositions.json",
+          "message": "Raw findings remain visible; effective outcomes include reviewed dispositions.",
+          "config_sha256": null,
+          "configured": 0,
+          "observed": 0,
+          "disposed": 0,
+          "unresolved": 0
+        }
+      ]
+    },
+    {
+      "name": "git-diff-check",
+      "status": "pass",
+      "summary": "4/4 commands clean; 0 findings disposed; 0 unresolved; bases=route:e158ddc7263a55f5308944c5a426eb1e9f1a4327,pr-target:287e64f99b01db44cb6eeeb10f307ccda6f91c1d",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": [
+        {
+          "severity": "info",
+          "code": "checked-range",
+          "path": "route.base_commit",
+          "message": "checked e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD",
+          "kind": "route",
+          "base": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+          "target": "e158ddc7263a55f5308944c5a426eb1e9f1a4327"
+        },
+        {
+          "severity": "info",
+          "code": "checked-range",
+          "path": "refs/remotes/origin/main",
+          "message": "checked 287e64f99b01db44cb6eeeb10f307ccda6f91c1d..HEAD",
+          "kind": "pr-target",
+          "base": "287e64f99b01db44cb6eeeb10f307ccda6f91c1d",
+          "target": "287e64f99b01db44cb6eeeb10f307ccda6f91c1d"
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "worktree",
+          "message": "exit=0: git diff --check",
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "index",
+          "message": "exit=0: git diff --cached --check",
+          "command": [
+            "git",
+            "diff",
+            "--cached",
+            "--check"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "route",
+          "message": "exit=0: git diff --check e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD",
+          "command": [
+            "git",
+            "diff",
+            "--check",
+            "e158ddc7263a55f5308944c5a426eb1e9f1a4327..HEAD"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "diff-check-command",
+          "path": "pr-target",
+          "message": "exit=0: git diff --check 287e64f99b01db44cb6eeeb10f307ccda6f91c1d..HEAD",
+          "command": [
+            "git",
+            "diff",
+            "--check",
+            "287e64f99b01db44cb6eeeb10f307ccda6f91c1d..HEAD"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "severity": "info",
+          "code": "disposition-summary",
+          "path": "engineering/verification-dispositions.json",
+          "message": "Raw findings remain visible; effective outcomes include reviewed dispositions.",
+          "config_sha256": null,
+          "configured": 0,
+          "observed": 0,
+          "disposed": 0,
+          "unresolved": 0
+        }
+      ]
+    },
+    {
+      "name": "change-spec",
+      "status": "pass",
+      "summary": "1 specs checked; exempt=False",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "architecture",
+      "status": "pass",
+      "summary": "drift=pass; fitness=pass; diagrams=pass",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    },
+    {
+      "name": "governance",
+      "status": "pass",
+      "summary": "governance registries and evidence are current",
+      "command": null,
+      "stdout": "",
+      "stderr": "",
+      "duration_hint": null,
+      "details": []
+    }
+  ],
+  "spec": {
+    "exempt": false,
+    "specs": [
+      {
+        "path": "engineering/changes/20261021-task-d83415/change-spec.yaml",
+        "profile": "gate",
+        "valid": true,
+        "errors": [],
+        "coverage": {
+          "spec_count": 1,
+          "criterion_total": 8,
+          "criterion_mapped": 8,
+          "mapped_ids": [
+            "AC-001",
+            "AC-002",
+            "AC-003",
+            "AC-004",
+            "AC-005",
+            "AC-006",
+            "AC-007",
+            "AC-008"
+          ],
+          "unmapped_ids": [],
+          "evidence_counts": {
+            "test": 8,
+            "receipt": 16,
+            "production_signal": 0,
+            "attestation": 0
+          },
+          "attestation_ac": {
+            "spec_count": 1,
+            "criterion_total": 8,
+            "criterion_mapped": 8,
+            "unmapped_ids": []
+          },
+          "categories": {
+            "acceptance_criteria": {
+              "criterion_total": 8,
+              "criterion_mapped": 8,
+              "mapped_ids": [
+                "AC-001",
+                "AC-002",
+                "AC-003",
+                "AC-004",
+                "AC-005",
+                "AC-006",
+                "AC-007",
+                "AC-008"
+              ],
+              "unmapped_ids": []
+            },
+            "invariants": {
+              "criterion_total": 1,
+              "criterion_mapped": 1,
+              "mapped_ids": [
+                "INV-001"
+              ],
+              "unmapped_ids": []
+            },
+            "forbidden_outcomes": {
+              "criterion_total": 1,
+              "criterion_mapped": 1,
+              "mapped_ids": [
+                "FORBID-001"
+              ],
+              "unmapped_ids": []
+            }
+          },
+          "all_criterion_total": 10,
+          "all_criterion_mapped": 10,
+          "all_mapped_ids": [
+            "AC-001",
+            "AC-002",
+            "AC-003",
+            "AC-004",
+            "AC-005",
+            "AC-006",
+            "AC-007",
+            "AC-008",
+            "FORBID-001",
+            "INV-001"
+          ],
+          "all_unmapped_ids": []
+        },
+        "digest": "63e2bc6653c57bc982cf9da77ea10131533302a21e9d2c318afe414b9b699f8e",
+        "fingerprint": "07eac1f3b0933550fa00e2b9f1edc4d224b16782c15b4da81fc2a425dc32ef6d"
+      }
+    ],
+    "historical_migrations": [],
+    "active_path": "engineering/changes/20261021-task-d83415/change-spec.yaml"
+  },
+  "architecture": {
+    "configured": true,
+    "diagram_status": "pass",
+    "diagram_mismatches": [],
+    "drift_findings": [],
+    "status": "pass",
+    "architecture_contract_version": 1,
+    "adoption_digest": "af26761dc3c6657e576a1c699536e041d8a993e8da6597566e1ced23312600ab",
+    "architecture_digest": "ec52dc80b6a677df18d4edee34a765fa702128688111febc001929c4ab32c452",
+    "architecture_fingerprint": "2746f6dadce8d678b2f2e261fb96dd661a273c532c32211a38c902b55a590b08",
+    "architecture_base_sha": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+    "architecture_head_commit": "ba0ac9c544ee57e91c54486f107007bf7bb041bf",
+    "architecture_base_kind": "route_model",
+    "architecture_bootstrap_baseline": false,
+    "architecture_route_base_sha": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+    "baseline_introduced": false,
+    "base_adoption_state": "adopted",
+    "head_adoption_state": "adopted",
+    "base_adoption_digest": "af26761dc3c6657e576a1c699536e041d8a993e8da6597566e1ced23312600ab",
+    "head_adoption_digest": "af26761dc3c6657e576a1c699536e041d8a993e8da6597566e1ced23312600ab",
+    "contract_inventory_digest": "8da389e7361bfb6569b8146f256e14a8a6217046cf48dd1ed04f4833aa1090f3",
+    "diff_digest": "d3fddd7946d823610e0951db236d49eb9b5dfea7a65f6f7481a2194ae723896e",
+    "drift_status": "pass",
+    "exact_base_sha": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+    "base_kind": "commit",
+    "fitness_evidence_digest": "d0bcd83137e332a72ffc5f5df2b4ec475f5aa8bc1ff38ba466120b1a4d12d391",
+    "fitness_status": "pass",
+    "generated_artifact_digests": {
+      "context.mmd": "fb394ac580bf43a59af46bf5d75f9ee9ef9ece1423cd2f5be673df6089e936a5",
+      "container.mmd": "f50d31d969da655783c2b1e48b6682f7a42f5338035ab401135aafa6bc9c1658",
+      "deployment.mmd": "03e81cb4a343b3d69370ae02becf975ea9a263df45c6da2baa75714215de6da8",
+      "data-flow.mmd": "defbb77a18efc03d697dcb106b5c7e213c19ce076fce929e23a966ee31468907",
+      "trust-boundary.mmd": "c4d8a71fb0d193d9bc55b353892ede66322f7643b12dd038f904ebfafc7f3b95"
+    },
+    "head_kind": "worktree",
+    "repository_inventory_digest": "7b0d0b181abc8742e8fe553bdeef1ddcc02e9f2c81ba9274a8a26a509e0e4415",
+    "risk_escalation": "green",
+    "risk_post": "red",
+    "risk_pre": "red",
+    "rules_digest": "a0d8252c4232f469a6a62669d06ec511edabefc8c837dd9fad6d559ce9e15aa6",
+    "schema_digest": "c849231d6d3e1ea35afa4da52f612893bf9c4586934670007b9bfb495afc8769",
+    "system_digest": "087f7aa0108c70d173451d4c17b0cd088564b98d158d2cb863ad0daf01ad3d28",
+    "architecture_evidence_digest": "1f82d7a2e952f05fdd5f27de8d245e2316b0f769845da303b3043f4857a61655"
+  },
+  "governance": {
+    "architecture_status": "pass",
+    "configured": true,
+    "status": "pass",
+    "governance_contract_version": 1,
+    "governance_digest": "dfb2631cf1d47deaea71dec2d576adb72182f55401f12517333d2fff13355463",
+    "governance_evidence_digest": "9b6e257766441e80a5337a1cbcb0f1ec154daf6d22a8c423871e07ed2c6ebb76",
+    "governance_architecture_digest": "ec52dc80b6a677df18d4edee34a765fa702128688111febc001929c4ab32c452",
+    "governance_applicable_base_sha": "e158ddc7263a55f5308944c5a426eb1e9f1a4327",
+    "governance_applicable_head_sha": "ba0ac9c544ee57e91c54486f107007bf7bb041bf"
+  },
+  "duration_seconds": 27.978584262076765,
+  "head_after": "ba0ac9c544ee57e91c54486f107007bf7bb041bf",
+  "status_after": ""
+}

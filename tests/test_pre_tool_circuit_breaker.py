@@ -93,7 +93,7 @@ class DenialCircuitBreakerTest(unittest.TestCase):
             payload = {'cwd': str(root), 'tool_name': 'exec_command', 'tool_input': {'cmd': ''}}
             for broken in ('root_context', '_record_denial', '_fingerprint'):
                 emitted = []
-                with patch.object(module, 'read_payload', return_value=payload), \
+                with patch.object(module, '_read_tool_payload', return_value=payload), \
                      patch.object(module, 'emit', side_effect=emitted.append), \
                      patch.object(module, broken, side_effect=RuntimeError('injected')):
                     module.main()

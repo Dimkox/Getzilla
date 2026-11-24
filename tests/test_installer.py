@@ -216,6 +216,13 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
             MODULE.materialize_new(source, target, selection=selection)
             self.assertTrue((target / MODULE.ENGINE_ARCHIVE).is_file())
+            vendor = Path('.getzilla/config/license-exception-inputs/factory-source-delivery-v1/vendor')
+            retained = {p.relative_to(source) for p in (source / vendor).rglob('*') if p.is_file()}
+            installed = {p.relative_to(target) for p in (target / vendor).rglob('*') if p.is_file()}
+            self.assertTrue(retained)
+            self.assertEqual(installed, retained)
+            for relative in sorted(retained):
+                self.assertEqual((target / relative).read_bytes(), (source / relative).read_bytes(), relative)
             environment = dict(os.environ, TMPDIR=child_temp, TEMP=child_temp, TMP=child_temp)
             result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
                                     env=environment, text=True, capture_output=True, timeout=180)
@@ -428,8 +435,14 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                         self.assertEqual(json.loads(result.stdout), {'name': name, 'payload': {'sentinel': 1}})
                         canonical.unlink()
                         fallback = subprocess.run([sys.executable, name], cwd=root, input='{}', text=True, capture_output=True, timeout=10)
-                        self.assertEqual(fallback.returncode, 0, fallback.stderr)
-                        self.assertEqual(json.loads(fallback.stdout), {'decision': 'deny', 'reason': 'Getzilla canonical policy hook is missing'} if name == 'pre_tool_use.py' else {})
+                        if name == 'pre_tool_use.py':
+                            self.assertEqual(fallback.returncode, 2, fallback.stderr)
+                            refusal = json.loads(fallback.stdout)
+                            self.assertEqual(refusal['decision'], 'deny')
+                            self.assertEqual(refusal['hookSpecificOutput']['permissionDecision'], 'deny')
+                        else:
+                            self.assertEqual(fallback.returncode, 0, fallback.stderr)
+                            self.assertEqual(json.loads(fallback.stdout), {})
 
     def test_hook_aliases_use_the_inventoried_template_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -658,7 +671,7 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                              "factory/src/getzilla_factory/cli.py")
             self.assertEqual(MODULE.legacy_to_current_path(".agents/skills/adaptive-delivery/SKILL.md"),
                              ".agents/skills/getzilla-delivery/SKILL.md")
-            self.assertTrue(all(item["action"] == "RETIRE" for item in plan["legacy_migration"]))
+            self.assertTrue(all(item["action"] == "PRESERVE" for item in plan["legacy_migration"]))
 
     def test_current_sync_record_wins_over_legacy_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -853,17 +866,21 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             self.assertEqual(plan["target_state"], "absent")
             expected = {relative for relative, _ in MODULE.iter_source_files(ROOT)} - {MODULE.COMPONENT_MANIFEST}
             delivered = {entry["path"] for entry in plan["entries"]}
-            self.assertEqual(delivered - {"AGENTS.md", MODULE.STACK_SYNC_RECORD, MODULE.COMPONENT_MANIFEST}, expected)
+            self.assertEqual(delivered - {"AGENTS.md", MODULE.STACK_SYNC_RECORD, MODULE.COMPONENT_MANIFEST, MODULE.OWNERSHIP_PATH}, expected)
             for entry in plan["entries"]:
                 if entry["path"] == MODULE.STACK_SYNC_RECORD:  # synthesized: a fresh install keeps nothing local
                     self.assertEqual(entry["sha256"], hashlib.sha256(MODULE.FRESH_SYNC_RECORD).hexdigest())
                     continue
+                if entry['path'] == MODULE.OWNERSHIP_PATH:
+                    continue  # synthesized exact installed-file inventory; covered by OwnershipPlanTests
                 if entry['path'] == MODULE.COMPONENT_MANIFEST:
                     continue  # target-owned selection/ownership is verified against actual files in its regressions
                 if entry["path"] in {"AGENTS.md", "factory/README.md"}:
                     continue
                 source_path = MODULE.ROOT_HOOK_SHIM_TEMPLATE if entry["path"] in MODULE.ROOT_HOOK_SHIMS else entry["path"]
                 source = (ROOT / source_path).read_bytes()
+                from getzilla import harnesses
+                source = harnesses.platform_hook_payload(entry["path"], source, source_launcher=False)
                 self.assertEqual(entry["sha256"], hashlib.sha256(source).hexdigest(), entry["path"])
                 self.assertEqual(entry["size"], len(source), entry["path"])
 
@@ -1965,3 +1982,193 @@ class TransientRuntimeInventoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OwnershipPlanTests(unittest.TestCase):
+    def test_incident_paths_have_preserved_requirement_evidence_and_user_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target=Path(tmp)/'consumer'
+            target.mkdir()
+            expected={
+                'client-consent.factory.json':'requirements',
+                '_bmad-output/client-consent.factory.json':'requirements',
+                '.qwen/pr-draft.md':'user-change',
+                '.qwen/helper.py':'user-change',
+                'factory/src/adaptive_factory.egg-info/PKG-INFO':'generated-metadata',
+                'docs/test-evidence/claw/'+'a'*40+'/summary.json':'evidence',
+                '_bmad-output/other.factory.json':'unknown',
+            }
+            for name in expected:
+                path=target/name
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text('synthetic retained bytes')
+            before=_snapshot(target)
+            plan=MODULE.plan_install(ROOT,target)
+            rows={row['path']:row for row in plan['consumer_inventory']['entries']}
+            for name,role in expected.items():
+                with self.subTest(path=name):
+                    self.assertEqual(rows[name]['classification'],role)
+                    self.assertEqual(rows[name]['action'],'preserve')
+            self.assertEqual(before,_snapshot(target))
+            self.assertEqual(plan['quarantine_plan']['entries'],[])
+
+    def test_plan_preserves_requirements_evidence_metadata_and_user_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'consumer'
+            target.mkdir()
+            for name in ('requirements.json', '.grok-stack/evidence/result.json',
+                         'factory/demo.egg-info/PKG-INFO', 'AGENTS.md', '.github/workflows/custom.yml'):
+                path = target / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('user bytes')
+            before = _snapshot(target)
+            plan = MODULE.plan_install(ROOT, target)
+            rows = {row['path']: row for row in plan['consumer_inventory']['entries']}
+            self.assertEqual(rows['requirements.json']['classification'], 'requirements')
+            self.assertEqual(rows['.grok-stack/evidence/result.json']['classification'], 'evidence')
+            self.assertEqual(rows['factory/demo.egg-info/PKG-INFO']['classification'], 'generated-metadata')
+            self.assertEqual(next(row for row in plan['entries'] if row['path'] == 'AGENTS.md')['action'], 'preserve-conflict')
+            self.assertTrue(all(row['action'] == 'PRESERVE' for row in plan['legacy_migration']))
+            self.assertEqual(before, _snapshot(target))
+
+    def test_fresh_manifest_identifies_only_unchanged_installed_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'consumer'
+            MODULE.materialize_new(ROOT, target)
+            manifest = json.loads((target / '.getzilla/install-ownership.json').read_text())
+            self.assertEqual(manifest['schema_version'], 1)
+            self.assertNotIn('.getzilla/install-ownership.json', [row['path'] for row in manifest['files']])
+            (target / 'AGENTS.md').write_text('changed')
+            plan = MODULE.plan_install(ROOT, target)
+            rows = {row['path']: row for row in plan['consumer_inventory']['entries']}
+            self.assertEqual(rows['AGENTS.md']['classification'], 'user-change')
+            self.assertEqual(rows['.getzilla/getzilla/state.py']['classification'], 'owned-unchanged')
+
+
+    def test_invalid_manifest_and_unsafe_links_never_establish_ownership(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'consumer'
+            (target / '.getzilla').mkdir(parents=True)
+            (target / '.getzilla/install-ownership.json').write_text('{"schema_version": 1, "files": [{"path": "../../outside"}]}')
+            (target / 'requirements.json').write_text('retain')
+            (target / 'unsafe').symlink_to('/does-not-exist')
+            before = _snapshot(target)
+            inventory = MODULE.plan_install(ROOT, target)['consumer_inventory']
+            self.assertFalse(inventory['complete'])
+            self.assertIn('invalid-or-unsafe-ownership-manifest', inventory['uncertainty'])
+            self.assertFalse(any(row['classification'] == 'owned-unchanged' for row in inventory['entries']))
+            self.assertEqual(before, _snapshot(target))
+
+    def test_dirty_git_tree_is_read_only_and_inventory_is_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'consumer'
+            target.mkdir()
+            subprocess.run(['git', 'init', '-q', str(target)], check=True)
+            (target / 'requirements.json').write_text('untracked')
+            before = _snapshot(target)
+            with patch.object(MODULE, 'MAX_LEGACY_REPORT_ENTRIES', 1):
+                (target / 'second').write_text('user')
+                before = _snapshot(target)
+                plan = MODULE.plan_install(ROOT, target)
+                inventory = plan['consumer_inventory']
+            self.assertEqual(plan['consumer_git_status'], {
+                'state': 'unknown', 'reason': 'not-run-for-untrusted-config', 'records': []})
+            self.assertIn('requirements.json', {row['path'] for row in inventory['entries']})
+            self.assertFalse(inventory['complete'])
+            self.assertIn('inventory-limit', inventory['uncertainty'])
+            self.assertEqual(before, _snapshot(target))
+
+
+    def test_source_payload_excludes_generated_packaging_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)
+            for name in ('factory/src/pkg.egg-info/PKG-INFO', 'factory/src/.pytest_cache/result', 'factory/src/pkg/module.py'):
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('data')
+            with MODULE._SourceTree(source) as tree:
+                paths = {relative for relative, _ in tree.inventory()}
+            self.assertIn('factory/src/pkg/module.py', paths)
+            self.assertNotIn('factory/src/pkg.egg-info/PKG-INFO', paths)
+            self.assertNotIn('factory/src/.pytest_cache/result', paths)
+
+
+    def test_quarantine_plan_requires_exact_unchanged_ownership_and_detects_race(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'consumer'
+            relative = '.grok-stack/adaptive_grok/state.py'
+            payload = MODULE._ownership_payload((MODULE.InstallEntry(relative, b'old', 0o644),))
+            for entry in payload:
+                path = target / entry.path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(entry.content)
+                path.chmod(entry.mode)
+            plan = MODULE.plan_install(ROOT, target)
+            recovery = plan['quarantine_plan']['entries']
+            self.assertEqual(len(recovery), 1)
+            self.assertEqual(recovery[0]['path'], relative)
+            self.assertEqual(recovery[0]['sha256'], hashlib.sha256(b'old').hexdigest())
+            self.assertTrue(plan['quarantine_plan']['approval_required'])
+            real_read = MODULE._read_target_relative
+            def mutate_after_read(root, path, **kwargs):
+                data = real_read(root, path, **kwargs)
+                if path == relative:
+                    (target / relative).write_bytes(b'user change')
+                return data
+            with patch.object(MODULE, '_read_target_relative', side_effect=mutate_after_read):
+                changed = MODULE.plan_install(ROOT, target)
+            self.assertEqual(changed['quarantine_plan']['entries'], [])
+            self.assertEqual((target / relative).read_bytes(), b'user change')
+
+
+class OwnershipPlanCustodyTests(unittest.TestCase):
+    def fixture(self, target):
+        relative = '.grok-stack/adaptive_grok/state.py'
+        for entry in MODULE._ownership_payload((MODULE.InstallEntry(relative, b'owned', 0o644),)):
+            path = target / entry.path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(entry.content)
+            path.chmod(entry.mode)
+        return relative
+
+    def test_duplicate_manifest_keys_cannot_establish_quarantine_ownership(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / 'consumer'
+            self.fixture(target)
+            manifest = target / MODULE.OWNERSHIP_PATH
+            raw = manifest.read_text()
+            manifest.write_text(raw.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1'))
+            before = _snapshot(target)
+            plan = MODULE.plan_install(ROOT, target)
+            self.assertFalse(plan['consumer_inventory']['complete'])
+            self.assertIn('invalid-or-unsafe-ownership-manifest', plan['consumer_inventory']['uncertainty'])
+            self.assertEqual(plan['quarantine_plan']['entries'], [])
+            self.assertEqual(_snapshot(target), before)
+
+    @unittest.skipUnless(hasattr(os, 'symlink'), 'symlinks unavailable')
+    def test_owned_directory_replacement_cannot_supply_quarantine_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            target = parent / 'consumer'
+            relative = self.fixture(target)
+            foreign = parent / 'foreign'
+            (foreign / 'adaptive_grok').mkdir(parents=True)
+            sentinel = foreign / 'adaptive_grok/state.py'
+            sentinel.write_bytes(b'foreign retained bytes')
+            read = MODULE._read_target_relative
+            swapped = []
+            def replace_before_read(root, name, **kwargs):
+                if name == relative and not swapped:
+                    (target / '.grok-stack').rename(target / 'retained-stack')
+                    try:
+                        (target / '.grok-stack').symlink_to(foreign, target_is_directory=True)
+                    except OSError as error:
+                        self.skipTest(str(error))
+                    swapped.append(True)
+                return read(root, name, **kwargs)
+            with patch.object(MODULE, '_read_target_relative', side_effect=replace_before_read):
+                plan = MODULE.plan_install(ROOT, target)
+            self.assertTrue(swapped)
+            self.assertFalse(plan['consumer_inventory']['complete'])
+            self.assertEqual(plan['quarantine_plan']['entries'], [])
+            self.assertEqual(sentinel.read_bytes(), b'foreign retained bytes')

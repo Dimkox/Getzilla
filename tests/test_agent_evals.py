@@ -436,7 +436,7 @@ class AgentEvalTests(unittest.TestCase):
         package.mkdir(parents=True)
         (package / '__init__.py').write_bytes((ROOT / '.getzilla/getzilla/__init__.py').read_bytes())
         with zipfile.ZipFile(stack / 'getzilla.zip', 'w') as archive:
-            for name in ('agent_evals.py', 'fsx.py'):
+            for name in ('agent_evals.py', 'agent_eval_authoring.py', 'fsx.py'):
                 archive.writestr('getzilla/' + name, (ROOT / '.getzilla/getzilla' / name).read_bytes())
         code = ("import sys,json; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
                 "from getzilla.agent_evals import replay; "
@@ -737,6 +737,7 @@ class AgentEvalTests(unittest.TestCase):
         with zipfile.ZipFile(stack / 'getzilla.zip', 'w') as archive:
             archive.writestr('getzilla/agent_evals.pyc', pyc)
             archive.writestr('getzilla/fsx.py', (ROOT / '.getzilla/getzilla/fsx.py').read_bytes())
+            archive.writestr('getzilla/agent_eval_authoring.py', (ROOT / '.getzilla/getzilla/agent_eval_authoring.py').read_bytes())
         child = ('import sys;sys.path.insert(0,sys.argv[1]);from getzilla import agent_evals as e\n'
                  'try:e._runner_digest()\n'
                  'except e.EvalError as x:print(str(x))\n'

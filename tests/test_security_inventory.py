@@ -25,6 +25,39 @@ def forbidden_yaml_constructor():
 
 
 class SelectedRootInventoryTests(unittest.TestCase):
+    def test_standalone_gitless_inventory_does_not_invoke_strict_git_reader(self):
+        from getzilla.security_osv_snapshot import _tracked_files
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'requirements.txt').write_text('public-example==1.2.3\n', encoding='utf-8')
+            with mock.patch('getzilla.architecture_diff.run_git_read',
+                            side_effect=AssertionError('Gitless inventory must not invoke Git')) as read:
+                self.assertEqual(_tracked_files(root), ['requirements.txt'])
+            read.assert_not_called()
+            self.assertEqual(collect_inventory(root)['dependencies'][0]['name'], 'public-example')
+
+    def test_malformed_registration_does_not_enable_filesystem_fallback(self):
+        from getzilla.security_osv_snapshot import VulnerabilityError, _tracked_files
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.git').write_text('not a Git registration\n', encoding='utf-8')
+            (root / 'requirements.txt').write_text('public-example==1.2.3\n', encoding='utf-8')
+            with mock.patch('pathlib.Path.rglob') as walk:
+                with self.assertRaises(VulnerabilityError):
+                    _tracked_files(root)
+            walk.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'posix', 'requires harmless local symlink fixture')
+    def test_dangling_registration_link_does_not_enable_filesystem_fallback(self):
+        from getzilla.security_osv_snapshot import VulnerabilityError, _tracked_files
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.git').symlink_to(root / 'missing-registration')
+            with mock.patch('pathlib.Path.rglob') as walk:
+                with self.assertRaises(VulnerabilityError):
+                    _tracked_files(root)
+            walk.assert_not_called()
+
     def test_nested_git_selection_is_incomplete_not_absent(self):
         from getzilla.security_osv_snapshot import VulnerabilityError, _tracked_files
         from tests.test_security_cli import _public_git, _public_source_repo
