@@ -501,5 +501,26 @@ class BudgetOperationBindingTests(BudgetFixture, unittest.TestCase):
                     future.result(timeout=4)
 
 
+class BudgetTornReadTests(unittest.TestCase):
+    def test_authority_poll_retries_only_a_torn_route_read(self):
+        from unittest import mock
+        from getzilla import task_budget as budget
+        from getzilla.package_status import InspectionError
+        torn = InspectionError('file_changed', 'selected input changed during the read')
+        args = ('root', {}, 'op', 'k')
+        with mock.patch.object(budget, '_same_authority_once', side_effect=[torn, torn, True]) as once, \
+                mock.patch.object(budget.time, 'sleep'):
+            self.assertTrue(budget._same_authority(*args))
+        self.assertEqual(once.call_count, 3)
+        with mock.patch.object(budget, '_same_authority_once', side_effect=torn) as once, \
+                mock.patch.object(budget.time, 'sleep'):
+            self.assertFalse(budget._same_authority(*args))
+        self.assertEqual(once.call_count, budget._TORN_READ_RETRIES + 1)
+        other = InspectionError('file_unsafe', 'unsafe')
+        with mock.patch.object(budget, '_same_authority_once', side_effect=other) as once:
+            self.assertFalse(budget._same_authority(*args))
+        self.assertEqual(once.call_count, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

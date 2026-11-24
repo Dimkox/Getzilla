@@ -245,6 +245,26 @@ def reconcile(root: Path, operation_id: str, outcome: str, actual: dict, epoch: 
 
 def _same_authority(root, original, operation_id, key, *, anchor=None):
     """The current canonical selection must still own the original exact effect."""
+    from .package_status import InspectionError
+    # The running-command poll reads without the task lock. A sibling route
+    # write moves the routes/ directory stamp, and the fail-closed reader then
+    # reports file_changed. That is a torn read, not a withdrawal: retry a few
+    # times before treating the authority as lost.
+    for attempt in range(_TORN_READ_RETRIES + 1):
+        try:
+            return _same_authority_once(root, original, operation_id, key, anchor=anchor)
+        except InspectionError as error:
+            if error.code != 'file_changed' or attempt == _TORN_READ_RETRIES:
+                return False
+            time.sleep(0.005)
+    return False
+
+
+_TORN_READ_RETRIES = 5
+
+
+def _same_authority_once(root, original, operation_id, key, *, anchor=None):
+    from .package_status import InspectionError
     try:
         current = _owned(root, anchor=anchor)
         budget = _read(current)
@@ -254,6 +274,10 @@ def _same_authority(root, original, operation_id, key, *, anchor=None):
                 and not budget['stopped'] and operation is not None
                 and operation['state'] == 'running' and operation['key'] == key
                 and operation['owner_epoch'] == original['authority_epoch'])
+    except InspectionError as error:
+        if error.code == 'file_changed':
+            raise
+        return False
     except (OSError, ValueError, KeyError, TypeError):
         return False
 
