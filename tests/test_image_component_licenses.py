@@ -262,6 +262,50 @@ class ImageComponentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Cyclic"):
                 license_api.observe_components(images[0])
 
+    def test_imported_component_facts_reuse_bytes_and_recheck_live_blobs(self):
+        from getzilla.security_image_licenses import _retain
+
+        api = self.api()
+        inv, cat = self.linked_image([
+            [("pkg/LICENSE", b"first", 0o644), ("pkg/other", "pkg/LICENSE", "hardlink")],
+            [("pkg/.wh.LICENSE", b"", 0o644), ("pkg/LICENSE", b"second", 0o644)],
+        ])
+        with api.import_layouts(cat, inv, self.profile, self.stage) as images:
+            expected = api.observe_final_files(images[0], _retain)
+        with api.import_layouts(cat, inv, self.profile, self.stage, index_components=True) as images:
+            image = images[0]
+            before = dict(image._budget.totals)
+            actual = api.observe_final_files(image, _retain)
+            self.assertEqual(actual, expected)
+            self.assertEqual(actual["pkg/other"]["body"], b"first")
+            self.assertEqual(image._budget.totals["entries"], before["entries"])
+            self.assertEqual(image._budget.totals["unpacked"], before["unpacked"])
+            actual["pkg/LICENSE"]["body"] = b"modified"
+            self.assertEqual(api.observe_final_files(image, _retain), expected)
+            manifest = json.loads((image.layout / "blobs/sha256" / image.manifest_digest[7:]).read_bytes())
+            layer = image.layout / "blobs/sha256" / manifest["layers"][0]["digest"][7:]
+            layer.write_bytes(bytes(layer.stat().st_size))
+            with self.assertRaisesRegex(api.OCIError, "blob changed"):
+                api.observe_final_files(image, _retain)
+
+    def test_component_cache_bound_falls_back_and_cache_hit_keeps_proof_limit(self):
+        from unittest.mock import patch
+        from getzilla.security_image_licenses import _retain
+
+        api = self.api()
+        inv, cat = self.image([[("LICENSE", b"abc")]])
+        with patch.object(api, "_COMPONENT_CACHE_BYTES", 1):
+            with api.import_layouts(cat, inv, self.profile, self.stage, index_components=True) as images:
+                image = images[0]
+                before = image._budget.totals["entries"]
+                self.assertEqual(api.observe_final_files(image, _retain)["LICENSE"]["body"], b"abc")
+                self.assertEqual(image._budget.totals["entries"], before + 1)
+        with api.import_layouts(cat, inv, self.profile, self.stage, index_components=True) as images:
+            image = images[0]
+            image._budget._component_proof_bytes = api._COMPONENT_PROOFS_TOTAL
+            with self.assertRaisesRegex(api.OCIError, "proof exceeds bound"):
+                api.observe_final_files(image, _retain)
+
     def test_shared_proof_counter_enforces_limit_before_body_read(self):
         a = self.api()
         inv, cat = self.image([self.debian()])

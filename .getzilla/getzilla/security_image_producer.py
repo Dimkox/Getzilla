@@ -283,7 +283,7 @@ def produce(root, source, run, volume, builder):
     # Validate the ORIGINAL catalog against independently recollected raw source
     # before any declaration projection. No producer success bypasses OCI checks.
     with ExitStack() as verified:
-        imported=verified.enter_context(import_layouts(catalog, inventory, profile, volume,_budget=shared_budget,measure_entries=True))
+        imported=verified.enter_context(import_layouts(catalog, inventory, profile, volume,_budget=shared_budget,measure_entries=True,index_components=True))
         from .public_security_context import selection_document, project_catalog
         from .public_security_context import _clock
         selection = selection_document(inventory, source, run, _clock().isoformat())

@@ -319,13 +319,87 @@ class _Decoded:
         return value
 
 
-def _layer(path, media, expected, budget):
+_COMPONENT_INDEX_SEAL = object()
+_COMPONENT_CACHE_BYTES = 128 * 1024 * 1024
+_COMPONENT_PROOF_MAX = 8 * 1024 * 1024
+_COMPONENT_PROOFS_TOTAL = 512 * 1024 * 1024
+
+
+def _component_row(member, archive, keep, budget):
+    name = member.name.removeprefix('./').rstrip('/')
+    row = dict(path=name, bytes=member.size, mode=member.mode)
+    if member.isdir():
+        return dict(row, kind='directory')
+    if member.islnk() or member.issym():
+        return dict(row, kind='hardlink' if member.islnk() else 'symlink', target=member.linkname)
+    chunks, digest, count, head, tail, go_binary = [], hashlib.sha256(), 0, b'', b'', False
+    with archive.extractfile(member) as source:
+        while chunk := source.read(65536):
+            budget.tick()
+            count += len(chunk)
+            digest.update(chunk)
+            head = (head + chunk[:4])[:4]
+            go_binary = go_binary or b'\xff Go buildinf:' in tail + chunk
+            tail = (tail + chunk)[-16:]
+            if keep:
+                chunks.append(chunk)
+    if count != member.size:
+        raise OCIError('Component observation member truncated')
+    row.update(kind='file', sha256=digest.hexdigest(), elf=head == b'\x7fELF',
+               executable=bool(member.mode & 0o111), go_binary=go_binary)
+    if keep:
+        row['body'] = b''.join(chunks)
+    return row
+
+
+class _ComponentIndex:
+    """Private per-import facts. Capture only while performing the original validated TAR read."""
+    def __init__(self):
+        from .security_image_licenses import _retain
+        self.retain = _retain
+        self.layers = {}
+        self.remaining = _COMPONENT_CACHE_BYTES
+
+    def facts(self, key, retain):
+        value = self.layers.get(key)
+        if (retain is self.retain and type(value) is tuple and len(value) == 3
+                and value[0] is _COMPONENT_INDEX_SEAL and value[1] == key and type(value[2]) is tuple):
+            return value[2]
+        return None
+
+    def capture(self, budget):
+        rows, weight = [], 0
+
+        def visit(member, archive):
+            nonlocal rows, weight
+            if rows is None:
+                return
+            # Charge the names and a conservative fixed allowance for each row.
+            name = member.name.removeprefix('./').rstrip('/')
+            keep = member.isfile() and self.retain(name)
+            body = member.size if keep else 0
+            weight += 2048 + 4 * (len(member.name) + len(member.linkname)) + body
+            if body > _COMPONENT_PROOF_MAX or weight > self.remaining:
+                rows = None
+                return
+            row = _component_row(member, archive, keep, budget)
+            rows.append(tuple(row.items()))
+
+        def publish(key):
+            if rows is not None:
+                self.layers[key] = (_COMPONENT_INDEX_SEAL, key, tuple(rows))
+                self.remaining -= weight
+
+        return visit, publish
+
+
+def _layer(path, media, expected, budget, components=None):
     budget.charge('layers', 1, phase='layer-count')
     if media not in LAYER_MEDIA or not isinstance(expected, str) or not HEX.fullmatch(expected):
         raise OCIError('Unsupported OCI layer or diff ID')
     path = Path(path)
     source = _Root(path.parent)
-    complete = None
+    complete = publish = None
     try:
         # This descriptor stays open for BOTH fresh content hashing and miss
         # parsing. _Root.file checks the same regular FD's identity afterward.
@@ -356,7 +430,11 @@ def _layer(path, media, expected, budget):
             else:
                 budget._layer_facts.pop(key, None)
                 raw.seek(0)
-                unpacked, expanded, entries = _parse_layer(raw, media, expected, budget)
+                if components is None or len(budget._layer_facts) >= _LAYER_CACHE_MAX:
+                    unpacked, expanded, entries = _parse_layer(raw, media, expected, budget)
+                else:
+                    visit, publish = components.capture(budget)
+                    unpacked, expanded, entries = _parse_layer(raw, media, expected, budget, visit=visit)
                 complete = (_LAYER_FACT_SEAL, key, unpacked, expanded, entries)
     finally:
         source.close()
@@ -364,6 +442,8 @@ def _layer(path, media, expected, budget):
     # A full cache is just an uncached parse, never truncated validation.
     if complete is not None and len(budget._layer_facts) < _LAYER_CACHE_MAX:
         budget._layer_facts[key] = complete
+        if publish is not None:
+            publish(key)
 
 
 def _parse_layer(raw, media, expected, budget, *, visit=None, reader="import"):
@@ -407,9 +487,9 @@ def _parse_layer(raw, media, expected, budget, *, visit=None, reader="import"):
 
 
 class VerifiedOCIImage:
-    __slots__ = ('reference', 'platform', 'layout', 'manifest_digest', 'config_digest', '_proof', '_files', '_budget')
+    __slots__ = ('reference', 'platform', 'layout', 'manifest_digest', 'config_digest', '_proof', '_files', '_budget', '_components')
 
-    def __init__(self, reference, platform, layout, manifest_digest, config_digest, proof, budget, files):
+    def __init__(self, reference, platform, layout, manifest_digest, config_digest, proof, budget, files, components=None):
         if proof is not _PROOF:
             raise OCIError('Verified OCI identity requires import')
         self.reference, self.platform, self.layout = reference, platform, layout
@@ -417,6 +497,7 @@ class VerifiedOCIImage:
         self._proof = proof
         self._budget = budget
         self._files = files
+        self._components = components
 
     def remaining_seconds(self):
         if self._proof is not _PROOF:
@@ -524,7 +605,7 @@ def observe_final_files(image, retain):
     if type(image) is not VerifiedOCIImage or image._proof is not _PROOF or not callable(retain):
         raise OCIError('Component observation requires a live verified OCI image')
     image._budget.tick()
-    root, final, retained = _Root(image.layout), {}, 0
+    root, final = _Root(image.layout), {}
     @contextmanager
     def verified(digest):
         name = 'blobs/sha256/' + digest[7:]
@@ -550,62 +631,53 @@ def observe_final_files(image, retain):
             raise OCIError('Component observation layer identity differs')
         for layer, diff in zip(manifest['layers'], config['rootfs']['diff_ids']):
             changes, removals = {}, []
-            def visit(member, archive):
-                nonlocal retained
-                name = member.name.removeprefix('./').rstrip('/')
+            def reserve_proof(size):
+                if size > _COMPONENT_PROOF_MAX or image._budget._component_proof_bytes + size > _COMPONENT_PROOFS_TOTAL:
+                    raise OCIError('Component package proof exceeds bound')
+                image._budget._component_proof_bytes += size
+
+            def apply(row):
+                name = row['path']
                 parent, _, leaf = name.rpartition('/')
                 if leaf.startswith('.wh.'):
-                    if not member.isfile() or member.size:
+                    if row['kind'] != 'file' or row['bytes']:
                         raise OCIError('Invalid component observation whiteout')
                     target = parent if leaf == '.wh..wh..opq' else (parent + '/' if parent else '') + leaf[4:]
                     removals.append((target, leaf == '.wh..wh..opq'))
                     return
                 if name in changes:
                     raise OCIError('Duplicate component observation member')
-                row = dict(path=name, layer=layer['digest'], mode=member.mode, bytes=member.size)
-                if member.isdir():
-                    row['kind'] = 'directory'
-                elif member.islnk():
-                    # TAR hardlinks name an already materialized inode, not a
-                    # future dynamic path alias. A later overwrite of that path
-                    # must not replace this link's component/license bytes.
-                    target = posixpath.normpath(member.linkname)
+                row['layer'] = layer['digest']
+                if row['kind'] == 'hardlink':
+                    target = posixpath.normpath(row['target'])
                     source = changes.get(target, final.get(target))
                     if target.startswith(('/', '../')) or source is None or source['kind'] != 'file':
                         raise OCIError('Unproved component hardlink target')
                     row = dict(source, path=name, layer=layer['digest'], hardlink_source=dict(
                         path=target, layer=source['layer'], sha256=source['sha256'], from_lower=target not in changes))
-                elif member.issym():
-                    row.update(kind='symlink', target=member.linkname)
-                else:
-                    row['kind'] = 'file'
-                    selected, chunks, measured, count, head = bool(retain(name)), [], hashlib.sha256(), 0, b''
-                    window, go_binary = b'', False
-                    if selected and (member.size > 8 * 1024 * 1024 or image._budget._component_proof_bytes + member.size > 512 * 1024 * 1024):
-                        raise OCIError('Component package proof exceeds bound')
-                    if selected:
-                        image._budget._component_proof_bytes += member.size
-                    with archive.extractfile(member) as source:
-                        while chunk := source.read(65536):
-                            image._budget.tick()
-                            measured.update(chunk)
-                            count += len(chunk)
-                            if len(head) < 4:
-                                head = (head + chunk)[:4]
-                            window = window[-16:] + chunk
-                            go_binary = go_binary or b'\xff Go buildinf:' in window
-                            if selected:
-                                chunks.append(chunk)
-                    if count != member.size:
-                        raise OCIError('Component observation member truncated')
-                    row.update(sha256=measured.hexdigest(), elf=head == b'\x7fELF', executable=bool(member.mode & 0o111), go_binary=go_binary)
-                    if selected:
-                        row['body'] = b''.join(chunks)
-                        retained += count
                 changes[name] = row
+
+            def visit(member, archive):
+                name = member.name.removeprefix('./').rstrip('/')
+                keep = member.isfile() and bool(retain(name))
+                if keep:
+                    reserve_proof(member.size)
+                apply(_component_row(member, archive, keep, image._budget))
+
             with verified(layer['digest']) as (stream, size):
                 image._budget.charge('compressed', size, phase='component-read')
-                _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit, reader="component")
+                key = (layer['digest'][7:], size, layer['mediaType'], diff)
+                index = image._components
+                facts = index.facts(key, retain) if type(index) is _ComponentIndex else None
+                if facts is None:
+                    _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit, reader="component")
+                else:
+                    for pairs in facts:
+                        image._budget.tick()
+                        row = dict(pairs)
+                        if 'body' in row:
+                            reserve_proof(len(row['body']))
+                        apply(row)
             removed_paths = {path for path, opaque in removals if not opaque}
             opaque_paths = {path for path, opaque in removals if opaque}
             for row in changes.values():
@@ -731,7 +803,7 @@ def _index_children(children):
     return [(child, child['digest'] in roles) for child in children]
 
 
-def _import_one(record, profile, stage, budget):
+def _import_one(record, profile, stage, budget, components=None):
     source = _Root(record['layout'])
     try:
         if source.json('oci-layout', budget) != {'imageLayoutVersion': '1.0.0'}:
@@ -841,7 +913,7 @@ def _import_one(record, profile, stage, budget):
                     allowed_layers = {TAR, GZIP} if media == MANIFEST else {DOCKER_GZIP}
                     if layer_media not in allowed_layers or not isinstance(diff_id, str) or not HEX.fullmatch(diff_id):
                         raise OCIError('Unsupported OCI layer or diff ID')
-                    _layer(blob(layer), layer_media, diff_id, budget)
+                    _layer(blob(layer), layer_media, diff_id, budget, components)
                 if not attestation and platform == profile['platform']:
                     candidates.append((desc, config_desc['digest']))
             active.remove(digest)
@@ -864,7 +936,7 @@ def _import_one(record, profile, stage, budget):
                 stream.write(raw)
             files[name] = (hashlib.sha256(raw).hexdigest(), len(raw))
         return VerifiedOCIImage(record['reference'], profile['platform'], stage,
-                                descriptor['digest'], config_digest, _PROOF, budget, files)
+                                descriptor['digest'], config_digest, _PROOF, budget, files, components)
     finally:
         source.close()
 
@@ -933,7 +1005,7 @@ def validate_selection(catalog, inventory, profile):
 
 
 @contextmanager
-def import_layouts(catalog, inventory, profile, workspace, *, _budget=None, measure_entries=False):
+def import_layouts(catalog, inventory, profile, workspace, *, _budget=None, measure_entries=False, index_components=False):
     """Import every selected image under ONE shared aggregate ledger.
 
     All returned paths exist only during this context. Inputs are revalidated
@@ -951,13 +1023,14 @@ def import_layouts(catalog, inventory, profile, workspace, *, _budget=None, meas
         records = validate_selection(catalog, inventory, profile)
         with tempfile.TemporaryDirectory(prefix='verified-oci-', dir=workspace) as owned:
             images = []
+            components = _ComponentIndex() if index_components else None
             records = sorted(records, key=lambda r: r['reference'])
             with _measure_import_entries(budget, records, measure_entries):
                 for index, record in enumerate(records):
                     budget.image_ordinal = index
                     stage = Path(owned) / str(index)
                     stage.mkdir(mode=0o700)
-                    image = _import_one(record, profile, stage, budget)
+                    image = _import_one(record, profile, stage, budget, components)
                     wanted = {v.get('image_id') for v in inventory['images'] if v['reference'] == image.reference}
                     if any(value is not None and value != image.config_digest for value in wanted):
                         raise OCIError('Selected source config pin differs from OCI graph')
@@ -966,8 +1039,10 @@ def import_layouts(catalog, inventory, profile, workspace, *, _budget=None, meas
                 yield images
                 budget.tick()
             finally:
+                if components is not None:
+                    components.layers.clear()
                 for image in images:
-                    image._proof = None
+                    image._proof = image._components = None
     except (OSError, KeyError, TypeError, AttributeError, EOFError, tarfile.TarError):
         raise OCIError('Local OCI input unavailable, malformed or unsafe') from None
     finally:
