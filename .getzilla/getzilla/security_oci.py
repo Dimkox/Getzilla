@@ -79,6 +79,15 @@ _BOUND_KEYS = {'dimension', 'oci_phase', 'limit_name', 'before', 'charge', 'atte
 
 def _bound_detail(value):
     """Validate refusal-only observations; these fields grant no profile authority."""
+    if type(value) is dict and set(value) == _BOUND_KEYS | {'reader', 'header_counts'}:
+        base = _bound_detail({key: value[key] for key in _BOUND_KEYS})
+        counts = value['header_counts']
+        if (base['dimension'] != 'entries' or value['reader'] not in ('member', 'component')
+                or type(counts) is not dict or set(counts) != {'import', 'member', 'component'}
+                or any(type(n) is not int or n < 0 for n in counts.values())
+                or sum(counts.values()) != base['before']):
+            raise OCIError('Invalid replay header counts')
+        return dict(base, reader=value['reader'], header_counts=dict(counts))
     if type(value) is dict and set(value) == _BOUND_KEYS | {'entry_measurement'}:
         base = _bound_detail({k: v for k, v in value.items() if k != 'entry_measurement'})
         observation = value['entry_measurement']
@@ -173,6 +182,7 @@ class _Budget:
         self.entry_refusal = None
         self.image_ordinal = -1
         self._layer_facts = {}
+        self.header_counts = dict.fromkeys(("import", "member", "component"), 0)
         self._component_proof_bytes = 0
         self.deadline = time.monotonic() + profile['deadline_seconds']
         self.totals = dict(compressed=0, unpacked=0, storage=0, layers=0, entries=0, expanded=0)
@@ -356,14 +366,21 @@ def _layer(path, media, expected, budget):
         budget._layer_facts[key] = complete
 
 
-def _parse_layer(raw, media, expected, budget, *, visit=None):
+def _parse_layer(raw, media, expected, budget, *, visit=None, reader="import"):
     declared, entries = 0, 0
     with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else nullcontext(raw)) as decoded:
         stream = _Decoded(decoded, budget)
         with tarfile.open(fileobj=stream, mode='r|') as archive:
             for member in archive:
                 entries += 1
-                budget.charge('entries', 1, phase='tar-entries')
+                try:
+                    budget.charge('entries', 1, phase='tar-entries')
+                except OCIError as error:
+                    if reader != 'import' and error.detail.get('dimension') == 'entries':
+                        detail = dict(error.detail, reader=reader, header_counts=dict(budget.header_counts))
+                        raise OCIError(str(error), detail=detail) from error
+                    raise
+                budget.header_counts[reader] += 1
                 name = member.name
                 if (not name or len(name) > 4096 or '\\' in name or name.startswith('/')
                         or '..' in PurePosixPath(name).parts
@@ -482,7 +499,7 @@ def read_members(image, paths, *, member_limit=2 * 1024 * 1024, total_limit=16 *
                 changes[name] = body
             with verified(layer['digest']) as (stream, size):
                 image._budget.charge('compressed', size, phase='member-read')
-                _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
+                _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit, reader="member")
             for path in removed:
                 selected.pop(path, None)
             selected.update(changes)
@@ -588,7 +605,7 @@ def observe_final_files(image, retain):
                 changes[name] = row
             with verified(layer['digest']) as (stream, size):
                 image._budget.charge('compressed', size, phase='component-read')
-                _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
+                _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit, reader="component")
             removed_paths = {path for path, opaque in removals if not opaque}
             opaque_paths = {path for path, opaque in removals if opaque}
             for row in changes.values():
