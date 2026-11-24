@@ -133,6 +133,59 @@ class CiAdmissionTests(unittest.TestCase):
         return module.evaluate(needs or {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")},
             records or self.records(), head=HEAD, tree=TREE, run_id="123", attempt="2", now=now)
 
+    def test_waiver_is_limited_to_bound_security_failure_before_expiry(self):
+        module = self.module()
+        config = module.read_waiver(Path(__file__).resolve().parents[1])
+        needs = dict.fromkeys(("linux-core", "linux-core-tests", "live-acceptance", "security-expanded"), "success")
+        records = self.records()
+        args = dict(waiver=config, repository="Dimkox/Getzilla", head=HEAD, tree=TREE,
+                    run_id="123", attempt="2", now=NOW)
+        def decision(**changes):
+            from unittest.mock import patch
+            with patch.dict("os.environ", {"GETZILLA_OPERATOR_CHECKER": CHECKER}):
+                return module.admission_result(needs, records, **(args | changes))
+        self.assertEqual(decision()["status"], "pass")
+        self.assertFalse(decision()["waiver"]["used"])
+        needs["security-expanded"] = "failure"
+        security = records["security-expanded"]
+        security.update(schema="getzilla-security-ci-v1", status="fail", primary_phase="scan",
+                        event_provenance={"repository": "Dimkox/Getzilla"}, report={"kind": "public-security-input-refusal", "status": "fail"})
+        self.assertEqual(decision()["status"], "pass-with-waiver")
+        self.assertEqual(decision()["waiver"]["issue"], 456)
+        self.assertEqual(decision(now=datetime(2026,12,8,tzinfo=timezone.utc))["status"], "fail")
+        self.assertEqual(decision(repository="Fork/Getzilla")["status"], "fail")
+        for job in ("linux-core", "linux-core-tests", "live-acceptance"):
+            needs[job] = "failure"
+            self.assertEqual(decision()["status"], "fail")
+            needs[job] = "success"
+        for result in ("cancelled", "skipped"):
+            needs["security-expanded"] = result
+            self.assertEqual(decision()["status"], "fail")
+        needs["security-expanded"] = "failure"
+        security["attempt"] = "1"
+        self.assertEqual(decision()["status"], "fail")
+        del records["security-expanded"]
+        self.assertEqual(decision()["status"], "fail")
+
+    def test_waiver_configuration_is_closed(self):
+        import json
+        import tempfile
+        module = self.module()
+        entry = module.read_waiver(Path(__file__).resolve().parents[1])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".getzilla/config/ci-waivers.json"
+            path.parent.mkdir(parents=True)
+            self.assertIsNone(module.read_waiver(root))
+            for rows in ([dict(entry, check="linux-core")], [entry, entry],
+                         [dict(entry, unexpected=True)], [dict(entry, expires="2027-01-01")]):
+                path.write_text(json.dumps({"schema_version": 1, "waivers": rows}))
+                with self.assertRaises(ValueError):
+                    module.read_waiver(root)
+            path.write_text("{")
+            with self.assertRaises(ValueError):
+                module.read_waiver(root)
+
     def test_all_required_evidence_passes_on_the_exact_source(self):
         self.assertEqual(self.evaluate(), [])
 
