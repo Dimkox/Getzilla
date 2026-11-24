@@ -8,7 +8,7 @@ The caller must join the observation to its normal source/run/private guard.
 from __future__ import annotations
 
 import base64
-from collections import defaultdict
+from collections import Counter, defaultdict
 import copy
 import csv
 from email.parser import BytesParser
@@ -686,13 +686,15 @@ def prepare_families(root, inventory, source, run, *, now=None):
             registry[identity].root = root
             records.append(record)
         if failures:
-            raise ArtifactError(
+            error = ArtifactError(
                 failures[0]["code"],
                 "image component qualification refused; "
                 + str(len(failures))
                 + " unresolved groups; retained diagnostics: "
                 + ",".join(item["path"] for item in state["image_family_diagnostics"]),
             )
+            error.image_gap_counts = dict(Counter(row["code"] for row in failures))
+            raise error
         return records
     finally:
         os.close(fd)

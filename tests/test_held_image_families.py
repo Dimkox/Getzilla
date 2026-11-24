@@ -161,8 +161,13 @@ class HeldFamilyTests(fixtures.ImageComponentTests):
         rows = self.debian()
         rows[-1] = (rows[-1][0], b"legacy unknown terms")
         with self.fixture(rows) as (root, inv, source, run, state):
-            with self.assertRaises(ArtifactError):
+            from getzilla.public_security_context import _preparation_step, _preparation_fault, _preparation_detail
+            with self.assertRaises(ArtifactError) as caught, _preparation_step("package-artifacts"):
                 image_licenses.prepare_families(root, inv, source, run)
+            detail = _preparation_fault(caught.exception)
+            self.assertEqual(detail["image_gap_counts"], {"dpkg-legacy-license-scope": 1})
+            for invalid in ({"unknown": 1}, {"dpkg-legacy-license-scope": True}, {}):
+                self.assertFalse(_preparation_detail(dict(detail, image_gap_counts=invalid)))
             saved = state.get("image_family_diagnostics", [])
             self.assertEqual(len(saved), 1)
             document = json.loads((root / saved[0]["path"]).read_text())

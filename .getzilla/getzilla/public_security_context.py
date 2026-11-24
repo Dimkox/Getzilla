@@ -319,8 +319,27 @@ _PREPARATION_CODES = frozenset(('artifact-acquisition', 'artifact-origin', 'arti
     'license-conflict','license-metadata-missing','license-text-review','license-obligation-missing','license-transitive-coverage','other'))
 
 
+_IMAGE_GAP_CODES = frozenset((
+    'cpython-bundled-terms-unproved', 'dpkg-binary-license-scope', 'dpkg-copyright-format-unproved',
+    'dpkg-copyright-missing', 'dpkg-file-list-unproved', 'dpkg-legacy-license-scope',
+    'license-common-text-missing', 'license-term-unproved', 'license-text-unrecognized',
+    'pip-vendor-declaration-unsupported', 'pip-vendor-files-missing', 'python-license-file-missing',
+    'python-record-mismatch', 'python-record-missing', 'python-record-unhashed', 'software-catalog-empty',
+    'unattributed-software', 'unsupported-apk-components', 'unsupported-go-components',
+    'unsupported-postgres-components', 'unsupported-tool-bundle-components',
+))
+
+
 def _preparation_detail(value):
     """Closed refusal observations only; never authority, exception text or paths."""
+    if type(value) is dict and 'image_gap_counts' in value:
+        counts = value['image_gap_counts']
+        base = _preparation_detail({key: item for key, item in value.items() if key != 'image_gap_counts'})
+        if (base.get('stage') != 'package-artifacts' or base.get('error_kind') != 'artifact'
+                or type(counts) is not dict or not counts or counts.keys() - _IMAGE_GAP_CODES
+                or any(type(n) is not int or not 0 < n < 2 ** 31 for n in counts.values())):
+            return {}
+        return dict(base, image_gap_counts=dict(counts))
     if (type(value) is not dict or set(value) != {'stage', 'error_kind', 'error_code', 'errno'}
             or type(value['stage']) is not str or value['stage'] not in _PREPARATION_STAGES
             or type(value['error_kind']) is not str or value['error_kind'] not in _PREPARATION_KINDS
@@ -354,7 +373,10 @@ def _preparation_step(stage):
             code = (error.code if type(error) is ArtifactError and type(error.code) is str
                     and error.code in _PREPARATION_CODES else 'other')
             number = getattr(error, 'errno', None)
-            error._getzilla_preparation = (_PREPARATION_SEAL, dict(stage=stage, error_kind=kind,
+            detail = dict(stage=stage, error_kind=kind,
                 error_code=code if kind == 'artifact' else None,
-                errno=number if type(number) is int and 0 <= number <= 4095 else None))
+                errno=number if type(number) is int and 0 <= number <= 4095 else None)
+            if type(error) is ArtifactError and stage == 'package-artifacts' and hasattr(error, 'image_gap_counts'):
+                detail = _preparation_detail(dict(detail, image_gap_counts=error.image_gap_counts)) or detail
+            error._getzilla_preparation = (_PREPARATION_SEAL, detail)
         raise
