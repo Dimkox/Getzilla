@@ -33,6 +33,18 @@ class GitReadViewTests(unittest.TestCase):
         return subprocess.run(['git', *args], cwd=root or self.root,
             env=git._git_environment(), capture_output=True, check=True, timeout=10).stdout
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor passing')
+    def test_darwin_native_input_larger_than_pipe_capacity(self):
+        data = b'bounded input\n' * 50000
+        command = [sys.executable, '-c', 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())']
+        with tempfile.TemporaryFile() as held, patch.object(sys, 'platform', 'darwin'):
+            for payload in (b'', data):
+                with self.subTest(size=len(payload)):
+                    result = git._run_capped(command, cwd=self.root, env=os.environ.copy(),
+                        stdin_data=payload, pass_fds=(held.fileno(),), timeout=5,
+                        stdout_limit=len(payload), stderr_limit=1024)
+                    self.assertEqual(result, (0, payload, b''))
+
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin vnode events')
     def test_native_alternate_rejects_rename_even_after_name_is_restored(self):
         from unittest.mock import Mock
@@ -64,6 +76,19 @@ class GitReadViewTests(unittest.TestCase):
         result = git._git(self.root, ['diff', '--no-ext-diff', '--no-textconv',
             '--no-renames', '--numstat', head, '--'])
         self.assertEqual(result, b'1\t1\tvalue.txt\n')
+
+    def test_status_observes_crlf_launcher_without_hiding_an_edit(self):
+        attrs = Path(__file__).resolve().parents[1] / '.gitattributes'
+        (self.root / '.gitattributes').write_bytes(attrs.read_bytes())
+        launcher = self.root / 'bin/getzilla.cmd'
+        launcher.parent.mkdir()
+        launcher.write_bytes(b'@echo off\r\n')
+        self.command('add', '.')
+        self.command('commit', '-qm', 'launcher attributes')
+        launcher.write_bytes(b'@echo off\r\n')
+        self.assertEqual(git._git(self.root, ['status', '--porcelain=v1']), b'')
+        launcher.write_bytes(b'@echo changed\r\n')
+        self.assertIn(b'M bin/getzilla.cmd', git._git(self.root, ['status', '--porcelain=v1']))
 
     def test_private_child_metadata_keeps_original_head_index_and_registration(self):
         original_index = (self.root / '.git/index').read_bytes()

@@ -43,13 +43,28 @@ _ARCHIVAL_DOCUMENTS = {
 }
 
 
-_RETIRED_BENCHMARK_RECIPE = 'engineering/benchmarks/issue170/Dockerfile.tests'
-_RETIRED_BENCHMARK_INPUTS = {
-    'engineering/benchmarks/issue170/Dockerfile.tests': (227, '7c95be60b2351f64d8c10a979d482db2089c50f4965b08ce3d5f82d5b4ec0be1'),
+_ISSUE162_ARCHIVE = {
+    'engineering/benchmarks/issue162/Dockerfile': (343, '3ab6604b628a2ac5911498dfe65cc5cedfb4931e5f4402d0f99dcd7afeb5f935'),
+    'engineering/benchmarks/issue162/Dockerfile.replay': (370, 'dd1a8d5f5214e30e85c3dba7c6386d583ef0e2c739cf816707c9b886e5a82f6d'),
+    'engineering/benchmarks/issue162/SHA256SUMS.json': (10487, '592380dcfe77a8660c015c7c696e35b2c90169454f7dc0ac349d44fe58c1c883'),
+    'engineering/benchmarks/issue162/report.md': (8778, '7ff0cedbbc90fe5e1fa13d88efb73bc110c579d947eae74315e79e12f42619fc'),
+    'engineering/benchmarks/issue162/REPRODUCE.md': (2709, 'd53e0237f1a6ce1136bfbf1325911ea58a0f7b5750bf87c39bbc9166540285d8'),
+    'engineering/benchmarks/issue162/cleanup-receipt.json': (711, '930d985c9f51f0dedb750a2f215c1a12e69220a41c8f2e202887fc42fbc460ea'),
+}
+_ISSUE170_ARCHIVE = {
     'engineering/benchmarks/issue170/Dockerfile': (633, '2f2279727677104a75a03b208b348c56884a8cb1a12793dfc54bc93d08d4818c'),
+    'engineering/benchmarks/issue170/Dockerfile.tests': (227, '7c95be60b2351f64d8c10a979d482db2089c50f4965b08ce3d5f82d5b4ec0be1'),
+    'engineering/benchmarks/issue170/SHA256SUMS.json': (12201, '7eceb5f6d3a5119b87bcc5f1eb0807ceeb9b5e1dc3981c4367791dac8c2faefa'),
     'engineering/benchmarks/issue170/report.md': (10454, '46be8d4e808930fc548d40d089e2438b73b90a7b3431a38b55def6725f6207d5'),
     'engineering/benchmarks/issue170/artifacts/cleanup-result.json': (651, '3e6ce7b1aabcbc8cc2a0b7c815b68697b62906ccfcae7d15eeb80b32ad0d6a11'),
     'engineering/benchmarks/issue170/artifacts/image-identities.json': (245, '7ca768c98c16c1690f806274fbf1d06e6af23846a97e475909c3400bf77522a5'),
+}
+
+_RETIRED_RECIPES = {
+    'engineering/benchmarks/issue162/Dockerfile': _ISSUE162_ARCHIVE,
+    'engineering/benchmarks/issue162/Dockerfile.replay': _ISSUE162_ARCHIVE,
+    'engineering/benchmarks/issue170/Dockerfile': _ISSUE170_ARCHIVE,
+    'engineering/benchmarks/issue170/Dockerfile.tests': _ISSUE170_ARCHIVE,
 }
 
 
@@ -83,17 +98,18 @@ def _safe_bytes(root: Path, relative: str, *, maximum: int = MAX_MANIFEST_BYTES)
 
 
 def _archival_document(root: Path, relative: str, files: list[str]) -> dict | None:
-    if relative == _RETIRED_BENCHMARK_RECIPE:
+    if relative in _RETIRED_RECIPES:
         evidence = []
-        for path, (size, digest) in _RETIRED_BENCHMARK_INPUTS.items():
+        for path, (size, digest) in _RETIRED_RECIPES[relative].items():
             if path not in files:
                 raise ValueError('retired benchmark input is absent from tracked source')
             data = _safe_bytes(root, path, maximum=size)
             if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
                 raise ValueError('retired benchmark input differs')
             evidence.append({'path': path, 'bytes': size, 'sha256': digest})
-        return {**evidence[0], 'classification': 'retired-benchmark-recipe',
-                'provenance': evidence[1:]}
+        return {**next(row for row in evidence if row['path'] == relative),
+                'classification': 'retired-benchmark-recipe',
+                'provenance': [row for row in evidence if row['path'] != relative]}
     record = _ARCHIVAL_DOCUMENTS.get(relative)
     if record is None:
         return None

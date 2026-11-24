@@ -536,7 +536,8 @@ jobs:
           for path in sorted(assigned[int(os.environ["SHARD_INDEX"])]):
               print(path.as_posix())
           SHARD
-          mapfile -t selected < "$RUNNER_TEMP/core-shard-files.txt"
+          selected=()
+          while IFS= read -r module; do selected+=("$module"); done < "$RUNNER_TEMP/core-shard-files.txt"
           test "${#selected[@]}" -gt 0
           echo "shard ${SHARD_INDEX}/${SHARD_COUNT}: ${#selected[@]} modules"
           python scripts/getzilla_cli.py test --require-parallel "${selected[@]}" --max-worker-restart=0 --durations=20 -ra 2>&1 | tee "$RUNNER_TEMP/core-tests.log"

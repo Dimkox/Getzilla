@@ -45,6 +45,13 @@ class FactoryDiscoveryTests(unittest.TestCase):
             'factory.tests.test_landing_failover_cli.UnixCallerTests.test_other',
             {'unit_database_bindings': 'scrubbed', 'host_supported': True, 'jsonschema_cli': True}))
 
+    def test_linux_only_factory_cases_require_exact_id_and_observed_platform(self):
+        known = 'factory.tests.test_local_writer.LocalWriterTests.test_out_of_scope_change_is_refused'
+        self.assertIsNotNone(factory_tests.skip_allowance(known, {'linux_kernel': False}))
+        self.assertIsNone(factory_tests.skip_allowance(known, {'linux_kernel': True}))
+        self.assertIsNone(factory_tests.skip_allowance(known, {}))
+        self.assertIsNone(factory_tests.skip_allowance(known + '_other', {'linux_kernel': False}))
+
     def test_readonly_source_binding_import_does_not_load_component_owner(self):
         source_root = Path(__file__).resolve().parents[1] / '.getzilla'
         script = (

@@ -385,7 +385,17 @@ class LinuxProcessRuntimeAdapter:
             pass_fds=(self._runtime_fd,), start_new_session=True,
         )
         try:
+            deadline = time.monotonic() + timeout
             start_time, actual_argv = _process_identity(process.pid)
+            # An execing child can briefly expose an empty /proc/PID/cmdline.
+            # Wait only for this owned child, within the original startup budget.
+            while actual_argv == ("",):
+                if process.poll() is not None:
+                    raise InstallerError("RUNTIME_FAILED")
+                if time.monotonic() >= deadline:
+                    raise InstallerError("RUNTIME_TIMEOUT")
+                time.sleep(0.01)
+                start_time, actual_argv = _process_identity(process.pid)
             pgid = os.getpgid(process.pid)
             if actual_argv != ARGV or pgid != process.pid or pgid == os.getpgrp():
                 raise InstallerError("RUNTIME_IDENTITY_MISMATCH")
@@ -396,7 +406,6 @@ class LinuxProcessRuntimeAdapter:
                 "argv_sha256": hashlib.sha256(b"\0".join(item.encode() for item in ARGV)).hexdigest(),
             })
             self._children[process.pid] = process
-            deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     raise InstallerError("RUNTIME_FAILED")

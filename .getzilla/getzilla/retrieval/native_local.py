@@ -225,7 +225,7 @@ class _LocalHost(access.NativeAccessHost):
 
 
 def _deliver(root, query, mandatory, consumer, *, sink, token_budget=8192):
-    if (os.name != 'posix' or not Path('/proc/self/fd').is_dir() or type(query) is not str
+    if (sys.platform not in {'linux', 'darwin'} or (sys.platform == 'linux' and not Path('/proc/self/fd').is_dir()) or type(query) is not str
             or not query.strip() or len(query.encode()) > 4096 or type(mandatory) is not str
             or not callable(consumer)):
         raise RetrievalError('native_context_unavailable')

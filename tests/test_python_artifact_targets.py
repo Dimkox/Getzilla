@@ -50,7 +50,7 @@ class PythonArtifactTargetTests(unittest.TestCase):
         raw=(TRUSTED_ROOT/recipe).read_bytes()
         for path in (recipe,*source_inputs):
             (self.root/path).write_bytes((TRUSTED_ROOT/path).read_bytes())
-        row=dict(dockerfile=recipe,recipe_sha256=hashlib.sha256(raw).hexdigest(),build_sha256='2'*64,manifest='compose.yml',line=1,source_reference='compose-build:api')
+        row=dict(dockerfile=recipe,recipe_sha256='6'*64,dockerfile_sha256=hashlib.sha256(raw).hexdigest(),build_sha256='2'*64,manifest='compose.yml',line=1,source_reference='compose-build:api')
         dep=dict(ecosystem='PyPI',name='owned',version='1',manifest=requirements,usage='runtime-and-development',extras=[])
         original=dict(dep,manifest='factory/uv.lock')
         inventory=dict(digest='a'*64,builds=[row],dependencies=[dep,original],images=[dict(manifest='compose.yml',line=1,
@@ -75,6 +75,9 @@ class PythonArtifactTargetTests(unittest.TestCase):
                 producer.validate_ci_uses(observed,source,{**run,'run_attempt':'2'})
             with mock.patch.object(image_authority, '_GUARD',object()),self.assertRaises(producer.BackendUnavailable):
                 producer.validate_ci_uses(observed,source,run)
+            with mock.patch.dict(row, dockerfile_sha256='7'*64), self.assertRaisesRegex(
+                    producer.BackendUnavailable, 'current CI recipe differs'):
+                producer.ci_use_observations(self.root,inventory,source,run,graphs)
             substituted=copy.deepcopy(inventory)
             substituted['builds'][0]['recipe_sha256']='5'*64
             with self.assertRaises(producer.BackendUnavailable):

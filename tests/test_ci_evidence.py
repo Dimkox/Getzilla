@@ -126,7 +126,7 @@ class CiEvidenceTests(unittest.TestCase):
             (root / '.gitignore').write_text('.getzilla/runtime/\n')
             (root / 'app.py').write_text('value = 1\n')
             git(root, 'add', '.')
-            git(root, 'commit', '-qm', 'source')
+            git(root, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', 'commit', '-qm', 'source')
             activate_owned_route(root, {'route_id': 'selected', 'required_evidence': ['verification']})
             receipt_path = write_receipt(root, 'verification', 'pass',
                                          details={'output': 'actual check output\n' * (MAX_RECEIPT_BYTES // 10)})
@@ -159,7 +159,7 @@ class CiEvidenceTests(unittest.TestCase):
             git(root, 'init', '-q')
             (root / 'source.py').write_text('value = 1\n')
             git(root, 'add', '.')
-            git(root, 'commit', '-qm', 'source')
+            git(root, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', 'commit', '-qm', 'source')
             runtime = root / '.getzilla/runtime'
             runtime.mkdir(parents=True)
             (runtime / 'approvals.json').write_text('secret authorization')
@@ -178,6 +178,28 @@ class CiEvidenceTests(unittest.TestCase):
             self.assertEqual(provenance['head'], git(root, 'rev-parse', 'HEAD'))
             self.assertEqual(provenance['run_id'], '123')
 
+    def test_dirty_core_source_failure_names_the_changed_paths(self):
+        from unittest import mock
+        from getzilla.ci_evidence import export_evidence
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git(root, 'init', '-q')
+            (root / 'source.py').write_text('value = 1\n')
+            git(root, 'add', '.')
+            git(root, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', 'commit', '-qm', 'source')
+            head = git(root, 'rev-parse', 'HEAD')
+            (root / 'source.py').write_text('value = 2\n')
+            (root / 'stray' / 'nested').mkdir(parents=True)
+            (root / 'stray' / 'nested' / 'left.txt').write_text('left by a step\n')
+            with mock.patch.dict(os.environ, {'GETZILLA_EXPECTED_HEAD': head}):
+                with self.assertRaises(ValueError) as caught:
+                    export_evidence(root, root / 'artifact', logs=root, job='linux-core', status='success', run_id='1')
+            message = str(caught.exception)
+            self.assertIn('clean exact expected source', message)
+            self.assertIn('source.py', message)
+            self.assertIn('stray/nested/left.txt', message)
+            self.assertNotIn('differs from expected', message)
+
     def test_local_archive_preserves_identity_without_exporting_grants(self):
         from getzilla.ci_evidence import export_local_evidence
         import zipfile
@@ -186,7 +208,7 @@ class CiEvidenceTests(unittest.TestCase):
             git(root, 'init', '-q')
             (root / 'source.py').write_text('value = 1\n')
             git(root, 'add', '.')
-            git(root, 'commit', '-qm', 'source')
+            git(root, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', 'commit', '-qm', 'source')
             runtime = root / '.getzilla/runtime'
             package = runtime / 'changes/test'
             (package / 'evidence').mkdir(parents=True)
@@ -213,7 +235,7 @@ class CiEvidenceTests(unittest.TestCase):
             git(root, 'init', '-q')
             (root / 'source.py').write_text('value = 1\n')
             git(root, 'add', '.')
-            git(root, 'commit', '-qm', 'source')
+            git(root, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', 'commit', '-qm', 'source')
             output = root / 'artifact'
             output.mkdir()
             (output / 'approvals.json').write_text('not selected')
@@ -228,7 +250,7 @@ class CiEvidenceTests(unittest.TestCase):
             git(root, 'init', '-q')
             (root / 'source.py').write_text('value=1\n')
             git(root, 'add', '.')
-            git(root, 'commit', '-qm', 'source')
+            git(root, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', 'commit', '-qm', 'source')
             runtime = root / '.getzilla/runtime'
             runtime.mkdir(parents=True)
             record = {'route_id': 'test', 'task': 'controlled legacy scope',
@@ -268,7 +290,7 @@ class CiEvidenceTests(unittest.TestCase):
             git(root, 'init', '-q')
             (root / 'source.py').write_text('value=1\n')
             git(root, 'add', '.')
-            git(root, 'commit', '-qm', 'source')
+            git(root, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', 'commit', '-qm', 'source')
             runtime = root / '.getzilla/runtime'
             runtime.mkdir(parents=True)
             (runtime / 'active-route.json').write_text('{"route_id":"original"}')

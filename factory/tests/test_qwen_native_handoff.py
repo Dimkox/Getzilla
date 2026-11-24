@@ -152,6 +152,13 @@ class InertSocketTests(CanonicalClaimTests):
         import threading
         import time
         from pathlib import Path
+        if not hasattr(socket, 'SO_PEERCRED'):
+            with tempfile.TemporaryDirectory(dir=Path.home()) as tmp:
+                path = Path(tmp) / 'handoff.sock'
+                with self.assertRaises(NativeHandoffError):
+                    self.sink.serve_once(path, secrets.token_hex(24), timeout=1.5)
+                self.assertFalse(path.exists())
+            return
         listener=socket.socket()
         self.addCleanup(listener.close)
         try:
@@ -241,6 +248,11 @@ class NegativeTransportTests(unittest.TestCase):
         errors=[]
         with tempfile.TemporaryDirectory(prefix='gz-', dir=Path.home()) as tmp:
             path=Path(tmp)/'auth.sock'
+            if not hasattr(socket, 'SO_PEERCRED'):
+                with self.assertRaises(NativeHandoffError):
+                    sink.serve_once(path, 't'*40, timeout=1)
+                self.assertFalse(path.exists())
+                return
             def receive():
                 try:
                     sink.serve_once(path,'t'*40,timeout=1)

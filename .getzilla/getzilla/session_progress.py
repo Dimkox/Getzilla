@@ -103,6 +103,24 @@ def _key(root, scope, inputs, cwd):
     return _digest('operation', [scope, location, raw])
 
 
+# Volatile text that changes between identical failures (#153). Order matters: timestamps before durations.
+_VOLATILE = (
+    (re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?'), '<time>'),
+    (re.compile(r'\(\d+:\d{2}:\d{2}(?:\.\d+)?\)'), '(<duration>)'),
+    (re.compile(r'\b\d+(?:\.\d+)?\s?(?:ms|s|secs?|seconds?)\b'), '<duration>'),
+    (re.compile(r'\b0x[0-9a-fA-F]{6,16}\b'), '<address>'),
+    (re.compile(r'\[\s*\d{1,3}%\]'), '[<progress>]'),
+    (re.compile(r'(?<![\w.-])((?:/private)?/tmp|/var/folders/[^/\s]+/[^/\s]+/T)/[^/\s:]+(?:/[^/\s:]*-\d+)?'), r'\1/<tmp>'),
+)
+
+
+def normalize_output(text: str) -> str:
+    """Replace durations, timestamps, addresses, temp directories and progress counters; keep everything else."""
+    for pattern, replacement in _VOLATILE:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def _outcome(response):
     if not isinstance(response, dict):
         return None
@@ -120,8 +138,10 @@ def _outcome(response):
         value = response.get(field, '')
         if not isinstance(value, str):
             return None
-        # Work and storage are bounded even when a harness delivers a large log.
-        output[field] = [len(value), value[:8192], value[-8192:] if len(value) > 8192 else '']
+        # Work and storage are bounded even when a harness delivers a large log. The slices are
+        # normalized, so the length is not part of the signature (a longer duration is not progress).
+        head, tail = value[:8192], value[-8192:] if len(value) > 8192 else ''
+        output[field] = [len(value) > 8192, normalize_output(head), normalize_output(tail)]
     return codes[0], _digest('failure', [codes[0], output])
 
 
@@ -177,8 +197,13 @@ def _regular(parent, name, flags, limit):
 
 
 @contextmanager
-def _store(root, *, write=False):
-    """Stable lock inode; pinned no-follow directories; bounded atomic state publication."""
+def _store(root, *, write=False, name=None, validate=None, empty=None):
+    """Stable lock inode; pinned no-follow directories; bounded atomic state publication.
+
+    ``name``/``validate``/``empty`` select another state file under the same lock (ci_progress).
+    """
+    state_name = Path(STATE).name if name is None else name
+    validate = _validate if validate is None else validate
     handles, lock, locked, temporary = [fsx.open_dir(root.resolve(strict=True))], None, False, None
     try:
         for name in ('.getzilla', 'runtime'):
@@ -197,9 +222,9 @@ def _store(root, *, write=False):
                     raise TimeoutError('observation-lock-unavailable') from None
                 time.sleep(0.01)
         try:
-            descriptor = _regular(directory, Path(STATE).name, os.O_RDONLY, MAX_BYTES)
+            descriptor = _regular(directory, state_name, os.O_RDONLY, MAX_BYTES)
         except FileNotFoundError:
-            state = {'version': 1, 'records': {}}
+            state = {'version': 1, 'records': {}} if empty is None else empty()
         else:
             try:
                 raw = os.read(descriptor, MAX_BYTES + 1)
@@ -208,12 +233,12 @@ def _store(root, *, write=False):
                 state = json.loads(raw, object_pairs_hook=_pairs)
             finally:
                 os.close(descriptor)
-        _validate(state)
+        validate(state)
         before = json.dumps(state, sort_keys=True)
         yield state
         if not write or json.dumps(state, sort_keys=True) == before:
             return
-        _validate(state)
+        validate(state)
         raw = (json.dumps(state, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
         if len(raw) > MAX_BYTES:
             raise ValueError('observation-byte-bound')
@@ -227,7 +252,7 @@ def _store(root, *, write=False):
             output.write(raw)
             output.flush()
             os.fsync(output.fileno())
-        fsx.replace_at(directory, temporary, directory, Path(STATE).name)
+        fsx.replace_at(directory, temporary, directory, state_name)
         temporary = None
     finally:
         if temporary is not None:
@@ -328,7 +353,13 @@ def inspect(root, scope, *, now=None):
                       'warning' if row['count'] >= THRESHOLD else 'observing')
             loops.append({'loop_id': key, 'revision': row['revision'], 'count': row['count'],
                           'status': status, 'last_observed_at': row['at']})
-    return {'status': 'available', 'loops': loops, 'control': 'local-observation-only', 'retention_seconds': TTL}
+    try:
+        from .ci_progress import inspect as external_inspect
+        external = external_inspect(root, scope, now=now)
+    except Exception:  # advisory: a partial install or corrupt external state never breaks inspection
+        external = 'unavailable'
+    return {'status': 'available', 'loops': loops, 'external': external,
+            'control': 'local-observation-only', 'retention_seconds': TTL}
 
 
 def recover(root, scope, loop_id, revision, reason, evidence, *, now=None):
@@ -337,6 +368,15 @@ def recover(root, scope, loop_id, revision, reason, evidence, *, now=None):
     if not isinstance(evidence, str) or not evidence.strip() or len(evidence) > 4096:
         raise ValueError('new-diagnosis-required')
     now, diagnosis = _clock(now), _digest('diagnosis', evidence.strip())
+    with _store(root, write=True) as state:
+        row = state['records'].get(loop_id)
+    if row is None:
+        # A GitHub CI block (#153) shares the same CLI and the same one-shot rules.
+        from .ci_progress import recover as external
+        result = external(root, scope, loop_id, revision, reason, evidence, now=now)
+        if result is None:
+            raise ValueError('stale-or-reused-recovery')
+        return result
     with _store(root, write=True) as state:
         row = state['records'].get(loop_id)
         if (not row or row['scope'] != scope or row['revision'] != revision or _expired(row, now)

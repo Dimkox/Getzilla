@@ -17,6 +17,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .. import fsx
 from .builder import build_generation
 from .cache_custody import CacheCustody
 from .models import (
@@ -85,10 +86,9 @@ class GraphStore:
         self.rebuilt_reason: str | None = None
         self._custody = CacheCustody(path, create=not readonly, private_parent=private_parent)
         self.path = self._custody.path
-        if private_parent is not None and not self._custody.missing:
-            # Linux native retrieval holds this directory for the lifetime of SQLite.
-            self.path = Path('/proc/self/fd') / str(self._custody.parent) / self._custody.name
         try:
+            if private_parent is not None and not self._custody.missing:
+                self.path = fsx.held_directory_address(self._custody.parent) / self._custody.name
             if self._custody.missing:
                 return
             if readonly:

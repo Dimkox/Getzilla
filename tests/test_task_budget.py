@@ -399,8 +399,11 @@ class BudgetReviewRegressionTests(BudgetFixture, unittest.TestCase):
                     self.assertFalse((root / 'new-done').exists(), 'Foreign child must still be running')
                     self.assertEqual(path.read_bytes(), before, 'Old effect changed the foreign canonical bytes/revision')
                     self.assertEqual(outcome['outcome'], 'unknown')
-                    original_row = state.canonical_route(root, original['route_id'])['task_budget']['operations']['shared']
-                    foreign_row = state.canonical_route(root, foreign['route_id'])['task_budget']['operations']['shared']
+                    # The foreign child may still publish into routes/ and move the
+                    # directory stamp. Read under the same lock that writers hold.
+                    with state.task_transition(root):
+                        original_row = state.canonical_route(root, original['route_id'])['task_budget']['operations']['shared']
+                        foreign_row = state.canonical_route(root, foreign['route_id'])['task_budget']['operations']['shared']
                     self.assertNotEqual(original_row['key'], foreign_row['key'])
                     self.assertEqual(original_row['state'], 'running')
                     self.assertIsNone(original_row['actual'])
@@ -496,6 +499,27 @@ class BudgetOperationBindingTests(BudgetFixture, unittest.TestCase):
                 finally:
                     (root / 'release').touch()
                     future.result(timeout=4)
+
+
+class BudgetTornReadTests(unittest.TestCase):
+    def test_authority_poll_retries_only_a_torn_route_read(self):
+        from unittest import mock
+        from getzilla import task_budget as budget
+        from getzilla.package_status import InspectionError
+        torn = InspectionError('file_changed', 'selected input changed during the read')
+        args = ('root', {}, 'op', 'k')
+        with mock.patch.object(budget, '_same_authority_once', side_effect=[torn, torn, True]) as once, \
+                mock.patch.object(budget.time, 'sleep'):
+            self.assertTrue(budget._same_authority(*args))
+        self.assertEqual(once.call_count, 3)
+        with mock.patch.object(budget, '_same_authority_once', side_effect=torn) as once, \
+                mock.patch.object(budget.time, 'sleep'):
+            self.assertFalse(budget._same_authority(*args))
+        self.assertEqual(once.call_count, budget._TORN_READ_RETRIES + 1)
+        other = InspectionError('file_unsafe', 'unsafe')
+        with mock.patch.object(budget, '_same_authority_once', side_effect=other) as once:
+            self.assertFalse(budget._same_authority(*args))
+        self.assertEqual(once.call_count, 1)
 
 
 if __name__ == '__main__':

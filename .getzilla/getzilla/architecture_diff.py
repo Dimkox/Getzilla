@@ -14,6 +14,7 @@ import signal
 import stat
 # Git is resolved once and invoked only with an argument vector and shell=False.
 import subprocess  # nosec B404
+import sys
 import tempfile
 import threading
 import time
@@ -271,7 +272,8 @@ def _run_capped(
 ) -> tuple[int, bytes, bytes]:
     """Run a process while enforcing limits before output is fully produced."""
     input_stream = None
-    if stdin_data is not None:
+    pipe_input = stdin_data is not None and bool(pass_fds) and sys.platform == 'darwin'
+    if stdin_data is not None and not pipe_input:
         if pass_fds:
             if not hasattr(os,'memfd_create') or not getattr(os,'MFD_CLOEXEC',0):
                 raise ArchitectureError('native Git bounded input is unavailable',code='io')
@@ -289,7 +291,7 @@ def _run_capped(
             input_stream.seek(0)
         process = subprocess.Popen(  # nosec B603
             command, cwd=cwd, env=env,
-            stdin=input_stream if input_stream is not None else subprocess.DEVNULL,
+            stdin=subprocess.PIPE if pipe_input else (input_stream if input_stream is not None else subprocess.DEVNULL),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
             **({'pass_fds':pass_fds} if pass_fds else {}),
             **fsx.process_group_kwargs(),
@@ -320,6 +322,13 @@ def _run_capped(
             for stream in streams:
                 os.set_blocking(stream.fileno(), False)
                 selector.register(stream, selectors.EVENT_READ)
+            if pipe_input:
+                pending_input = memoryview(stdin_data)
+                if pending_input:
+                    os.set_blocking(process.stdin.fileno(), False)
+                    selector.register(process.stdin, selectors.EVENT_WRITE)
+                else:
+                    process.stdin.close()
         except Exception as exc:
             raise ArchitectureError(
                 f"bounded process setup failed: {exc}", code="io"
@@ -336,6 +345,18 @@ def _run_capped(
                 raise ArchitectureError("bounded process timeout exceeded", code="timeout")
             for key, _mask in events:
                 stream = key.fileobj
+                if pipe_input and stream is process.stdin:
+                    try:
+                        written = os.write(stream.fileno(), pending_input[:65536])
+                    except BlockingIOError:
+                        continue
+                    except BrokenPipeError:
+                        written = len(pending_input)
+                    pending_input = pending_input[written:]
+                    if not pending_input:
+                        selector.unregister(stream)
+                        stream.close()
+                    continue
                 buffer, limit = streams[stream]
                 chunk = os.read(stream.fileno(), min(65_536, limit - len(buffer) + 1))
                 if not chunk:
@@ -359,7 +380,7 @@ def _run_capped(
     finally:
         if selector is not None:
             selector.close()
-        for stream in (process.stdout, process.stderr):
+        for stream in (process.stdin, process.stdout, process.stderr):
             if stream is None:
                 continue
             if not stream.closed:
@@ -930,6 +951,10 @@ def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
     binding = binding or _git_binding(root, _probe=False)
     native = isinstance(guard, NativeGitGraph)
     worktree = guard.address(binding.root) if native else binding.root
+    # Darwin accepts the held /.vol address for chdir, but Git traverses its
+    # virtual parent components when handed that spelling as --work-tree.
+    # Resolve "." inside the child already launched at the held directory.
+    git_worktree = Path('.') if native and sys.platform == 'darwin' else worktree
     worktree_fds = guard.pass_fds((binding.root,)) if native else ()
     def parse_config(raw):
         volume_root = Path(Path(root).anchor)
@@ -950,16 +975,27 @@ def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
         environment['GIT_OBJECT_DIRECTORY'] = str(view.path/'objects')
         descriptors = view.pass_fds + worktree_fds
         command = _git_command(arguments, safe_directory=binding.root,
-                               git_directory=view.path, work_tree=worktree)
+                               git_directory=view.path, work_tree=git_worktree)
         command[1:1] = ['--attr-source='+view.empty_tree, '-c', 'protocol.allow=never']
         if arguments[:1] in (['status'], ['diff']):
             inventory = _git_command(['ls-files', '--stage', '-z'], safe_directory=binding.root,
-                git_directory=view.path, work_tree=worktree)
+                git_directory=view.path, work_tree=git_worktree)
             code, entries, _ = _run_capped(inventory, cwd=worktree, env=environment,
                 stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=4096,
                 timeout=_bounded_git_timeout(timeout, deadline), pass_fds=descriptors)
             if code or any(entry.startswith(b'160000 ') for entry in entries.split(b'\0')):
                 raise ValueError('Git submodule observations unavailable')
+            if arguments[0] == 'status':
+                # Recognize only the reviewed root rules; the private repository
+                # must never load arbitrary filters or working-tree encodings.
+                rows = entries.split(b'\0')
+                known_attributes = {
+                    b'100644 1894c9917341fed8b2755d94381a9cc93c114cf1 0\t.gitattributes',
+                    b'100644 a8c1edc8d3cbcf42cfe4fc43035c25a79926b46de4c98d50610ffd580f35686e 0\t.gitattributes',
+                }
+                if not known_attributes.isdisjoint(rows) and not any(
+                        row.endswith(b'\tbin/.gitattributes') for row in rows):
+                    (view.path / 'info' / 'attributes').write_bytes(b'bin/getzilla.cmd text eol=crlf\n')
         yield command, environment, descriptors, deadline, binding, view
 
 

@@ -2,6 +2,7 @@
 
 ## 2.3.1 — 2026-10-21 (source candidate)
 
+- Security is **UNVERIFIED** for a release admitted with the temporary security-expanded waiver (#456, expires 2026-12-08 00:00 UTC). Deferred coverage includes OSV, licenses, OCI and Python artifacts.
 - Record the v2.3.0 publication; README and QUICKSTART install from the v2.3.0 tag with its installer digests.
 - EU AI Act gate:
   - it decides PASS, REVIEW or BLOCK, and undecided cases are REVIEW, never a fictitious pass;

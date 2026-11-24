@@ -29,6 +29,7 @@ def unit_fixture(*, include_skip=False):
         contents["factory/tests/test_postgres_integration.py"] = b"class PostgresFactoryTests:\n def test_public_fixture_skip(self): pass\n"
     identifiers = declared_ids(Path("/owned-fixture"), contents=contents)
     context = {"unit_database_bindings": "scrubbed", "host_supported": False,
+               "linux_kernel": True, "posix_source_custody": True, "unix_peer_credentials": True,
                "procfs_descriptor_reopen": False, "pypdf_version": None, "jsonschema_cli": None}
     expected_source = {"source_inventory": {name: hashlib.sha256(raw).hexdigest() for name, raw in contents.items()},
                        "declared_ids": identifiers, "engine_sha256": "f" * 64}
@@ -53,6 +54,22 @@ class CiSchema3RepairTests(unittest.TestCase):
         from getzilla.ci_admission import _factory_unit_valid
         unit, source = unit_fixture(include_skip=True)
         self.assertTrue(_factory_unit_valid(unit, source))
+
+    def test_factory_linux_report_requires_current_platform_evidence(self):
+        from getzilla.ci_admission import _factory_unit_valid
+        for field in ("linux_kernel", "posix_source_custody", "unix_peer_credentials"):
+            for invalid in (None, False, 1, "true"):
+                with self.subTest(field=field, invalid=invalid):
+                    unit, source = unit_fixture()
+                    context = unit["binding"]["context"]
+                    if invalid is None:
+                        del context[field]
+                    else:
+                        context[field] = invalid
+                    self.assertFalse(_factory_unit_valid(unit, source))
+        unit, source = unit_fixture()
+        unit["binding"]["context"]["extra"] = True
+        self.assertFalse(_factory_unit_valid(unit, source))
 
     def test_owned_accounting_and_skip_provenance_refuse(self):
         from getzilla.ci_admission import _factory_unit_valid
@@ -132,6 +149,68 @@ class CiAdmissionTests(unittest.TestCase):
         module = self.module()
         return module.evaluate(needs or {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")},
             records or self.records(), head=HEAD, tree=TREE, run_id="123", attempt="2", now=now)
+
+    def test_waiver_is_limited_to_bound_security_failure_before_expiry(self):
+        module = self.module()
+        config = module.read_waiver(Path(__file__).resolve().parents[1])
+        needs = dict.fromkeys(("linux-core", "linux-core-tests", "live-acceptance", "security-expanded"), "success")
+        records = self.records()
+        args = dict(waiver=config, repository="Dimkox/Getzilla", head=HEAD, tree=TREE,
+                    run_id="123", attempt="2", now=NOW)
+        def decision(**changes):
+            from unittest.mock import patch
+            with patch.dict("os.environ", {"GETZILLA_OPERATOR_CHECKER": CHECKER}):
+                return module.admission_result(needs, records, **(args | changes))
+        self.assertEqual(decision()["status"], "pass")
+        self.assertFalse(decision()["waiver"]["used"])
+        needs["security-expanded"] = "failure"
+        security = records["security-expanded"]
+        security.update(schema="getzilla-security-ci-v1", status="fail", primary_phase="scan",
+                        event_provenance={"repository": "Dimkox/Getzilla"}, report={"kind": "public-security-input-refusal", "status": "fail"})
+        self.assertEqual(decision()["status"], "pass-with-waiver")
+        self.assertEqual(decision()["waiver"]["issue"], 456)
+        original = security["report"]
+        for status in ("fail", "fail-for-selected-run"):
+            with self.subTest(scan_status=status):
+                security["report"] = {"kind": "security-expanded", "status": status,
+                                      "checks": [{"name": "known-vulnerabilities", "status": "fail"}]}
+                result = decision()
+                self.assertEqual(result["status"], "fail")
+                self.assertFalse(result["waiver"]["used"])
+        security["report"] = original
+        self.assertEqual(decision(now=datetime(2026,12,8,tzinfo=timezone.utc))["status"], "fail")
+        self.assertEqual(decision(repository="Fork/Getzilla")["status"], "fail")
+        for job in ("linux-core", "linux-core-tests", "live-acceptance"):
+            needs[job] = "failure"
+            self.assertEqual(decision()["status"], "fail")
+            needs[job] = "success"
+        for result in ("cancelled", "skipped"):
+            needs["security-expanded"] = result
+            self.assertEqual(decision()["status"], "fail")
+        needs["security-expanded"] = "failure"
+        security["attempt"] = "1"
+        self.assertEqual(decision()["status"], "fail")
+        del records["security-expanded"]
+        self.assertEqual(decision()["status"], "fail")
+
+    def test_waiver_configuration_is_closed(self):
+        import json
+        import tempfile
+        module = self.module()
+        entry = module.read_waiver(Path(__file__).resolve().parents[1])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".getzilla/config/ci-waivers.json"
+            path.parent.mkdir(parents=True)
+            self.assertIsNone(module.read_waiver(root))
+            for rows in ([dict(entry, check="linux-core")], [entry, entry],
+                         [dict(entry, unexpected=True)], [dict(entry, expires="2027-01-01")]):
+                path.write_text(json.dumps({"schema_version": 1, "waivers": rows}))
+                with self.assertRaises(ValueError):
+                    module.read_waiver(root)
+            path.write_text("{")
+            with self.assertRaises(ValueError):
+                module.read_waiver(root)
 
     def test_all_required_evidence_passes_on_the_exact_source(self):
         self.assertEqual(self.evaluate(), [])

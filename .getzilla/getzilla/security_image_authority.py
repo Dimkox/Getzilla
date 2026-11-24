@@ -154,7 +154,7 @@ def ci_use_observations(root,inventory,source,run,graphs):
         context = ci_install_context(root, recipe)
         if context is None:
             continue
-        if context['recipe_sha256'] != row['recipe_sha256']:
+        if context['recipe_sha256'] != row['dockerfile_sha256']:
             raise BackendUnavailable('current CI recipe differs from its owned completed build')
         requirements = context['requirements']
         installed = context['install_requirements']

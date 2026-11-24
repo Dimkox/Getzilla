@@ -22,6 +22,7 @@ spec.loader.exec_module(pkg)
 from getzilla_test_mcp.transport import CAP, Frames, Session, TransportError, native_bypass
 from getzilla_test_mcp.admission import gate, scope_key
 from getzilla_test_mcp.runtime import Runtime
+from getzilla import managed_execution
 
 PROGRAM = '''import sys,json,time,signal
 signal.signal(signal.SIGTERM,signal.SIG_IGN)
@@ -226,6 +227,7 @@ class NativeTests(unittest.TestCase):
         self.plan=plan_activation(self.root,'mcp-jira',self.request,native=self.runtime,runtime=self.runtime,authority=self.authority)
         self.activate=lambda: commit_activation(self.root,self.plan,native=self.runtime,runtime=self.runtime,authority=self.authority)
 
+    @unittest.skipUnless(managed_execution.supported(), 'requires managed execution with Linux pidfds')
     def test_invalid_policy_denies_before_execution_allocation(self):
         from getzilla import execution, execution_store
         self.activate()
@@ -233,6 +235,12 @@ class NativeTests(unittest.TestCase):
         with self.assertRaisesRegex(execution.ExecutionError, 'mcp_identity_unverified'):
             self.runtime.call(tool='fixture_read',arguments={},intent_key='invalid-policy')
         self.assertEqual(execution_store.load_registry(self.root)['records'], {})
+
+    def test_unavailable_managed_profile_refuses_activation(self):
+        from getzilla import execution
+        with patch.object(managed_execution, 'supported', return_value=False):
+            with self.assertRaisesRegex(execution.ExecutionError, 'mcp_profile_unsupported'):
+                self.activate()
 
     def test_T26_disabled_zero_provider_work_and_no_configuration_mutation(self):
         before={str(path):path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
@@ -246,6 +254,7 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(before,{str(path):path.read_bytes() for path in self.root.rglob('*') if path.is_file()})
         self.fixture.assert_user_settings()
 
+    @unittest.skipUnless(managed_execution.supported(), 'requires managed execution with Linux pidfds')
     def test_read_only_activation_cannot_create_an_effect_intent(self):
         from getzilla import execution
         from getzilla_test_mcp.effects import Effects
@@ -254,6 +263,7 @@ class NativeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'module_write_not_granted'):
             effects.intent('a'*32,'write',target={},operation='comment',arguments={},baseline='revision')
 
+    @unittest.skipUnless(managed_execution.supported(), 'requires managed execution with Linux pidfds')
     def test_native_tool_identity_requires_actual_port_and_enabled_owned_bytes(self):
         from getzilla.supply_chain import check_tool_trust
         event={'tool_name':'mcp__managed_stdio__fixture_read','managed':True,'qualified':True}
@@ -265,6 +275,7 @@ class NativeTests(unittest.TestCase):
         self.runtime.profile['server_version']='changed'
         self.assertFalse(check_tool_trust(self.root,event,managed_adapter=self.runtime)[0])
 
+    @unittest.skipUnless(managed_execution.supported(), 'requires managed execution with Linux pidfds')
     def test_host_global_budget_reads_actual_other_project_registry(self):
         from getzilla import execution
         from getzilla_test_mcp.admission import HostBudget
@@ -399,6 +410,7 @@ class NativeTests(unittest.TestCase):
         self.fixture.assert_user_settings()
 
 
+@unittest.skipUnless(managed_execution.supported(), 'requires managed execution with Linux pidfds')
 class EffectsTests(unittest.TestCase):
     def setUp(self):
         NativeTests.setUp(self)

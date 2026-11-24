@@ -48,6 +48,29 @@ class KillProcessTreeTests(unittest.TestCase):
                     fsx.signal_owned_group(process, 0)
                 self.assertEqual(census.call_count, int(exit_code is not None))
 
+    def test_darwin_permission_error_waits_briefly_for_an_exiting_leader(self):
+        from unittest import mock
+
+        process = mock.Mock(pid=12345)
+        process.poll.side_effect = [None, None, 0]
+        with mock.patch.object(sys, 'platform', 'darwin'), \
+                mock.patch.object(os, 'killpg', side_effect=PermissionError), \
+                mock.patch('subprocess.run', return_value=mock.Mock(stdout=b'1\n54321\n')) as census:
+            with self.assertRaises(ProcessLookupError):
+                fsx.signal_owned_group(process, 0)
+        self.assertEqual(process.poll.call_count, 3)
+        self.assertEqual(census.call_count, 1)
+
+        process = mock.Mock(pid=12345)
+        process.poll.return_value = None
+        with mock.patch.object(sys, 'platform', 'darwin'), \
+                mock.patch.object(fsx, '_DARWIN_EXIT_SETTLE_SECONDS', 0.02), \
+                mock.patch.object(os, 'killpg', side_effect=PermissionError), \
+                mock.patch('subprocess.run') as census:
+            with self.assertRaises(PermissionError):
+                fsx.signal_owned_group(process, 0)
+        census.assert_not_called()
+
     def test_a_group_that_already_exited_is_not_an_error(self) -> None:
         from unittest import mock
         with mock.patch.object(fsx.os, 'killpg', side_effect=ProcessLookupError), \
