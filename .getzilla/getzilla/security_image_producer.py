@@ -435,7 +435,17 @@ def _pipeline(request, volume, builder):
                 delivery_result = dict(status="redistributed", reason=type(error).__name__)
             else:
                 authority._LIVE['delivery_members'] = facts
-                delivery_result = dict(status="examined", archive_sha256=facts[1], unique_members=len(facts[0]))
+                from .security_internal_image_scope import image_scopes
+                state = authority._LIVE
+                subjects = state["declared_inventory"]["images"]
+                _, referenced = image_scopes(subjects, state["images"], facts)
+                factory, = (row for row in subjects if row["manifest"] == "factory/compose.yaml")
+                image = state["images"][factory["reference"]]
+                hashes = image.layer_binary_hashes()
+                delivery_result = dict(status="examined", archive_sha256=facts[1], unique_members=len(facts[0]),
+                    postgresql_manifest=image.manifest_digest, postgresql_config=image.config_digest,
+                    layer_identities=len(image.layer_identities), binary_sha256_count=None if hashes is None else len(hashes),
+                    distribution="referenced" if image.reference in referenced else "redistributed")
             cli._atomic(Path(request["report"]).parent / "security-delivery-scope.json", canonical(delivery_result))
             license_inputs.update(selection=selection,catalog=catalog)
             cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))

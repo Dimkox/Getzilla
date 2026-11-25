@@ -96,9 +96,10 @@ def delivery_members(deliveries, pins):
     """Hash all regular payloads including nested archive members, under one work budget."""
     if set(deliveries) != PRODUCTS:
         raise ValueError("all three exact release outputs are required")
-    expected = {key: (pins[key]["reference"].split("@sha256:")[-1], pins[key]["image_id"][7:])
-                for key in ("postgres", "python")}
-    if expected != {"postgres": (PG, MANIFEST_CONFIG[PG]), "python": (PYTHON, MANIFEST_CONFIG[PYTHON])}:
+    if pins.get("platform") != "linux/amd64" or any(
+            pins[name]["reference"] != name + "@sha256:" + digest
+            or pins[name]["image_id"] != "sha256:" + MANIFEST_CONFIG[digest]
+            for name, digest in (("postgres", PG), ("python", PYTHON))):
         raise ValueError("shipped metadata differs from CI declarations")
     seen_proofs, hashes, archive_hashes = set(), set(), {}
     size = count = 0
@@ -125,10 +126,9 @@ def delivery_members(deliveries, pins):
             seen_proofs.add(relative)
         elif PREFIX in name:
             raise ValueError("unexpected standalone image proof")
-        elif (name.lower().endswith(".json") or raw.lstrip()[:1] in {b"{", b"["}
+        elif (name.lower().endswith(".json") or raw.lstrip(b" \r\n\t\0")[:1] in {b"{", b"["}
               or raw.startswith((codecs.BOM_UTF8, codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE,
-                                 codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE))
-              or raw[:2] in (bytes((0,123)), bytes((0,91))) or raw[:4] in (bytes((0,0,0,123)), bytes((0,0,0,91)))):
+                                 codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE))):
             if len(raw) > MAX_INDEX_BYTES:
                 raise ValueError("oversized document")
             try:
@@ -215,7 +215,8 @@ def delivery_members(deliveries, pins):
 
 
 def distribution(facts, layers, binaries):
-    if not facts or not layers or not binaries:
+    if (not facts or not layers or not binaries or set(facts[1]) != PRODUCTS
+            or any(not isinstance(value, str) or not re.fullmatch("[0-9a-f]{64}", value) for value in facts[1].values())):
         return "redistributed"
     selected = {digest.removeprefix("sha256:") for digest in layers} | set(binaries)
     return "redistributed" if selected & facts[0] else "referenced"

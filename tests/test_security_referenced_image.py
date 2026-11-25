@@ -55,10 +55,20 @@ class ReferencedImageTests(unittest.TestCase):
 
     def test_unlisted_manifest_even_in_nested_archive_or_utf16_document(self):
         raw = self.proofs["getzilla/" + scope.PREFIX + scope.PG + ".json"]
-        for value in (raw, raw.decode().encode("utf-16"), zipped({"other": raw})):
+        for value in (raw, raw.decode().encode("utf-16"), ("  " + raw.decode()).encode("utf-16-be"),
+                      ("\n" + raw.decode()).encode("utf-32-be"), zipped({"other": raw})):
             self.outputs["factory-wheel"].write_bytes(zipped({"unlisted": value}))
             with self.subTest(size=len(value)), self.assertRaises(ValueError):
                 self.result()
+
+    def test_same_digest_with_foreign_reference_refuses(self):
+        self.pins["python"]["reference"] = "different@sha256:" + scope.PYTHON
+        with self.assertRaises(ValueError):
+            self.result()
+
+    def test_missing_archive_hash_cannot_establish_referenced(self):
+        partial = {name: "a"*64 for name in scope.PRODUCTS - {"factory-wheel"}}
+        self.assertEqual(scope.distribution((set(), partial), {"layer"}, {"binary"}), "redistributed")
 
     def test_single_added_byte_refused(self):
         key = next(iter(self.proofs))

@@ -13,7 +13,7 @@ from getzilla.security_artifacts import family_evidence, ArtifactError
 
 
 class HeldFamilyTests(fixtures.ImageComponentTests):
-    def fixture(self, rows=None):
+    def fixture(self, rows=None, *, index_components=False):
         from contextlib import contextmanager
 
         @contextmanager
@@ -34,7 +34,7 @@ class HeldFamilyTests(fixtures.ImageComponentTests):
             guard = object()
             source = {"head_sha": "b" * 40}
             run = {"id": "fixture"}
-            with a.import_layouts(cat, inv, self.profile, self.stage) as images:
+            with a.import_layouts(cat, inv, self.profile, self.stage, index_components=index_components) as images:
                 state = dict(
                     native_guard=guard,
                     source=source,
@@ -199,6 +199,40 @@ class HeldFamilyTests(fixtures.ImageComponentTests):
             self.assertIn(rows[-1][1], family_evidence(root, records[0])["files"].values())
             finding["license_observations"]["counts"].clear()
             self.assertFalse(image_licenses.finding_consistent(finding, policy["auto_allow"], _select_expression))
+
+    def test_factory_license_observation_requires_held_binary_and_three_deliveries(self):
+        from datetime import datetime, timezone
+        from getzilla import security_referenced_image as referenced
+        from getzilla.security_licenses import evaluate_artifacts, load_policy, _select_expression
+        rows = self.debian()
+        rows[-1] = (rows[-1][0], b"legacy text in original image")
+        # Keep the observation attributable to the installed Debian package.
+        for i, (name, raw) in enumerate(rows):
+            if name.startswith("usr/bin/"):
+                rows[i] = (name, b"\x7fELF\x00test")
+                break
+        policy = load_policy(Path(__file__).resolve().parents[1])
+        with self.fixture(rows, index_components=True) as (root, inv, source, run, state):
+            subject = inv["images"][0]
+            subject.update(manifest="factory/compose.yaml", source_reference=referenced.FACTORY_REFERENCE)
+            inv.update(dependencies=[], tools=[], complete=True, gaps=[])
+            image = state["images"][subject["reference"]]
+            now = datetime.now(timezone.utc)
+            state["delivery_members"] = (set(), {k: "a"*64 for k in referenced.PRODUCTS})
+            with patch.object(referenced, "PG", image.manifest_digest[7:]):
+                records = image_licenses.prepare_families(root, inv, source, run, policy=policy, now=now)
+                (root / "manifest.json").write_text(json.dumps(dict(schema_version=1,
+                    inventory_digest=inv["digest"], last_verified_sync_utc=now.isoformat(), records=records, gaps=[])))
+                result = evaluate_artifacts(inv, root, policy)
+                self.assertEqual(result["gaps"], [])
+                detail, = result["details"]
+                self.assertEqual(detail["distribution"], "referenced")
+                self.assertEqual(detail["license_observations"]["status"], "referenced-report-only")
+                self.assertTrue(image_licenses.finding_consistent(detail, policy["auto_allow"], _select_expression))
+                state["delivery_members"] = None
+                self.assertFalse(image_licenses.finding_consistent(detail, policy["auto_allow"], _select_expression))
+                with self.assertRaises(ArtifactError):
+                    image_licenses.prepare_families(root, inv, source, run, policy=policy, now=now)
 
     def test_unknown_and_redistributed_images_keep_the_same_license_gap(self):
         from getzilla.security_licenses import load_policy
