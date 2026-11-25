@@ -190,3 +190,11 @@ The offline loader and Unix socket supersede the pull and TCP configuration desc
 | CVE-2026-46600 | Module-level x/net match in runc. Isolation alone cannot establish that local resolver handling is unreachable. | Require x/net v0.56.0 or later. |
 | CVE-2026-78661 | Affected HTML parser symbols in the runtime shim and ctr. Module-level matches also occur in runc, rootlesskit and Compose. | Require x/net v0.62.0 or later. The current job has no demonstrated HTML path, but the active shim prevents a binary-wide exemption. |
 | CVE-2026-78669 | Affected HTTP/2 symbols in the runtime shim and ctr, plus a module match in runc. The shim participates in job startup. | Require x/net v0.60.0 or later. Keep blocking until the runtime is fixed or its inputs establish non-reachability. |
+
+The official rootless manifest still resolves to `a35dc0ba…`. Its runc 1.5.3,
+containerd 2.4.2 and rootlesskit 3.3.0 match each component's latest stable
+release on 2026-11-25. Their release module files pin x/net v0.55.0, v0.58.0
+and v0.60.0, respectively. None reaches v0.62.0, which the HTML parser advisory
+requires. [runc modules](https://github.com/opencontainers/runc/blob/v1.5.3/go.mod) ·
+[containerd modules](https://github.com/containerd/containerd/blob/v2.4.2/go.mod) ·
+[rootlesskit modules](https://github.com/rootless-containers/rootlesskit/blob/v3.3.0/go.mod)

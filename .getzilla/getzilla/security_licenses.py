@@ -59,25 +59,15 @@ from .security_license_contracts import (  # noqa: F401 exact contract compatibi
 )  # noqa: F401 compatibility module exports
 
 def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None,
-                       target_binding: dict | None = None, run_context=None,
+                       target_binding: dict | None = None,
                        _factory_parent_binding: dict | None = None) -> dict:
     """Evaluate exact package artifacts; expose every unsupported/missing obligation."""
     result = {'status': 'fail', 'summary': '', 'details': [], 'gaps': [], 'assurance': 'artifact-integrity-only',
               'inventory_digest': inventory.get('digest') if isinstance(inventory, dict) else None, 'policy_digest': None}
-    selected_required=True
-    if run_context is not None:
-        from .security_license_scope import Scope
-        if not isinstance(run_context,Scope):
-            raise ArtifactError('license-run-scope-unavailable','caller declarations cannot select a license run scope')
-        run_context.validate(inventory,target_binding)
-        run_context.begin()
-
-    def gap(code, message, dep=None, *, selected=None):
+    def gap(code, message, dep=None):
         value={'code': code, 'message': message, **({'ecosystem': dep.get('ecosystem'),
             'package': dep.get('name'), 'version': dep.get('version'), 'manifest': dep.get('manifest')} if dep else {})}
         result['gaps'].append(value)
-        if run_context is not None and (selected_required if selected is None else selected):
-            run_context.gaps.append(value)
 
     try:
         if not isinstance(inventory, dict) or inventory.get('complete') is not True or inventory.get('gaps'):
@@ -153,8 +143,6 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 'assurance':'named Factory output only; original source uses remain separate'}
             result['details'].extend(output['details'])
             result['gaps'].extend(output['gaps'])
-            if run_context is not None:
-                run_context.auxiliary('factory-output',output)
         ci_proved={}
         if target_binding is not None and 'ci_uses' in target_binding and 'ci_consumer' not in target_binding:
             from .security_ci_inputs import verify as verify_ci
@@ -170,33 +158,20 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     source_evidence=output.get('source_evidence'),assurance='isolated CI installation only; original scopes remain'))
                 result['details'].extend(output['details'])
                 result['gaps'].extend(output['gaps'])
-                if run_context is not None:
-                    run_context.auxiliary('ci-install:'+consumer['build_sha256'],output)
-                    if output['status'] == 'pass':
-                        run_context.build_inputs(auxiliary['binding'],output)
-        if run_context is not None and any(row['kind'] == 'checker-tool' for row in run_context.required.values()):
-            result['checker_tools'] = run_context.checker_inputs(artifacts, policy, now=now)
         for subject, kind in [*((item, 'action' if item.get('kind') == 'github-action' else 'tool') for item in tools),
                               *((item, 'image') for item in images)]:
-            selected_required=run_context is not None and run_context.family_required(subject,kind)
             try:
                 record = select_family(subject, kind, records)
                 evidence = family_evidence(artifacts, record)
                 _family_age(record, current, bundle['last_verified_sync_utc'])
-                raw_distribution = _distribution_for(subject, policy['usage_distribution'])
-                distribution=raw_distribution
-                if selected_required:
-                    distribution=run_context.family_distribution(subject,kind)
-                    if raw_distribution!='internal':
-                        gap('license-obligation-missing','raw/future family use remains separate from the actual internal CI use',selected=False)
-                elif distribution != 'internal':
+                distribution = _distribution_for(subject, policy['usage_distribution'])
+                if distribution != 'internal':
                     raise ArtifactError('license-obligation-missing', 'family needs explicit internal use or a qualified final-output adapter')
                 selected, licenses, notices = [], [], []
                 for component in evidence['components']:
                     from .security_license_family_conditions import allowed_for
                     component_allowed = allowed_for(record, component, policy['auto_allow'],
-                        selected_internal=distribution == 'internal' and (selected_required or
-                            record['origin'].get('kind') == 'go-checker-release/v1' and
+                        selected_internal=distribution == 'internal' and (record['origin'].get('kind') == 'go-checker-release/v1' and
                             'go_module_sources' in evidence['binding']),
                         source_modules=evidence['binding'].get('go_module_sources', []))
                     chosen, identifiers = _select_expression(component['expression'], component_allowed)
@@ -215,20 +190,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     'component_inventory_json': read_file(artifacts,record['components']['path'],MAX_INDEX_BYTES).decode('utf-8'),
                     'license_files': licenses, 'notice_files': notices,
                     'obligations': distribution + ' use; exact source/component/license evidence retained'}
-                if raw_distribution == 'internal':
-                    result['details'].append(detail)
-                if selected_required:
-                    if kind == 'action' and distribution == 'internal':
-                        from .security_action_inputs import mark_selected_internal_family
-                        mark_selected_internal_family(record)
-                    run_context.family_passed(subject,kind,detail)
+                result['details'].append(detail)
             except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError) as exc:
                 code = getattr(exc, 'code', 'artifact-invalid')
                 if code == 'license-artifact-missing':
                     code = 'license-image-coverage' if kind == 'image' else 'license-tool-coverage'
                 gap(code, str(exc))
         for dep in dependencies:
-            selected_required=run_context is not None and run_context.dependency_required(dep)
             try:
                 if dep.get('ecosystem') == 'PyPI':
                     _extras(dep.get('extras', []))
@@ -347,8 +315,6 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     'origin': origin, **({'policy_exception':exception['detail']} if exception else {}), 'license_files': license_files,
                     'notice_files': notice_files, 'obligations': ('retained in final extracted archive' if custody else 'retained in exact artifact')
                     if distribution == 'redistributed' else 'internal use; license evidence retained'})
-                if selected_required:
-                    run_context.package_passed(dep,result['details'][-1])
             except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError, VulnerabilityError) as exc:
                 gap(getattr(exc, 'code', 'artifact-invalid'), str(exc), dep)
     except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError, VulnerabilityError) as exc:
@@ -356,8 +322,6 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
     result['status'] = 'fail' if result['gaps'] else 'pass'
     result['summary'] = (f"{len(result['gaps'])} artifact license, scope or coverage gaps require resolution" if result['gaps']
                          else f"license policy and retained evidence verified for {len(result['details'])} exact package artifacts")
-    if run_context is not None:
-        return run_context.finish(result)
     if result['status'] == 'pass' and target_binding is not None and 'ci_consumer' in target_binding:
         from . import security_ci_inputs
         security_ci_inputs.seal_evaluation(target_binding,result,_entry=security_ci_inputs._EVALUATION_ENTRY)

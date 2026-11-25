@@ -22,7 +22,6 @@ import time
 from .security_artifacts import ArtifactError, read_file
 from . import security_image_authority as authority
 from .security_image_authority import (  # noqa: F401 compatibility function/seal aliases
-    _LICENSE_ENTRY,
     _MEMBER_SEAL,
     ci_member_evidence,
     ci_use_observations,

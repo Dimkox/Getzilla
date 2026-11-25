@@ -138,9 +138,8 @@ class NativeOCIConsumersTests(unittest.TestCase):
                     with self.assertRaises(StopBeforeProducer):
                         self.run_owned(lambda: function(self.root, environ=env))
                     self.assertEqual(seen[-1], catalog['source_bindings'])
-            with self.assertRaises(StopBeforeProducer):
+            with self.assertRaises(SecurityDataError):
                 self.run_owned(lambda: security.validate_data_source(binding, root=self.root, environ=env))
-            self.assertEqual(seen[-1], catalog['source_bindings'])
             with patch.dict(os.environ, env):
                 with self.assertRaises(StopBeforeProducer):
                     self.run_owned(lambda: security.security_obligations(self.root))

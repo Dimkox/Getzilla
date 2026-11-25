@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .security_osv_snapshot import Dependency, VulnerabilityError, load_config, query_offline
-from .security_data import CVE_ID, SecurityDataError, osv_decision_ids, read_snapshot
+from .security_data import CVE_ID, SOURCE_URLS, SecurityDataError, osv_decision_ids, read_snapshot
 from .security_intelligence import IntelligenceError, enrich_findings, validate_epss, validate_kev
 from .security_inventory import canonical_digest, collect_inventory, read_image_selection, declared_inventory
 
@@ -179,6 +179,8 @@ def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime |
         if trivy_database_source(tools_directory(root, environ), now=now) != binding:
             raise SecurityDataError('image database differs from the frozen required source')
         return True
+    if not isinstance(binding['source_id'], str) or binding['source_id'] not in SOURCE_URLS:
+        raise SecurityDataError('unsupported security data source')
     if not isinstance(binding['database'], str):
         raise SecurityDataError('invalid database binding')
     named = Path(binding['database'])

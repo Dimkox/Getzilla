@@ -273,7 +273,8 @@ class CapacityControls(unittest.TestCase):
         ):
             stages = []
 
-            def imported(record, profile, stage, budget):
+            def imported(record, profile, stage, budget, components):
+                self.assertIsNone(components)
                 stages.append(stage)
                 return SimpleNamespace(reference=record["reference"], config_digest="6" * 64, _proof=object())
 

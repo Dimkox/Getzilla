@@ -300,7 +300,7 @@ class CoreApiTests(unittest.TestCase):
                 with cli.public_input_scope(self.root, *self.roots, context=context(), image_artifacts=path, now=NOW):
                     self.fail('invalid original accepted')
 
-    def test_all_five_native_consumers_use_current_selection(self):
+    def test_native_inventory_consumers_use_current_selection(self):
         self.require_api()
         sentinel = SecurityDataError('owned-current-selection-refusal')
         binding = dict(database='owned', source_id='artifact-license-catalog', source_url='owned',
@@ -308,8 +308,9 @@ class CoreApiTests(unittest.TestCase):
         consumers = [lambda: expanded.security_obligations(self.root, environ={}, now=NOW),
                      lambda: expanded.known_vulnerability_report(self.root, environ={}, now=NOW),
                      lambda: expanded.known_vulnerability_check(self.root, environ={}, now=NOW),
-                     lambda: expanded.run_checks(self.root, environ={}, now=NOW),
-                     lambda: expanded.validate_data_source(binding, root=self.root, environ={}, now=NOW)]
+                     lambda: expanded.run_checks(self.root, environ={}, now=NOW)]
+        with self.assertRaisesRegex(SecurityDataError, 'unsupported security data source'):
+            expanded.validate_data_source(binding, root=self.root, environ={}, now=NOW)
         for consume in consumers:
             with patch.object(expanded, 'selected_inventory', side_effect=sentinel):
                 with self.assertRaisesRegex(SecurityDataError, 'owned-current-selection-refusal'):
@@ -322,9 +323,14 @@ class CoreApiTests(unittest.TestCase):
         blobs.mkdir(parents=True)
         payload = io.BytesIO()
         with tarfile.open(fileobj=payload, mode='w') as archive:
-            row = tarfile.TarInfo('owned.txt')
-            row.size = 4
-            archive.addfile(row, io.BytesIO(b'data'))
+            for name, raw in (
+                ('owned.txt', b'data'),
+                ('var/lib/dpkg/status', b'Package: owned\nVersion: 1\nArchitecture: amd64\nStatus: install ok installed\n'),
+                ('var/lib/dpkg/info/owned.list', b'/owned.txt\n'),
+            ):
+                row = tarfile.TarInfo(name)
+                row.size = len(raw)
+                archive.addfile(row, io.BytesIO(raw))
         layer = payload.getvalue()
 
         def blob(media, raw):
@@ -334,7 +340,7 @@ class CoreApiTests(unittest.TestCase):
 
         layer_desc = blob(oci.TAR, layer)
         layers = [layer_desc] * (2 if extra_layer else 1)
-        config = blob(oci.CONFIG, encoded(dict(os='linux', architecture=config_platform, rootfs=dict(
+        config = blob(oci.CONFIG, encoded(dict(os='linux', architecture=config_platform, config={}, rootfs=dict(
             type='layers', diff_ids=[diff_id or layer_desc['digest']] * len(layers)))))
         manifest = blob(oci.MANIFEST, encoded(dict(schemaVersion=2, mediaType=oci.MANIFEST, config=config, layers=layers)))
         (layout / 'oci-layout').write_bytes(encoded({'imageLayoutVersion': '1.0.0'}))
@@ -352,7 +358,7 @@ class CoreApiTests(unittest.TestCase):
             retained = image.layout
             self.assertTrue(0 < image.remaining_seconds() <= 900)
             report = dict(SchemaVersion=2, ArtifactType='container_image', Metadata=dict(ImageID=config['digest']),
-                          Results=[dict(Class='os-pkgs', Packages=[dict(Name='owned', Version='1')])])
+                          Results=[dict(Class='os-pkgs', Type='debian', Target='fixture', Packages=[dict(Name='owned', Version='1', Arch='amd64')])])
             self.assertEqual(tools.image_report(report, image.reference, verified_oci=image)['package_count'], 1)
             with self.assertRaisesRegex(ValueError, 'config identity'):
                 tools.image_report(dict(report, Metadata=dict(ImageID='sha256:' + 'f' * 64)), image.reference, verified_oci=image)
