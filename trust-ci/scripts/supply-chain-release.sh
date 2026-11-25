@@ -93,7 +93,7 @@ runner_image="$(build_image runner "$TRUST_CI_RUNNER_REPOSITORY" runner.Dockerfi
 dind_image="$(build_image dind "$TRUST_CI_DIND_REPOSITORY" dind/Dockerfile "$root/trust-ci/dind")"
 
 policy_output="$output/policy.json"
-python3 - "$policy_template" "$policy_output" "$runner_image" <<'PY'
+python3 - "$policy_template" "$policy_output" "$runner_image" "$output/metadata/runner.json" <<'PY'
 import json
 import os
 import sys
@@ -105,7 +105,11 @@ runner = sys.argv[3]
 data = json.loads(source.read_text(encoding='utf-8'))
 if not isinstance(data, dict) or not isinstance(data.get('sandbox'), dict):
     raise SystemExit('policy template has no sandbox object')
-data['sandbox']['image'] = runner
+config = json.loads(Path(sys.argv[4]).read_text())['containerimage.config.digest']
+import re
+if not isinstance(config, str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', config):
+    raise SystemExit('buildx metadata has no exact runner config digest')
+data['sandbox'].update(image=runner, runner_manifest_digest=runner.split('@')[1], runner_config_digest=config)
 payload = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
 fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, 'w', encoding='utf-8') as handle:

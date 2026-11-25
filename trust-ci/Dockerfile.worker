@@ -35,6 +35,8 @@ RUN python -I -B /usr/local/lib/install_public_checker.py \
     --commit "$PUBLIC_CHECKER_COMMIT" \
     --tree "$PUBLIC_CHECKER_TREE"
 
+RUN install -d -o 10001 -g 10001 /var/lib/trust-ci-transfer /var/lib/trust-ci-import
+
 USER 10001:10001
 ENTRYPOINT ["adaptive-trust-ci"]
 CMD ["worker"]

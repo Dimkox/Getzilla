@@ -86,6 +86,10 @@ if bundle_policy.get('sandbox', {}).get('image') != images['runner']:
 if deployed_policy.get('sandbox', {}).get('image') != images['runner']:
     raise SystemExit('deployed policy runner_image does not match manifest')
 
+sandbox = deployed_policy['sandbox']
+if (sandbox.get('runner_manifest_digest') != images['runner'].split('@')[1]
+        or not re.fullmatch(r'sha256:[0-9a-f]{64}', sandbox.get('runner_config_digest') or '')):
+    raise SystemExit('signed policy requires the exact runner manifest and config pair')
 environment = {}
 for raw in compose_env_path.read_text(encoding='utf-8').splitlines():
     line = raw.strip()
@@ -121,7 +125,7 @@ fi
 
 for image in "${images[@]}"; do
   cosign verify --key "$COSIGN_PUBLIC_KEY" "$image" >/dev/null
-  docker pull "$image" >/dev/null
+  if [[ "$image" != "${images[2]}" ]]; then docker pull "$image" >/dev/null; fi
 done
 
 printf 'supply-chain verification: PASS\n'

@@ -131,10 +131,11 @@ The deployment and policy refuse mutable runner tags. Build API, worker and runn
 docker compose -f compose.yaml -f compose.build.yaml --profile build build api worker runner-image docker-engine
 docker image inspect "$TRUST_CI_API_IMAGE" --format '{{.Id}} {{index .RepoDigests 0}}'
 docker image inspect "$TRUST_CI_WORKER_IMAGE" --format '{{.Id}} {{index .RepoDigests 0}}'
-docker image inspect "$TRUST_CI_RUNNER_IMAGE" --format '{{.Id}} {{index .RepoDigests 0}}'
+# Inspect the exact locally loaded runner inside the offline worker.
+docker compose exec worker sh -ec 'id=$(python -c "import json; print(json.load(open(\"/etc/adaptive-trust-ci/policy.json\"))[\"sandbox\"][\"runner_config_digest\"])"); docker image inspect --format "{{.Id}}" "$id"'
 ```
 
-Inspect `$TRUST_CI_*_IMAGE`; do not inspect `adaptive-trust-ci-api:2.1.0`. Put measured `name@sha256:` values into untracked deploy env and host `runtime/policy.json`. Rebuilding the runner or changing any policy or holdout input changes the policy digest, changes the required check name, and intentionally invalidates old jobs and approvals.
+Run the inspect commands after loading the images. Inspect `$TRUST_CI_*_IMAGE`; do not inspect `adaptive-trust-ci-api:2.1.0`. Put measured `name@sha256:` values into untracked deploy env and host `runtime/policy.json`. Rebuilding the runner or changing any policy or holdout input changes the policy digest, changes the required check name, and intentionally invalidates old jobs and approvals.
 
 ### Install the external holdout bundle
 
@@ -452,4 +453,8 @@ After database recovery, expired leases are reclaimed with `FOR UPDATE SKIP LOCK
 
 The first production contour does not auto-merge, auto-deploy or mutate production. Merge remains human-owned. Release operations may be explicitly delegated by the user through exact local grants, but they never alter merge trust. GitHub Actions are not installed or required.
 
-The internal rootless daemon image is built from the digest in `dind/Dockerfile`. Its final filesystem omits the Docker CLI. Compose checks the daemon API at `/_ping`. Set `TRUST_CI_DIND_REPOSITORY` to the internal registry before publishing the signed deployment bundle.
+The internal rootless daemon image is built from the digest in `dind/Dockerfile`. Its final filesystem omits the Docker CLI. Compose checks the Unix socket at `/api/engine.sock`. Set `TRUST_CI_DIND_REPOSITORY` to the internal registry before publishing the signed deployment bundle.
+
+The signed release policy contains the runner's registry manifest (or index) digest and the linux/amd64 config digest from buildx metadata. The deployment verifier requires both. Regenerate and sign the deployment bundle when migrating an older policy. The online `runner-fetch` service has its own network and no daemon socket. For a private registry, mount a read-only, registry-specific Docker auth file into that service and set `TRUST_CI_RUNNER_AUTH_FILE` there. Use the registry host as the key in `auths`.
+
+The offline loader verifies the manifest, config and each layer, imports a locally constructed archive and checks the returned image ID. Jobs use that config ID with `--pull never --network none`. The rootless daemon has only an isolated internal bridge. The worker and loader connect over a dedicated Unix socket volume.

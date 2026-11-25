@@ -155,7 +155,7 @@ class OperationsTests(unittest.TestCase):
         self.assertNotIn('/var/run/docker.sock', compose)
         self.assertIn('privileged: true', docker_engine)
         self.assertIn('trust-ci-docker-data:/home/rootless/.local/share/docker', docker_engine)
-        self.assertIn('DOCKER_HOST: tcp://docker-engine:2375', worker)
+        self.assertIn('DOCKER_HOST: unix:///api/engine.sock', worker)
         self.assertIn('github-app-private-key.pem:/run/secrets', worker)
         self.assertIn('/var/lib/adaptive-trust-ci/workspaces', docker_engine)
         self.assertIn('/etc/adaptive-trust-ci/holdout:ro', docker_engine)
