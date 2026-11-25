@@ -428,7 +428,17 @@ def observe_components(image, *, source_root=None, packages=None):
         source = path.endswith((".py", ".pyc", ".js", ".mjs", ".cjs", ".sh", ".rb", ".pl", ".jar", ".wasm"))
         if (row.get("elf") or row.get("executable") or source) and not generated:
             unknown.append(_evidence(row))
-    from .security_image_file_origins import archive_origins, project_origins, upstream_origin
+    from .security_image_file_origins import archive_origins, postgres_source, project_origins, upstream_origin
+    postgres = postgres_source(image.manifest_digest, unknown)
+    if postgres is not None:
+        version, origin, paths = postgres
+        c = add("postgresql-source:" + version, "source-built-postgresql")
+        c["source_origin"] = origin
+        own(c, paths)
+        # A distro client package or a dependency-only metapackage cannot attest
+        # the security coverage of this upstream source-built server.
+        gap("unsupported-postgres-components", c["id"])
+        terms(c, [])
     for name, origin, paths in archive_origins(unknown):
         component = add("runner-download:" + name, "pinned-runner-artifact")
         component["source_origin"] = origin

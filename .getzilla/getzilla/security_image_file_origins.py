@@ -154,3 +154,35 @@ _UPSTREAM_FILES = {
 
 def upstream_origin(row):
     return _UPSTREAM_FILES.get((row["path"], row["sha256"], row["layer"]))
+
+
+# docker-library/postgres pins the upstream source tar and runs install-world-bin.
+_POSTGRES_BUILDS = {
+    "sha256:e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4": (
+        'sha256:694a01b64034f0992326512adbafc93dd0b318fde13b91ba7b59f3af999cb169',
+        '17.11',
+        'dd27f2b3c59e73ed14aa3324901242bf69a032a6347805f274e6260322d42979',
+        133,
+        'b5c1612b28553e9277a21cf94696834690e6371fe5989235280c6443c1fcadcb',
+    ),
+    "sha256:e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8": (
+        'sha256:c795bf66a3835e3c59c5ff9fc5b4c8cab99536920a5aaf8bc03ed7caaf380d48',
+        '17.12',
+        '9cf136a703d8ee2f83465c43be4e9e8e7930c82b0bfba13be7e2537be769ac55',
+        133,
+        'a7ed09e8f0a0ae37dc5fdbca10dc9de8d872759fd3931c9fca5a50becf3167cc',
+    ),
+}
+
+
+def postgres_source(manifest, software):
+    profile = _POSTGRES_BUILDS.get(manifest)
+    if profile is None:
+        return None
+    layer, version, source_hash, count, expected = profile
+    rows = sorted((r["path"], r["bytes"], r["sha256"]) for r in software if r["layer"] == layer
+                  and r["path"].startswith(("usr/local/lib/", "usr/local/bin/")))
+    if len(rows) != count or hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest() != expected:
+        return None
+    return version, dict(source_archive_sha256=source_hash, installed_members_sha256=expected,
+                         layer=layer, manifest=manifest), [r[0] for r in rows]

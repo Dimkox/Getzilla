@@ -99,6 +99,7 @@ jobs:
           temp = pathlib.Path(os.environ['RUNNER_TEMP'])
           store = temp / 'security-artifacts'
           rows = []
+          graphs = set()
           for path in sorted((store / 'proofs').glob('*')):
               if not re.fullmatch('[a-f0-9]{64}', path.name) or path.stat().st_size > MAX_INDEX_BYTES:
                   continue
@@ -111,6 +112,19 @@ jobs:
               if doc.get('kind') != 'held-image-observation-unqualified':
                   continue
               obs = doc['observation']
+              graph = obs['manifest_digest']
+              if graph not in graphs:
+                  graphs.add(graph)
+                  ownership = []
+                  for c in obs['components']:
+                      if c['kind'] in {'apk','go-binary','pinned-runner-artifact','project-source',
+                                       'upstream-image-file','source-built-postgresql'}:
+                          ownership.append({k: c[k] for k in ('id','kind','files','source_origin','source_files','modules')
+                                            if k in c})
+                  name = 'owners-' + graph.removeprefix('sha256:') + '.json'
+                  if not re.fullmatch(r'owners-[a-f0-9]{64}\.json', name):
+                      raise ValueError('expected a verified manifest digest')
+                  (temp / 'replay-result' / name).write_text(json.dumps(ownership, sort_keys=True))
               groups = [row for row in obs['unresolved'] if row['code'] in {
                   'unattributed-software', 'unsupported-go-components', 'unsupported-apk-components',
                   'unsupported-postgres-components'}]
