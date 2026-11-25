@@ -95,6 +95,18 @@ class RegistryBoundaryControls(unittest.TestCase):
                 self.assertEqual(fault["origin"], "auth.docker.io")
                 self.assertEqual(fault["request_kind"], "auth")
 
+    def test_blocked_blob_redirect_reports_status_without_location(self):
+        url = "https://registry-1.docker.io/v2/library/docker/blobs/sha256:" + "a" * 64
+        with self.assertRaises(registry.RegistryError) as caught:
+            registry._Redirect(url).redirect_request(None, None, 307, "", {},
+                "https://untrusted.invalid/download?PRIVATE_SIGNATURE")
+        detail = registry._exception_fault({"url": url}, caught.exception, "registry-connect")
+        self.assertEqual(detail["category"], "redirect-refused")
+        self.assertEqual(detail["http_status"], 307)
+        self.assertEqual(detail["origin"], "registry-1.docker.io")
+        self.assertNotIn("untrusted", json.dumps(detail))
+        self.assertNotIn("PRIVATE", json.dumps(detail))
+
     def test_parent_preserves_valid_fault_but_refuses_secret_or_malformed_fields(self):
         fault = dict(
             version=1,

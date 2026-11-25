@@ -36,7 +36,7 @@ class RegistryError(ValueError):
 
 _FAULT_KEYS = {'version', 'category', 'phase', 'request_kind', 'origin', 'errno', 'http_status', 'command_id'}
 _FAULT_HOSTS = _ORIGINS | _BLOB_CDN | {'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'unknown'}
-_FAULT_CATEGORIES = {'request', 'dns', 'tls', 'http', 'timeout', 'os', 'protocol', 'bound', 'worker'}
+_FAULT_CATEGORIES = {'request', 'dns', 'tls', 'http', 'timeout', 'os', 'protocol', 'redirect-refused', 'bound', 'worker'}
 _FAULT_PHASES = {'registry-request', 'registry-connect', 'registry-headers', 'registry-body', 'registry-worker', 'registry-reply'}
 
 
@@ -111,7 +111,8 @@ class _Redirect(urllib.request.HTTPRedirectHandler):
         if source.hostname == 'github.com':
             hosts |= {'release-assets.githubusercontent.com', 'objects.githubusercontent.com'}
         if not _url(url, hosts):
-            raise RegistryError('registry redirect leaves registered origins')
+            raise RegistryError('registry redirect leaves registered origins', detail=
+                                _request_fault(self.source, 'redirect-refused', 'registry-headers', status=code))
         result = super().redirect_request(request, response, code, message, headers, url)
         if urllib.parse.urlsplit(url).hostname != source.hostname:
             result.remove_header('Authorization')
