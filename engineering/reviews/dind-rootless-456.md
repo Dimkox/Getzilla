@@ -165,3 +165,14 @@ of the original path. Missing evidence or a surviving copy blocks admission.
 The diagnostic artifact `security-dind-cli.json` records each image identity and
 the evidence used for removal. All other vulnerability findings retain their
 ordinary disposition.
+
+The released amd64 client has SHA-256
+`f71558dcbb6c2e028fc5c7cf67270ef6fafd9cc865570b73700d405b2c2ebc02`.
+Its Go build information identifies Go 1.27.4 and CLI commit `c48360f`.
+The annotated v29.10.1 tag resolves to `c48360f51c53d2029ab6721ad4d012f9e14df846`.
+The checker scans all 94 upstream vendored module versions, the CLI root module
+and the standard library against the same fresh Trivy database used for images.
+The component list includes dependencies for all platforms. Missing packages,
+an unavailable scan or additional findings block the result. Only the exact
+distribution module finding can proceed to the independent removal check.
+[Upstream vendor manifest](https://github.com/docker/cli/blob/c48360f51c53d2029ab6721ad4d012f9e14df846/vendor/modules.txt)

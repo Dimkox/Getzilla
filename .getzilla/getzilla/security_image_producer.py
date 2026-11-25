@@ -469,7 +469,7 @@ def _pipeline(request, volume, builder):
             finally:
                 if state.get('dind_cli_removal'):
                     cli._atomic(Path(request['report']).parent / 'security-dind-cli.json',
-                                canonical(state['dind_cli_removal']))
+                                canonical(dict(state['dind_cli_removal'], module_scan=state.get('dind_cli_module_scan'))))
             with cli._preparation_step('prepare-result'):
                 cli._atomic(Path(request['preparation']), canonical(preparation))
                 if preparation.get('status') != 'prepared':

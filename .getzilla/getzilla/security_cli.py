@@ -257,6 +257,9 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             if inventory['dependencies'] or inventory['images']:
                 with _preparation_step('feeds'):
                     acquisitions.extend(refresh_feeds(database, sorted({item['ecosystem'] for item in inventory['dependencies']}), now=now))
+            if inventory['images'] and image_artifacts is not None:
+                with _preparation_step('image-database'):
+                    acquisitions.extend(refresh_image_database(tools, now=now))
             if inventory['dependencies'] or inventory['tools'] or inventory['images']:
                 with _preparation_step('package-artifacts'):
                     family_options={}
@@ -278,9 +281,6 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                     acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts,
                         binding={'source': before, 'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'run': run},
                         deadline=action_deadline, network_selection=profile.get('image_network_selection')))
-                if image_artifacts is not None:
-                    with _preparation_step('image-database'):
-                        acquisitions.extend(refresh_image_database(tools, now=now))
         elif families is not None:
             raise SecurityDataError('family publication requires explicit refresh selection')
         with _preparation_step('obligations'):

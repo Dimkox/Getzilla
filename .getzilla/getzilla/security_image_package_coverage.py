@@ -155,6 +155,17 @@ def scan(image, tools, trivy):
             for r in report["Results"] if r.get("Type") == "debian" or (
                 r.get("Type") == "gobinary" and ("gobinary", r["Target"].lstrip("/")) not in index)
         ][:64]
+        if (image.manifest_digest == dind.MANIFEST and image.config_digest == dind.CLI["config"]
+                and image.reference == dind.REFERENCE and image.platform == dind.CLI["platform"]):
+            from . import security_dind_cli_modules as cli_modules
+            from . import security_image_authority as authority
+            live = authority._LIVE
+            if live is None or live["images"].get(image.reference) is not image:
+                raise cli_modules.CliCoverageRefusal("docker-cli-module-scan-needs-owned-image")
+            modules, proof = cli_modules.scan(image, live["root"], trivy, tools)
+            index[("gobinary", dind.CLI["executable"])] = [(name, version, "") for name, version in modules]
+            receipt["vendored_docker_cli"] = proof
+            live["dind_cli_module_scan"] = proof
         return index, receipt
 
 
