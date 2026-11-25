@@ -253,6 +253,7 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
         if families is not None and (not isinstance(families, list) or len(families) > MAX_PACKAGES
                                      or not all(isinstance(record, dict) and 'kind' in record for record in families)):
             raise ArtifactError('artifact-manifest', 'selected family records are malformed or unbounded')
+        family_bytes = {}
         for record in [*retained, *(families or []), *frontier['records']]:
             key = artifact_identity(record)
             if key in seen:
@@ -263,9 +264,14 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             age = (current - _timestamp(record.get('acquired_at'))).total_seconds()
             if not 0 <= age <= MAX_AGE_SECONDS:
                 raise ArtifactError('artifact-stale', 'retained family source age is unavailable, future or stale')
+            kind = record['kind']  # family_identity already checked the closed set.
+            family_bytes[kind] = family_bytes.get(kind, 0) + evidence['bound_bytes']
             total += evidence['bound_bytes']
             if total > byte_budget:
-                raise ArtifactError('artifact-size', 'selected catalog exceeds its aggregate byte budget')
+                error = ArtifactError('artifact-size', 'selected catalog exceeds its aggregate byte budget')
+                error.catalog_budget = dict(limit=byte_budget, total=total, frontier=frontier['bound_bytes'],
+                                            families=family_bytes, last_family=kind, last_bytes=evidence['bound_bytes'])
+                raise error
             seen.add(key)
             records.append(record)
         for dep in dependencies:

@@ -469,8 +469,10 @@ def _pipeline(request, volume, builder):
                     if filename.parent == Path(__file__).parent and re.fullmatch(r'security_[a-z_]+\.py', filename.name):
                         frames.append([filename.name, frame.tb_lineno])
                     frame = frame.tb_next
-                cli._atomic(Path(request['report']).parent / 'package-refusal.json',
-                            canonical(dict(checker_frames=frames)))
+                detail = dict(checker_frames=frames)
+                if hasattr(error, 'catalog_budget'):
+                    detail['catalog_budget'] = error.catalog_budget
+                cli._atomic(Path(request['report']).parent / 'package-refusal.json', canonical(detail))
                 raise
             except ImageSecurityRefusal as error:
                 _event('evaluate')
