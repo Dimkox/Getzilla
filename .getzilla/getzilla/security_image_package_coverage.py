@@ -49,13 +49,9 @@ def scan(image, tools, trivy):
         scratch = Path(temp)
         output = scratch / "sbom.json"
         target = str(image.layout) + "@" + image.manifest_digest
-        config = scratch / "trivy.yaml"
-        ignore = scratch / "empty.trivyignore"
-        config.write_bytes(b"{}\n")
-        ignore.write_bytes(b"")
         command = [str(trivy), "image", "--input", target, "--scanners", "license", "--list-all-pkgs",
                    "--offline-scan", "--skip-db-update", "--skip-java-db-update", "--skip-check-update",
-                   "--skip-version-check", "--config", str(config), "--ignorefile", str(ignore), "--parallel", "1",
+                   "--skip-version-check", *tools_api.trivy_options(scratch), "--parallel", "1",
                    "--max-image-size", "2GB", "--format", "json", "--output", str(output)]
         from .public_security_context import _preparation_step
         with _preparation_step("image-package-scan"):
@@ -67,6 +63,16 @@ def scan(image, tools, trivy):
         import hashlib
         receipt = dict(scanner="trivy", version=TRIVY_VERSION, manifest=image.manifest_digest,
                        config=image.config_digest, report_sha256=hashlib.sha256(oci.canonical(report)).hexdigest())
+        receipt["unmatched_package_targets"] = [
+            dict(target=r["Target"], type=r["Type"], packages=[
+                {key: row[key] for key in ("Name", "Version", "Arch", "Relationship") if key in row}
+                for row in r.get("Packages", [])
+                if (r["Type"] == "debian" and row["Name"].startswith("postgresql"))
+                or (r["Type"] == "gobinary" and row.get("Relationship") == "root")
+            ][:32])
+            for r in report["Results"] if r.get("Type") == "debian" or (
+                r.get("Type") == "gobinary" and ("gobinary", r["Target"].lstrip("/")) not in index)
+        ][:64]
         return index, receipt
 
 

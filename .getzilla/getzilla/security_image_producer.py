@@ -414,15 +414,28 @@ def _pipeline(request, volume, builder):
             cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))
             cli._atomic(Path(request['profile']), canonical(profile))
             _event('prepare')
-            with cli._preparation_step('prepare-inputs'):
-                preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
-                                                 refresh=True, provision=True, **options)
+            from .security_postgresql import PostgresRefusal
+            try:
+                with cli._preparation_step('prepare-inputs'):
+                    preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
+                                                     refresh=True, provision=True, **options)
+            except PostgresRefusal as error:
+                _event('evaluate')
+                # A server CVE or an unproved PostgreSQL assessment is a hard
+                # refusal, including while the #456 infrastructure waiver exists.
+                report = dict(error.report, qualification="UNVERIFIED", source=source, run=request['run'])
+                cli._atomic(Path(request['report']), canonical(report))
+                return report
             with cli._preparation_step('prepare-result'):
                 cli._atomic(Path(request['preparation']), canonical(preparation))
                 if preparation.get('status') != 'prepared':
                     raise BackendUnavailable('input preparation did not meet existing obligations')
             _event('evaluate')
             report = cli.evaluate(root, database, artifacts, tools, profile=profile, **options)
+            observations = authority._LIVE.get("image_component_observations", {}).values()
+            servers = [entry for observation in observations if (entry := observation.document().get("postgresql_server"))]
+            if servers:
+                report["postgresql_servers"] = servers
             cli._atomic(Path(request['report']), canonical(report))
             # Both reports retain UNVERIFIED/fail when ordinary obligations fail.
             # Build completion never changes scanner/finalizer outcome.

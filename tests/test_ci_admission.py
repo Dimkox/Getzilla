@@ -170,6 +170,10 @@ class CiAdmissionTests(unittest.TestCase):
         self.assertEqual(decision()["status"], "pass-with-waiver")
         self.assertEqual(decision()["waiver"]["issue"], 456)
         original = security["report"]
+        for reason in ("postgres-server-cve", "postgres-advisories-stale", "postgres-version-unproved"):
+            security["report"] = {"kind": "postgresql-server-check", "status": "fail", "reason": reason}
+            self.assertEqual(decision()["status"], "fail")
+            self.assertFalse(decision()["waiver"]["used"])
         for status in ("fail", "fail-for-selected-run"):
             with self.subTest(scan_status=status):
                 security["report"] = {"kind": "security-expanded", "status": status,

@@ -1073,9 +1073,9 @@
         ".getzilla/agents/task_analyst.toml",
         ".getzilla/agents/test_reviewer.toml",
         ".getzilla/config/ci-image-blobs/70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9.json",
-        ".getzilla/config/ci-image-blobs/ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085.json",
+        ".getzilla/config/ci-image-blobs/fa7e2700e906190f900a3c9d47e87f9032cfa38b60d9ac25129a357f85c2da8c.json",
         ".getzilla/config/ci-image-blobs/b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79.json",
-        ".getzilla/config/ci-image-blobs/e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4.json",
+        ".getzilla/config/ci-image-blobs/e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8.json",
         ".getzilla/config/ci-images.json",
         ".getzilla/config/codex-hooks.json",
         ".getzilla/config/cost-providers.json",
@@ -2066,21 +2066,21 @@
           "mode": 420,
           "sha256": "70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9"
         },
-        ".getzilla/config/ci-image-blobs/ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085.json": {
+        ".getzilla/config/ci-image-blobs/fa7e2700e906190f900a3c9d47e87f9032cfa38b60d9ac25129a357f85c2da8c.json": {
           "mode": 420,
-          "sha256": "ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085"
+          "sha256": "fa7e2700e906190f900a3c9d47e87f9032cfa38b60d9ac25129a357f85c2da8c"
         },
         ".getzilla/config/ci-image-blobs/b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79.json": {
           "mode": 420,
           "sha256": "b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79"
         },
-        ".getzilla/config/ci-image-blobs/e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4.json": {
+        ".getzilla/config/ci-image-blobs/e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8.json": {
           "mode": 420,
-          "sha256": "e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4"
+          "sha256": "e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8"
         },
         ".getzilla/config/ci-images.json": {
           "mode": 420,
-          "sha256": "27e95f49ec3d1d0a984d387d861c7c47fe05a979941737294b37bbc44a1be8b9"
+          "sha256": "6993ab774001880817e131a00bfc45bca1522447463d0ea305756eded525f2d3"
         },
         ".getzilla/config/codex-hooks.json": {
           "mode": 420,

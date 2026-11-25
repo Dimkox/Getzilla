@@ -333,6 +333,8 @@ def _component_row(member, archive, keep, budget):
     if member.islnk() or member.issym():
         return dict(row, kind='hardlink' if member.islnk() else 'symlink', target=member.linkname)
     chunks, digest, count, head, tail, go_binary = [], hashlib.sha256(), 0, b'', b'', False
+    pg_versions = set()
+    pg_tail = b""
     # Alpine installed databases can carry legacy SHA-1 member checksums.
     # SHA-256 remains the mandatory OCI and component identity.
     apk_sha1 = hashlib.sha1(usedforsecurity=False)
@@ -343,6 +345,13 @@ def _component_row(member, archive, keep, budget):
             count += len(chunk)
             digest.update(chunk)
             head = (head + chunk[:4])[:4]
+            if name == "usr/local/bin/postgres" and len(pg_versions) < 2:
+                window = pg_tail + chunk
+                for marker in re.finditer(rb"\x00postgres \(PostgreSQL\) ([0-9.]{1,16})\n\x00", window):
+                    pg_versions.add(marker.group(1))
+                    if len(pg_versions) > 1:
+                        break
+                pg_tail = window[-64:]
             go_binary = go_binary or b'\xff Go buildinf:' in tail + chunk
             tail = (tail + chunk)[-16:]
             if keep:
@@ -351,6 +360,8 @@ def _component_row(member, archive, keep, budget):
         raise OCIError('Component observation member truncated')
     row.update(kind='file', sha256=digest.hexdigest(), apk_sha1=apk_sha1.digest().hex(), elf=head == b'\x7fELF',
                executable=bool(member.mode & 0o111), go_binary=go_binary)
+    if name == "usr/local/bin/postgres" and len(pg_versions) == 1:
+        row["postgres_version"] = next(iter(pg_versions)).decode("ascii")
     if keep:
         row['body'] = b''.join(chunks)
     return row

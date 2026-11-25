@@ -225,3 +225,13 @@ This diagnostic field does not change existing license-check statuses, findings,
 gaps or flat-catalog semantics. It is not a new permanent gate, and a passing
 legacy package check is not acceptance of the extracted offline archive. A
 separate output-specific consumer remains required before such acceptance.
+
+
+The source-built PostgreSQL server in the OCI corpus has a separate check against the
+[official PostgreSQL 17 advisory table](https://www.postgresql.org/support/security/17/).
+The checker compares the image configuration with the version string in the exact
+server executable and records its SHA-256, layer digest, feed date and matching
+core-server CVEs. It rejects unknown binaries, missing or changed reviewed advisories,
+unknown layouts and responses older than 72 hours. A PostgreSQL refusal or CVE blocks
+admission during the #456 infrastructure waiver. The other image components retain
+their existing scanner and license obligations.

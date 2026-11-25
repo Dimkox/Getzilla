@@ -340,6 +340,15 @@ def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, imag
     return results + refresh_image_database(tools, now=now)
 
 
+def trivy_options(scratch):
+    # The pinned CLI treats an empty --config value as an unreadable filename.
+    # Both files are in the private scanner scratch directory, outside the source.
+    config, ignore = scratch / "trivy.yaml", scratch / "empty.trivyignore"
+    config.write_bytes(b"{}\n")
+    ignore.write_bytes(b"")
+    return ["--config", str(config), "--ignorefile", str(ignore)]
+
+
 def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
     """Explicit DB-only refresh; separate from local OCI import and image pulls."""
     results = []
@@ -349,7 +358,7 @@ def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
         scratch = Path(directory)
         try:
             command = [str(trivy), 'image', '--download-db-only', '--db-repository', TRIVY_DB_URL,
-                       '--cache-dir', str(tools / 'cache'), '--config', '', '--quiet', '--skip-version-check']
+                       '--cache-dir', str(tools / 'cache'), *trivy_options(scratch), '--quiet', '--skip-version-check']
             result = _process(command, scratch, scratch)
             if result.returncode != 0:
                 raise SecurityDataError('Trivy database acquisition failed')
@@ -429,7 +438,7 @@ def scan_layouts(inventory: dict, tools: Path, *, binding: dict, now=None, proce
                 # Reserve the largest accepted report before the isolated port writes it.
                 budget.charge('storage', MAX_REPORT)
                 command = [str(trivy), 'image', '--input', input_name, '--scanners', 'vuln',
-                    '--cache-dir', str(tools / 'cache'), '--config', '', '--ignorefile', '',
+                    '--cache-dir', str(tools / 'cache'), *trivy_options(scratch),
                     '--offline-scan', '--skip-db-update', '--skip-java-db-update', '--skip-check-update',
                     '--skip-version-check', '--show-suppressed', '--list-all-pkgs', '--parallel', '1',
                     '--max-image-size', str(min(retained['profile']['max_unpacked_bytes'], 256 * 1024 * 1024)),
@@ -509,7 +518,7 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                     input_args = (['--input', str(image.layout) + '@' + image.manifest_digest] if image is not None
                                   else ['--image-src', 'docker'])
                     command = [str(trivy), 'image', '--scanners', 'vuln', *input_args,
-                               '--cache-dir', str(tools / 'cache'), '--config', '', '--ignorefile', '',
+                               '--cache-dir', str(tools / 'cache'), *trivy_options(scratch),
                                '--offline-scan', '--skip-db-update', '--skip-java-db-update', '--skip-check-update',
                                '--skip-version-check', '--show-suppressed', '--list-all-pkgs', '--parallel', '1',
                                '--max-image-size', '2GB', '--format', 'json', '--output', str(report_path),
@@ -797,7 +806,7 @@ def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path
                     command = [sys.executable, '-I', '-m', 'bandit', '-c', str(bandit_config),
                                '--ignore-nosec', '-q', '-f', 'json', '-o', str(output), '--', *files]
                 else:
-                    command = [str(pinned_tool('trivy', tools)), 'config', '--config', '', '--ignorefile', '',
+                    command = [str(pinned_tool('trivy', tools)), 'config', *trivy_options(scratch),
                                '--skip-check-update', '--skip-version-check', '--include-non-failures',
                                '--format', 'json', '--output', str(output), '.']
                 # Only these tools define exit 1 as findings. Trivy config has

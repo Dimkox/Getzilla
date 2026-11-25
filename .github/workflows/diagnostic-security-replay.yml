@@ -130,7 +130,8 @@ jobs:
                   'unsupported-postgres-components'}]
               rows.append(dict(subject=doc['subject'], manifest=obs['manifest_digest'],
                                config=obs['config_digest'], groups=groups,
-                               trivy=obs.get('trivy_package_evidence'),
+                               trivy=obs.get('trivy_package_evidence'), postgresql_server=obs.get('postgresql_server'),
+                               blocking_licenses=[row['group'] for row in obs['unresolved'] if row['code']=='license-term-unproved'],
                                source_groups=[dict(id=c['id'], files=len(c['files']))
                                               for c in obs['components'] if c['kind'] in
                                               {'apk','go-binary','pinned-runner-artifact','project-source'}],

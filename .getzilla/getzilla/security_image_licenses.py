@@ -134,10 +134,14 @@ class ImageComponentObservation:
         return dict(self._files)
 
 
-def observe_components(image, *, source_root=None, packages=None):
+def observe_components(image, *, source_root=None, packages=None, advisory_pages=None):
     """Build a component SBOM observation, never trust caller JSON as custody."""
     index, scan_receipt = packages if packages is not None else ({}, None)
     files = _Files(oci.observe_final_files(image, _retain))
+    postgres_check = None
+    if advisory_pages is not None:
+        from .security_postgresql import check_image
+        postgres_check = check_image(image, files, advisory_pages)
     components, unresolved, owners = [], [], defaultdict(set)
     identities, owned_paths = set(), defaultdict(set)
 
@@ -437,7 +441,8 @@ def observe_components(image, *, source_root=None, packages=None):
         own(c, paths)
         # A distro client package or a dependency-only metapackage cannot attest
         # the security coverage of this upstream source-built server.
-        gap("unsupported-postgres-components", c["id"])
+        if postgres_check is None or postgres_check["version"] != version:
+            gap("unsupported-postgres-components", c["id"])
         terms(c, [])
     for name, origin, paths in archive_origins(unknown):
         component = add("runner-download:" + name, "pinned-runner-artifact")
@@ -489,6 +494,8 @@ def observe_components(image, *, source_root=None, packages=None):
         qualification="observation-only; source/run/native guard and policy join required",
     )
     proofs = {path: row["body"] for path, row in files.rows.items() if "body" in row}
+    if postgres_check is not None:
+        document["postgresql_server"] = postgres_check
     if scan_receipt is not None:
         document["trivy_package_evidence"] = scan_receipt
     document["proof_bytes"] = sum(len(body) for body in proofs.values())
@@ -633,6 +640,8 @@ def _family_projection(observation, license_rows=()):
     projected = dict(components=components, term_sources=derivations)
     if "trivy_package_evidence" in document:
         projected["trivy_package_evidence"] = document["trivy_package_evidence"]
+    if "postgresql_server" in document:
+        projected["postgresql_server"] = document["postgresql_server"]
     if license_rows:
         projected["license_observations"] = dict(status="internal-report-only",
             counts=dict(Counter(row["code"] for row in license_rows)))
@@ -695,7 +704,8 @@ def prepare_families(root, inventory, source, run, *, now=None, policy=None, pac
                 if trivy is not None:
                     from .security_image_package_coverage import scan
                     packages = scan(image, package_tools, trivy)
-                observation = observe_components(image, source_root=state.get("root"), packages=packages)
+                observation = observe_components(image, source_root=state.get("root"), packages=packages,
+                    advisory_pages=state.setdefault("postgres_advisory_pages", {}) if trivy is not None else None)
                 cached[image.reference] = observation
             observed = observation.document()
             license_rows, blocking = partition(observed["unresolved"], image.reference in internal)
