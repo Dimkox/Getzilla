@@ -483,7 +483,7 @@ def observe_components(image, *, source_root=None, packages=None, advisory_pages
             missing_go.append(row)
             continue
         c = add("go-executable:" + row["path"], "go-binary")
-        c["modules"] = sorted((name, version) for name, version, _ in packages_for_binary)
+        c["modules"] = sorted([name, version] for name, version, _ in packages_for_binary)
         own(c, [row["path"]])
         terms(c, [])
     if missing_go:

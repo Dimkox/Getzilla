@@ -162,6 +162,19 @@ class ImageComponentTests(unittest.TestCase):
         value = self.observe([rows])
         self.assertIn("unsupported-go-components", {x["code"] for x in value["unresolved"]})
 
+    def test_go_component_graph_round_trips_through_held_family_json(self):
+        from getzilla import security_image_licenses as license_api
+        api = self.api()
+        rows = self.debian()
+        rows[2] = (rows[2][0], b"\x7fELF\xff Go buildinf:installed")
+        index = {("gobinary", rows[2][0]): [("example/go-module", "v1.0.0", "")]}
+        inv, cat = self.image([rows])
+        with api.import_layouts(cat, inv, self.profile, self.stage) as images:
+            observation = license_api.observe_components(images[0], packages=(index, None))
+            doc = observation.document()
+            _, _, held, _ = license_api._family_projection(observation, doc["unresolved"])
+            self.assertEqual(api.document(api.canonical(held)), held)
+
     def test_live_observation_cannot_survive_blob_tamper(self):
         from getzilla import security_image_licenses as license_api
 
