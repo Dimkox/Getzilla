@@ -185,9 +185,21 @@ def _choice_name(expression):
     return match[1] if match else None
 
 
+def registry_inputs(inventory):
+    # A selected local recipe gets its binding only from its completed BuildKit export.
+    keys = ("manifest", "line", "source_sha256", "source_reference")
+    local = {tuple(recipe[k] for k in keys) for recipe in inventory.get("builds", ())}
+    for use in inventory["images"]:
+        if use["source_reference"].startswith("compose-build:"):
+            if tuple(use[k] for k in keys) not in local:
+                raise BackendUnavailable("local output lacks its source recipe")
+        else:
+            yield use
+
+
 @contextmanager
 def produce(root, source, run, volume, builder):
-    """Acquire actual source graphs and build four recipes covering five uses."""
+    """Acquire actual source graphs and build five recipes covering six uses."""
     if authority._LIVE is not None or type(builder) is not BuildKit:
         raise BackendUnavailable('nested build producer is forbidden')
     root, volume = Path(root), Path(volume)
@@ -206,7 +218,7 @@ def produce(root, source, run, volume, builder):
     choices = {'TRUST_CI_POSTGRES_IMAGE': ci['postgres']['reference'], '${PYTHON_BASE_IMAGE}': ci['python']['reference']}
     bindings, roots, resolved = [], {}, {}
     deferred = []
-    for use in raw_inventory['images']:
+    for use in registry_inputs(raw_inventory):
         expression = use['source_reference']
         name = _choice_name(expression)
         target = choices.get(expression, choices.get(name, expression))
@@ -420,10 +432,11 @@ def _pipeline(request, volume, builder):
             except (OSError, ValueError, KeyError, TypeError, EOFError, RuntimeError, BadZipFile, TarError, LZMAError, ZlibError) as error:
                 # Without complete output evidence Factory remains strictly redistributed.
                 authority._LIVE['delivery_members'] = None
-                print(json.dumps(dict(stage="delivery-scope", status="redistributed", reason=type(error).__name__)), flush=True)
+                delivery_result = dict(status="redistributed", reason=type(error).__name__)
             else:
                 authority._LIVE['delivery_members'] = facts
-                print(json.dumps(dict(stage="delivery-scope", archive_sha256=facts[1], unique_members=len(facts[0]))), flush=True)
+                delivery_result = dict(status="examined", archive_sha256=facts[1], unique_members=len(facts[0]))
+            cli._atomic(Path(request["report"]).parent / "security-delivery-scope.json", canonical(delivery_result))
             license_inputs.update(selection=selection,catalog=catalog)
             cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))
             cli._atomic(Path(request['profile']), canonical(profile))

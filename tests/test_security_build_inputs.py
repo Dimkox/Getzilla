@@ -111,6 +111,14 @@ class RegistryReaderTests(GuardedFixture):
 
 
 class ProducerBoundaryTests(GuardedFixture):
+    def test_local_compose_output_is_bound_after_build_only(self):
+        local = dict(manifest="trust-ci/compose.build.yaml", line=12, source_sha256="a"*64,
+                     source_reference="compose-build:docker-engine")
+        upstream = dict(local, source_reference="docker:29.10.1-dind-rootless@sha256:" + "b"*64)
+        self.assertEqual(list(producer.registry_inputs(dict(images=[local, upstream], builds=[local]))), [upstream])
+        with self.assertRaises(backend.BackendUnavailable):
+            list(producer.registry_inputs(dict(images=[dict(local, line=13)], builds=[local])))
+
     def test_json_build_claim_cannot_restore_actual_completion(self):
         claimed = dict(builds=[dict(build_sha256='0' * 64)], images=[])
         with self.assertRaises(backend.BackendUnavailable):
