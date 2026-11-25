@@ -47,6 +47,17 @@ class PostgreSQLServerTests(unittest.TestCase):
             with self.assertRaises(pg.PostgresRefusal):
                 self.assess(body=body)
 
+    def test_unreadable_or_malformed_config_is_a_nonwaivable_refusal(self):
+        import hashlib
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for raw in (b'{"config":{"Env":"PG_VERSION=17.12"}}', b'{"config":{"Env":[null]}}', b'{}'):
+            digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+            image = SimpleNamespace(layout=Path("/unused"), manifest_digest="manifest", config_digest=digest)
+            with patch("getzilla.security_artifacts.read_file", return_value=raw), self.assertRaises(pg.PostgresRefusal) as failed:
+                pg.check_image(image, Mock(), {})
+            self.assertEqual(failed.exception.report["kind"], "postgresql-server-check")
+
     def test_binary_marker_crosses_oci_chunk_boundary(self):
         from getzilla.security_oci import _component_row
         from io import BytesIO

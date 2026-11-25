@@ -235,3 +235,15 @@ core-server CVEs. It rejects unknown binaries, missing or changed reviewed advis
 unknown layouts and responses older than 72 hours. A PostgreSQL refusal or CVE blocks
 admission during the #456 infrastructure waiver. The other image components retain
 their existing scanner and license obligations.
+
+The source ZIP contains two standalone CI image manifests and their two configuration
+documents as offline identity proofs. The images themselves are obtained from their
+publishers. The checker binds each proof path and byte digest independently to its
+policy and to the deployed image pins. Embedded descriptor data, external URLs,
+unlisted manifests and OCI layouts prevent a referenced classification.
+
+Factory's pinned PostgreSQL reference receives report-only license observations only
+after the checker reads the source ZIP, Factory wheel and offline archive, including
+nested members. A shipped layer, uncompressed layer, or binary from any image layer
+keeps the strict redistribution check. Unreadable or incomplete output evidence
+also keeps that check. PostgreSQL advisory, component and integrity checks still run.

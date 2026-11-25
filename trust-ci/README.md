@@ -128,7 +128,7 @@ Replace every placeholder. `runtime/trust-store.json` remains invalid until a re
 The deployment and policy refuse mutable runner tags. Build API, worker and runner images, obtain immutable digests, and place those digests into the deployment environment and `runtime/policy.json`:
 
 ```bash
-docker compose -f compose.yaml -f compose.build.yaml --profile build build api worker runner-image
+docker compose -f compose.yaml -f compose.build.yaml --profile build build api worker runner-image docker-engine
 docker image inspect "$TRUST_CI_API_IMAGE" --format '{{.Id}} {{index .RepoDigests 0}}'
 docker image inspect "$TRUST_CI_WORKER_IMAGE" --format '{{.Id}} {{index .RepoDigests 0}}'
 docker image inspect "$TRUST_CI_RUNNER_IMAGE" --format '{{.Id}} {{index .RepoDigests 0}}'
@@ -430,7 +430,7 @@ PostgreSQL integration and Compose validation:
 ```bash
 make trust-ci-postgres-test
 # or: docker compose -f trust-ci/compose.test.yaml up --build --abort-on-container-exit --exit-code-from postgres-integration
-docker compose -f trust-ci/compose.yaml -f trust-ci/compose.build.yaml --profile build build api worker runner-image
+docker compose -f trust-ci/compose.yaml -f trust-ci/compose.build.yaml --profile build build api worker runner-image docker-engine
 docker compose -f trust-ci/compose.yaml config
 ```
 
@@ -451,3 +451,5 @@ After database recovery, expired leases are reclaimed with `FOR UPDATE SKIP LOCK
 ## Deliberate non-features
 
 The first production contour does not auto-merge, auto-deploy or mutate production. Merge remains human-owned. Release operations may be explicitly delegated by the user through exact local grants, but they never alter merge trust. GitHub Actions are not installed or required.
+
+The internal rootless daemon image is built from the digest in `dind/Dockerfile`. Its final filesystem omits the Docker CLI. Compose checks the daemon API at `/_ping`. Set `TRUST_CI_DIND_REPOSITORY` to the internal registry before publishing the signed deployment bundle.

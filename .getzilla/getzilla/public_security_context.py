@@ -304,7 +304,7 @@ _PREPARATION_STAGES = frozenset(('setup', 'source-binding', 'profile-declaration
     'tool-provision', 'feeds', 'package-artifacts', 'image-artifacts', 'image-database',
     'image-package-tool', 'image-package-scan', 'image-package-identity',
     'obligations', 'licenses', 'final-binding', 'prepare-inputs', 'prepare-result', 'package-target',
-    'factory-target','factory-acquisition','factory-output','license-run-scope','action-source','release-tool-source',
+    'delivery-scope','factory-target','factory-acquisition','factory-output','license-run-scope','action-source','release-tool-source',
     'checker-tool-source'))
 _PREPARATION_KINDS = frozenset(('artifact', 'security-data', 'oci', 'inventory', 'os',
     'key', 'type', 'value', 'runtime', 'other'))
@@ -337,10 +337,17 @@ def _preparation_detail(value):
         from .security_internal_image_scope import GAP_CODES
         obs = value["license_observations"]
         base = _preparation_detail({k: v for k, v in value.items() if k != "license_observations"})
-        if (not base.get("image_gap_counts") or type(obs) is not dict or set(obs) != {"status", "counts"}
-                or obs["status"] != "internal-report-only" or type(obs["counts"]) is not dict
-                or not obs["counts"] or obs["counts"].keys() - GAP_CODES
-                or any(type(n) is not int or not 0 < n < 2 ** 31 for n in obs["counts"].values())):
+        if not base.get("image_gap_counts") or type(obs) is not dict:
+            return {}
+        scopes = {"internal-report-only", "referenced-report-only"}
+        if set(obs) == {"status", "counts"} and isinstance(obs["status"], str) and obs["status"] in scopes:
+            counts = [obs["counts"]]
+        elif obs and obs.keys() <= scopes:
+            counts = obs.values()
+        else:
+            return {}
+        if any(type(row) is not dict or not row or row.keys() - GAP_CODES
+               or any(type(n) is not int or not 0 < n < 2 ** 31 for n in row.values()) for row in counts):
             return {}
         return dict(base, license_observations=obs)
     if type(value) is dict and 'image_gap_counts' in value:

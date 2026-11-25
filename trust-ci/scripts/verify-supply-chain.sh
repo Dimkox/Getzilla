@@ -75,7 +75,7 @@ if manifest.get('artifacts_sha256') != sha(artifacts_path):
 if sha(bundle_policy_path) != sha(deployed_policy_path):
     raise SystemExit('deployed policy is not the signed bundle policy')
 images = manifest.get('images')
-if not isinstance(images, dict) or set(images) != {'api', 'worker', 'runner'}:
+if not isinstance(images, dict) or set(images) != {'api', 'worker', 'runner', 'dind'}:
     raise SystemExit('manifest image set is incomplete')
 pattern = re.compile(r'^.+@sha256:[0-9a-f]{64}$')
 for name, image in images.items():
@@ -97,19 +97,20 @@ for raw in compose_env_path.read_text(encoding='utf-8').splitlines():
     environment[key.strip()] = value.strip()
 expected = {
     'TRUST_CI_API_IMAGE': images['api'],
+    'TRUST_CI_DIND_IMAGE': images['dind'],
     'TRUST_CI_WORKER_IMAGE': images['worker'],
     'TRUST_CI_RUNNER_IMAGE': images['runner'],
 }
 for key, value in expected.items():
     if environment.get(key) != value:
         raise SystemExit(f'{key} does not match signed manifest')
-for name in ('api', 'worker', 'runner'):
+for name in ('api', 'worker', 'runner', 'dind'):
     print(images[name])
 PY
 )
 
-if [[ ${#images[@]} -ne 3 ]]; then
-  printf 'supply-chain verifier did not receive exactly three image references\n' >&2
+if [[ ${#images[@]} -ne 4 ]]; then
+  printf 'supply-chain verifier did not receive exactly four image references\n' >&2
   exit 65
 fi
 

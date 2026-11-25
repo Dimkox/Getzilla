@@ -68,9 +68,6 @@ services:
     environment:
       DOCKER_TLS_CERTDIR: ""
     command:
-      - dockerd-entrypoint.sh
-      - --host=tcp://0.0.0.0:2375
-      - --host=unix:///run/user/1000/docker.sock
       - --storage-driver=overlay2
     volumes:
       - trust-ci-docker-data:/home/rootless/.local/share/docker
@@ -79,7 +76,7 @@ services:
     expose:
       - "2375"
     healthcheck:
-      test: ["CMD", "docker", "-H", "tcp://127.0.0.1:2375", "info"]
+      test: ["CMD-SHELL", "test \"$$(wget -T 2 -qO- http://127.0.0.1:2375/_ping)\" = OK"]
       interval: 5s
       timeout: 5s
       retries: 30

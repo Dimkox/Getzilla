@@ -16,6 +16,7 @@ done
 : "${TRUST_CI_PYTHON_BASE_IMAGE:?set immutable Python base image}"
 : "${TRUST_CI_API_REPOSITORY:?set API registry repository without tag}"
 : "${TRUST_CI_WORKER_REPOSITORY:?set worker registry repository without tag}"
+: "${TRUST_CI_DIND_REPOSITORY:?set internal daemon registry repository without tag}"
 : "${TRUST_CI_RUNNER_REPOSITORY:?set runner registry repository without tag}"
 : "${TRUST_CI_RELEASE_VERSION:?set release version}"
 : "${TRUST_CI_POLICY_TEMPLATE:?set reviewed policy template path}"
@@ -38,6 +39,7 @@ build_image() {
   local repository="$2"
   local dockerfile="$3"
   local metadata="$output/metadata/$name.json"
+  local context="${4:-$root/trust-ci}"
   local tagged="$repository:$TRUST_CI_RELEASE_VERSION"
 
   if [[ "$repository" == *'@'* || "$repository" == *' '* ]]; then
@@ -45,16 +47,20 @@ build_image() {
     exit 65
   fi
 
+  local build_args=()
+  if [[ "$name" != dind ]]; then
+    build_args=(--build-arg "PYTHON_BASE_IMAGE=$TRUST_CI_PYTHON_BASE_IMAGE")
+  fi
   docker buildx build \
     --progress=plain \
     --file "$root/trust-ci/$dockerfile" \
-    --build-arg "PYTHON_BASE_IMAGE=$TRUST_CI_PYTHON_BASE_IMAGE" \
+    "${build_args[@]}" \
     --tag "$tagged" \
     --push \
     --sbom=true \
     --provenance=mode=max \
     --metadata-file "$metadata" \
-    "$root/trust-ci" >&2
+    "$context" >&2
 
   local digest
   digest="$(python3 - "$metadata" <<'PY'
@@ -84,6 +90,8 @@ api_image="$(build_image api "$TRUST_CI_API_REPOSITORY" Dockerfile.api)"
 worker_image="$(build_image worker "$TRUST_CI_WORKER_REPOSITORY" Dockerfile.worker)"
 runner_image="$(build_image runner "$TRUST_CI_RUNNER_REPOSITORY" runner.Dockerfile)"
 
+dind_image="$(build_image dind "$TRUST_CI_DIND_REPOSITORY" dind/Dockerfile "$root/trust-ci/dind")"
+
 policy_output="$output/policy.json"
 python3 - "$policy_template" "$policy_output" "$runner_image" <<'PY'
 import json
@@ -112,7 +120,7 @@ PY
 )
 
 manifest="$output/supply-chain.manifest.json"
-python3 - "$manifest" "$policy_output" "$output/artifacts.sha256" "$api_image" "$worker_image" "$runner_image" "$root" <<'PY'
+python3 - "$manifest" "$policy_output" "$output/artifacts.sha256" "$api_image" "$worker_image" "$runner_image" "$root" "$dind_image" <<'PY'
 import hashlib
 import json
 import os
@@ -147,7 +155,7 @@ data = {
     'policy_sha256': sha(policy),
     'artifacts_file': artifacts.name,
     'artifacts_sha256': sha(artifacts),
-    'images': {'api': api, 'worker': worker, 'runner': runner},
+    'images': {'api': api, 'worker': worker, 'runner': runner, 'dind': sys.argv[8]},
     'sbom_directory': 'sbom',
     'scan_directory': 'scan',
 }
@@ -168,4 +176,4 @@ PY
 )
 
 printf 'supply-chain release created: %s\n' "$output"
-printf 'api=%s\nworker=%s\nrunner=%s\n' "$api_image" "$worker_image" "$runner_image"
+printf 'api=%s\nworker=%s\nrunner=%s\ndind=%s\n' "$api_image" "$worker_image" "$runner_image" "$dind_image"

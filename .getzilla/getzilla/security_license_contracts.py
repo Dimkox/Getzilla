@@ -41,7 +41,7 @@ _RECOGNIZED = {name.lower(): name for name in (*ALLOWED, *_NONALLOW)}
 
 def _policy(policy: dict) -> dict:
     required = {'schema_version', 'project_repository', 'auto_allow', 'usage_distribution'}
-    if not isinstance(policy, dict) or not required <= set(policy) or set(policy) - required - {'digest', 'factory_offline_profile', 'dependency_exceptions', 'image_license_scope'}:
+    if not isinstance(policy, dict) or not required <= set(policy) or set(policy) - required - {'digest', 'factory_offline_profile', 'dependency_exceptions', 'image_license_scope', 'referenced_image_scope'}:
         raise ArtifactError('license-policy-missing', 'choose an explicit project-specific license policy')
     if type(policy['schema_version']) is not int or policy['schema_version'] != 1:
         raise ArtifactError('license-policy-review', 'unsupported project license policy version')
@@ -57,6 +57,11 @@ def _policy(policy: dict) -> dict:
     if 'image_license_scope' in policy:
         from .security_internal_image_scope import validate_policy
         raw['image_license_scope'] = validate_policy(policy['project_repository'], policy['image_license_scope'])
+    if 'referenced_image_scope' in policy:
+        from .security_referenced_image import validate_policy as referenced_policy
+        if 'image_license_scope' not in raw:
+            raise ArtifactError('license-policy-review', 'referenced scope requires the Getzilla image policy')
+        raw['referenced_image_scope'] = referenced_policy(policy['referenced_image_scope'])
     if 'factory_offline_profile' in policy:
         scope = policy['factory_offline_profile']
         hashes = {'lock_sha256', 'wheel_inventory_sha256', 'builder_sha256'}

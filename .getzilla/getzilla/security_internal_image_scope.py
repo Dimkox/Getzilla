@@ -8,7 +8,7 @@ GAP_CODES = frozenset((
 _INTERNAL_USES = frozenset((
     ".getzilla/config/ci-images.json", ".github/workflows/getzilla.yml",
     "trust-ci/Dockerfile.api", "trust-ci/Dockerfile.test", "trust-ci/Dockerfile.worker",
-    "trust-ci/runner.Dockerfile", "trust-ci/compose.build.yaml", "trust-ci/compose.test.yaml",
+    "trust-ci/dind/Dockerfile", "trust-ci/runner.Dockerfile", "trust-ci/compose.build.yaml", "trust-ci/compose.test.yaml",
     "trust-ci/compose.yaml",
 ))
 
@@ -39,19 +39,37 @@ def declare_internal_uses(inventory):
             use["distribution"] = "internal"
 
 
-def internal_images(subjects, images):
-    """All aliases and compressed and uncompressed layers of a shipped use stay strict."""
+def image_scopes(subjects, images, delivery=None):
+    """Classify every declared use; a shipped alias or shared layer takes precedence."""
+    from .security_referenced_image import FACTORY_REFERENCE, PG, distribution
     if set(images) != {row["reference"] for row in subjects}:
-        return set()
-    strict = {row["reference"] for row in subjects if row.get("distribution") != "internal"
-              or row.get("manifest") not in _INTERNAL_USES or "delivery_kind" in row or "delivery_context" in row}
+        return set(), set()
+    referenced, strict = set(), set()
+    for row in subjects:
+        ref = row["reference"]
+        image = images[ref]
+        if (row.get("manifest") == "factory/compose.yaml" and row.get("source_reference") == FACTORY_REFERENCE
+                and row.get("distribution") in {None, "redistributed"} and "delivery_context" not in row
+                and "delivery_kind" not in row and image.manifest_digest == "sha256:" + PG and delivery
+                and distribution(delivery, image.layer_identities, image.layer_binary_hashes()) == "referenced"):
+            referenced.add(ref)
+        elif (row.get("distribution") != "internal" or row.get("manifest") not in _INTERNAL_USES
+              or "delivery_kind" in row or "delivery_context" in row):
+            strict.add(ref)
+        if delivery and any(digest.removeprefix("sha256:") in delivery[0] for digest in image.layer_identities):
+            strict.add(ref)
     strict_layers = set()
     for ref in strict:
         if not images[ref].layer_identities:
-            return set()
+            return set(), set()
         strict_layers.update(images[ref].layer_identities)
-    return {ref for ref, image in images.items() if ref not in strict and image.layer_identities
+    eligible = {ref for ref, image in images.items() if ref not in strict and image.layer_identities
             and image.layer_identities.isdisjoint(strict_layers)}
+    return eligible, referenced & eligible
+
+
+def internal_images(subjects, images):
+    return image_scopes(subjects, images)[0]
 
 
 def partition(rows, internal):

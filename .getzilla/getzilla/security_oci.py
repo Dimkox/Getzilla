@@ -341,6 +341,7 @@ def _component_row(member, archive, keep, budget):
     if member.islnk() or member.issym():
         return dict(row, kind='hardlink' if member.islnk() else 'symlink', target=member.linkname)
     chunks, digest, count, head, tail, go_binary = [], hashlib.sha256(), 0, b'', b'', False
+    contains_nul = False
     pg_versions = set()
     pg_tail = b""
     # Alpine installed databases can carry legacy SHA-1 member checksums.
@@ -352,6 +353,7 @@ def _component_row(member, archive, keep, budget):
             budget.tick()
             count += len(chunk)
             digest.update(chunk)
+            contains_nul = contains_nul or b"\x00" in chunk
             head = (head + chunk[:4])[:4]
             if name == "usr/local/bin/postgres" and len(pg_versions) < 2:
                 window = pg_tail + chunk
@@ -368,6 +370,8 @@ def _component_row(member, archive, keep, budget):
         raise OCIError('Component observation member truncated')
     row.update(kind='file', sha256=digest.hexdigest(), apk_sha1=apk_sha1.digest().hex(), elf=head == b'\x7fELF',
                executable=bool(member.mode & 0o111), go_binary=go_binary)
+    if contains_nul or head.startswith((b"MZ", b"\x7fELF")):
+        row["binary_payload"] = True
     if name == "usr/local/bin/postgres" and len(pg_versions) == 1:
         row["postgres_version"] = next(iter(pg_versions)).decode("ascii")
     if keep:
@@ -381,6 +385,7 @@ class _ComponentIndex:
         from .security_image_licenses import _retain
         self.retain = _retain
         self.layers = {}
+        self.binary_hashes = {}
         self.remaining = _COMPONENT_CACHE_BYTES
 
     def facts(self, key, retain):
@@ -392,23 +397,24 @@ class _ComponentIndex:
 
     def capture(self, budget):
         rows, weight = [], 0
+        binaries = set()
 
         def visit(member, archive):
             nonlocal rows, weight
-            if rows is None:
-                return
-            # Charge the names and a conservative fixed allowance for each row.
             name = member.name.removeprefix('./').rstrip('/')
-            keep = member.isfile() and self.retain(name)
+            keep = rows is not None and member.isfile() and self.retain(name)
             body = member.size if keep else 0
             weight += 2048 + 4 * (len(member.name) + len(member.linkname)) + body
             if body > _COMPONENT_PROOF_MAX or weight > self.remaining:
                 rows = None
-                return
-            row = _component_row(member, archive, keep, budget)
-            rows.append(tuple(row.items()))
+            row = _component_row(member, archive, keep and rows is not None, budget)
+            if row.pop("binary_payload", False):
+                binaries.add(row["sha256"])
+            if rows is not None:
+                rows.append(tuple(row.items()))
 
         def publish(key):
+            self.binary_hashes[key[0]] = frozenset(binaries)
             if rows is not None:
                 self.layers[key] = (_COMPONENT_INDEX_SEAL, key, tuple(rows))
                 self.remaining -= weight
@@ -510,9 +516,9 @@ def _parse_layer(raw, media, expected, budget, *, visit=None, reader="import"):
 
 
 class VerifiedOCIImage:
-    __slots__ = ('reference', 'platform', 'layout', 'manifest_digest', 'config_digest', '_proof', '_files', '_budget', '_components', 'layer_identities')
+    __slots__ = ('reference', 'platform', 'layout', 'manifest_digest', 'config_digest', '_proof', '_files', '_budget', '_components', 'layer_identities', '_compressed_layers')
 
-    def __init__(self, reference, platform, layout, manifest_digest, config_digest, proof, budget, files, components=None, layer_identities=()):
+    def __init__(self, reference, platform, layout, manifest_digest, config_digest, proof, budget, files, components=None, layer_identities=(), compressed_layers=()):
         if proof is not _PROOF:
             raise OCIError('Verified OCI identity requires import')
         self.reference, self.platform, self.layout = reference, platform, layout
@@ -522,6 +528,17 @@ class VerifiedOCIImage:
         self._files = files
         self._components = components
         self.layer_identities = frozenset(layer_identities)
+        self._compressed_layers = frozenset(compressed_layers)
+
+    def layer_binary_hashes(self):
+        self.remaining_seconds()
+        if self._components is None or not self._compressed_layers:
+            return None
+        captured = self._components.binary_hashes
+        if not self._compressed_layers <= captured.keys():
+            return None
+        return frozenset().union(*(captured[key] for key in self._compressed_layers))
+
 
     def remaining_seconds(self):
         if self._proof is not _PROOF:
@@ -686,7 +703,9 @@ def observe_final_files(image, retain):
                 keep = member.isfile() and bool(retain(name))
                 if keep:
                     reserve_proof(member.size)
-                apply(_component_row(member, archive, keep, image._budget))
+                row = _component_row(member, archive, keep, image._budget)
+                row.pop("binary_payload", None)
+                apply(row)
 
             with verified(layer['digest']) as (stream, size):
                 image._budget.charge('compressed', size, phase='component-read')
@@ -843,6 +862,7 @@ def _import_one(record, profile, stage, budget, components=None):
         (stage / 'blobs/sha256').mkdir(mode=0o700)
         seen, active, candidates, roles = {}, set(), [], {}
         layer_identities = set()
+        compressed_layers = set()
 
         def blob(desc, *, opaque=False):
             media, digest, size = _descriptor(desc, opaque_attestation=opaque)
@@ -939,6 +959,7 @@ def _import_one(record, profile, stage, budget, components=None):
                     if layer_media not in allowed_layers or not isinstance(diff_id, str) or not HEX.fullmatch(diff_id):
                         raise OCIError('Unsupported OCI layer or diff ID')
                     _layer(blob(layer), layer_media, diff_id, budget, components)
+                    compressed_layers.add(layer["digest"][7:])
                     layer_identities.update((layer['digest'], diff_id))
                 if not attestation and platform == profile['platform']:
                     candidates.append((desc, config_desc['digest']))
@@ -962,7 +983,7 @@ def _import_one(record, profile, stage, budget, components=None):
                 stream.write(raw)
             files[name] = (hashlib.sha256(raw).hexdigest(), len(raw))
         return VerifiedOCIImage(record['reference'], profile['platform'], stage,
-                                descriptor['digest'], config_digest, _PROOF, budget, files, components, layer_identities)
+                                descriptor['digest'], config_digest, _PROOF, budget, files, components, layer_identities, compressed_layers)
     finally:
         source.close()
 
@@ -1067,6 +1088,7 @@ def import_layouts(catalog, inventory, profile, workspace, *, _budget=None, meas
             finally:
                 if components is not None:
                     components.layers.clear()
+                    components.binary_hashes.clear()
                 for image in images:
                     image._proof = image._components = None
     except (OSError, KeyError, TypeError, AttributeError, EOFError, tarfile.TarError):

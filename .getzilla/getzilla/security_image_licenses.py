@@ -579,7 +579,7 @@ class _HeldFamily:
         self.guard, self.store, self.seal = state["native_guard"], store, seal
 
 
-def _family_projection(observation, license_rows=()):
+def _family_projection(observation, license_rows=(), distribution="internal"):
     """Project complete text fields, retaining their exact original data source.
 
     DEP5 field decoding removes only its standard continuation/dot encoding.
@@ -616,7 +616,7 @@ def _family_projection(observation, license_rows=()):
         if component["id"] in affected and component["expression"] is None:
             # The files and the original license bytes stay in the held proof.
             # No expression or complete term is asserted for this component.
-            c["license_status"] = "internal-report-only"
+            c["license_status"] = distribution + "-report-only"
             for proof in component["notice_paths"]:
                 path = term(proofs[proof["path"]], proof, dict(kind="identity"))
                 c["notice_paths"].append(path)
@@ -654,7 +654,7 @@ def _family_projection(observation, license_rows=()):
     if "postgresql_server" in document:
         projected["postgresql_server"] = document["postgresql_server"]
     if license_rows:
-        projected["license_observations"] = dict(status="internal-report-only",
+        projected["license_observations"] = dict(status=distribution + "-report-only",
             counts=dict(Counter(row["code"] for row in license_rows)))
     return document, proofs, projected, material
 
@@ -684,11 +684,13 @@ def prepare_families(root, inventory, source, run, *, now=None, policy=None, pac
             trivy = pinned_tool("trivy", package_tools)
     failures = []
     license_counts = Counter()
-    from .security_internal_image_scope import internal_images, partition
+    from .security_internal_image_scope import image_scopes, partition
     from .security_license_contracts import _policy
-    internal = set()
+    eligible, referenced = set(), set()
+    delivery = None
     if policy is not None and "image_license_scope" in _policy(policy):
-        internal = internal_images(inventory["images"], state["images"])
+        delivery = state.get("delivery_members") if "referenced_image_scope" in policy else None
+        eligible, referenced = image_scopes(inventory["images"], state["images"], delivery)
     state["image_family_diagnostics"] = []
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -719,8 +721,9 @@ def prepare_families(root, inventory, source, run, *, now=None, policy=None, pac
                     advisory_pages=state.setdefault("postgres_advisory_pages", {}) if trivy is not None else None)
                 cached[image.reference] = observation
             observed = observation.document()
-            license_rows, blocking = partition(observed["unresolved"], image.reference in internal)
-            license_counts.update(row["code"] for row in license_rows)
+            scope = "referenced" if image.reference in referenced and subject.get("manifest") == "factory/compose.yaml" else "internal"
+            license_rows, blocking = partition(observed["unresolved"], image.reference in eligible)
+            license_counts.update((scope, row["code"]) for row in license_rows)
             if blocking or observed["complete"] != (not observed["unresolved"]):
                 proof_rows = [
                     dict(image_path=path, **save(body)) for path, body in sorted(observation.proof_files().items())
@@ -746,7 +749,9 @@ def prepare_families(root, inventory, source, run, *, now=None, policy=None, pac
                     raise ArtifactError("license-image-components", "inconsistent held image completeness")
                 failures.extend(blocking)
                 continue
-            observed, proofs, projected, material = _family_projection(observation, license_rows)
+            observed, proofs, projected, material = _family_projection(observation, license_rows, scope)
+            if scope == "referenced":
+                projected["referenced_output_sha256"] = dict(delivery[1])
             proof_rows = []
             for path, body in sorted(proofs.items()):
                 proof_rows.append(dict(image_path=path, **save(body)))
@@ -822,7 +827,12 @@ def prepare_families(root, inventory, source, run, *, now=None, policy=None, pac
             )
             error.image_gap_counts = dict(Counter(row["code"] for row in failures))
             if license_counts:
-                error.license_observations = dict(status="internal-report-only", counts=dict(license_counts))
+                error.license_observations = {
+                    scope + "-report-only": {code: n for (kind, code), n in license_counts.items() if scope == kind}
+                    for scope in sorted({kind for kind, _ in license_counts})
+                }
+                if set(error.license_observations) == {"internal-report-only"}:
+                    error.license_observations = dict(status="internal-report-only", counts=error.license_observations["internal-report-only"])
             raise error
         return records
     finally:
@@ -863,6 +873,10 @@ def verify_family(root, record):
         schema_version=1, kind="held-image-component-inventory", complete=True, unresolved=[], **held.document
     ):
         raise ArtifactError("license-image-components", "held installed component graph differs")
+    if "referenced_output_sha256" in component:
+        proof = state.get("delivery_members")
+        if not proof or component["referenced_output_sha256"] != proof[1]:
+            raise ArtifactError("license-obligation-missing", "referenced delivery proofs are unavailable")
     files, bound, proof_refs = {}, len(payload) + len(raw), []
     for proof in [*envelope["proofs"], *envelope["terms"]]:
         key = proof.get("image_path", proof.get("term_path"))
@@ -904,6 +918,7 @@ def verify_family(root, record):
         bound_bytes=bound,
         component_inventory_json=raw.decode("utf-8"),
         held_image=True,
+        **({"referenced_output_sha256": component["referenced_output_sha256"]} if "referenced_output_sha256" in component else {}),
         **({"license_observations": component["license_observations"]} if "license_observations" in component else {}),
     )
 
@@ -946,9 +961,10 @@ def finding_consistent(finding, allowed, select_expression):
         if type(held) is not _HeldFamily:
             return False
         evidence = verify_family(held.root, record)
+        scope = "referenced" if "referenced_output_sha256" in evidence else "internal"
         selected, licenses, notices = [], [], []
         for component in evidence["components"]:
-            if component.get("license_status") == "internal-report-only":
+            if component.get("license_status") == scope + "-report-only":
                 if not evidence.get("license_observations") or component["expression"] is not None:
                     return False
                 for path in component["notice_paths"]:
@@ -968,17 +984,17 @@ def finding_consistent(finding, allowed, select_expression):
             reference=record["subject"]["reference"],
             status="pass",
             selected_expression=" AND ".join(sorted(set(selected))),
-            distribution="internal",
+            distribution=scope,
             **evidence["binding"],
             family_record=record,
             component_inventory_json=evidence["component_inventory_json"],
             license_files=licenses,
             notice_files=notices,
-            obligations="internal use; exact source/component/license evidence retained",
+            obligations=scope + " use; exact source/component/license evidence retained",
         )
         if "license_observations" in evidence:
             expected.update(license_observations=evidence["license_observations"],
-                            obligations="internal use; partial license evidence reported")
+                            obligations=scope + " use; partial license evidence reported")
         return finding == expected
     except (ArtifactError, ValueError, TypeError, KeyError, OSError):
         return False

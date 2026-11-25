@@ -165,7 +165,7 @@ def assess(version, binary_version, body, stamp, now):
             raise ValueError("previously reviewed advisories missing or changed")
         if version not in {entry[1] for entry in rows.values()}:
             raise ValueError("minor release absent from selected security page")
-    except (ValueError, IndexError, TypeError) as error:
+    except (OSError, ValueError, IndexError, TypeError, AttributeError) as error:
         raise PostgresRefusal("postgres-advisories-unproved") from error
     minor = int(version.split(".")[1])
     cves = sorted(cve for cve, (component, fixed) in rows.items()
@@ -177,12 +177,18 @@ def assess(version, binary_version, body, stamp, now):
 def check_image(image, files, pages):
     from . import security_oci as oci
     from .security_artifacts import read_file
-    config = read_file(image.layout, "blobs/sha256/" + image.config_digest[7:], oci.LIMITS["max_manifest_bytes"])
-    if hashlib.sha256(config).hexdigest() != image.config_digest[7:]:
-        raise PostgresRefusal("postgres-config-identity")
-    env = oci.document(config).get("config", {}).get("Env", [])
-    versions = [value[11:] for value in env if value.startswith("PG_VERSION=")]
-    _, binary = files.resolve(SERVER_PATH)
+    try:
+        raw = read_file(image.layout, "blobs/sha256/" + image.config_digest[7:], oci.LIMITS["max_manifest_bytes"])
+        if hashlib.sha256(raw).hexdigest() != image.config_digest[7:]:
+            raise ValueError("changed config")
+        config = oci.document(raw)["config"]
+        env = config.get("Env", [])
+        if not isinstance(env, list) or not all(isinstance(value, str) for value in env):
+            raise ValueError("invalid image environment")
+        versions = [value.removeprefix("PG_VERSION=") for value in env if value.startswith("PG_VERSION=")]
+        _, binary = files.resolve(SERVER_PATH)
+    except (OSError, ValueError, RuntimeError, KeyError, AttributeError, TypeError) as error:
+        raise PostgresRefusal("postgres-config-identity", manifest=image.manifest_digest) from error
     if not versions and binary is None and not image.reference.startswith("postgres@"):
         return None
     if (len(versions) != 1 or binary is None or not binary.get("elf") or not binary.get("executable")

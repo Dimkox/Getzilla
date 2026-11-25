@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8
+    platform: linux/amd64
     environment:
       POSTGRES_DB: ${FACTORY_POSTGRES_DB:?set FACTORY_POSTGRES_DB}
       POSTGRES_USER: ${FACTORY_POSTGRES_USER:?set FACTORY_POSTGRES_USER}

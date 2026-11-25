@@ -201,12 +201,9 @@ def produce(root, source, run, volume, builder):
     ci = document(read_file(root, '.getzilla/config/ci-images.json', 65536))
     if ci.get('schema_version') != 1 or ci.get('platform') != 'linux/amd64':
         raise BackendUnavailable('current source CI base image declaration is unsupported')
+    from .security_referenced_image import require_factory_pin
+    require_factory_pin(raw_inventory['images'], ci)
     choices = {'TRUST_CI_POSTGRES_IMAGE': ci['postgres']['reference'], '${PYTHON_BASE_IMAGE}': ci['python']['reference']}
-    example = read_file(root, 'trust-ci/.env.example', 65536).decode()
-    dind = re.findall(r'^TRUST_CI_DIND_IMAGE=([a-z0-9:/._-]+)@sha256:REPLACE_WITH_DIND_DIGEST$', example, re.M)
-    if len(dind) != 1:
-        raise BackendUnavailable('current source lacks one explicit DIND tag declaration')
-    choices['TRUST_CI_DIND_IMAGE'] = dind[0]
     bindings, roots, resolved = [], {}, {}
     deferred = []
     for use in raw_inventory['images']:
@@ -225,11 +222,12 @@ def produce(root, source, run, volume, builder):
     build_count = len(build_inventory.get('builds', []))
     deferred_codes = {'unresolved-image', 'missing-image-source-selection', 'unused-image-source-selection'}
     refused = [gap for gap in build_inventory['gaps'] if gap['code'] not in deferred_codes]
-    if build_count != 5 or refused:
+    expected_services = {'api','migrate','worker','runner-image','postgres-integration','docker-engine'}
+    if (build_count != len(expected_services) or {r['service'] for r in build_inventory['builds']} != expected_services or refused):
         detail = refused[0]['code'] if refused else 'build-count'
         if refused and refused[0]['message'] == 'unresolved COPY source':
             detail += ': unresolved COPY source'
-        raise BackendUnavailable(f'local build inventory: expected 5, found {build_count}; '
+        raise BackendUnavailable(f'local build inventory: expected 6, found {build_count}; '
                                  f'{len(refused)} blocking gaps; first condition: {detail}')
     # The hard mounted volume contains every registry blob, context, cache and
     # output. Kernel ENOSPC refuses even while an untrusted build is running.
@@ -263,7 +261,7 @@ def produce(root, source, run, volume, builder):
             completed[recipe['build_sha256']] = reference
             by_service[recipe['service']] = reference
             bindings.append(_binding(recipe, reference, recipe['platform']))
-    built_choices = {'TRUST_CI_API_IMAGE': by_service['api'], 'TRUST_CI_WORKER_IMAGE': by_service['worker'],
+    built_choices = {'TRUST_CI_DIND_IMAGE': by_service['docker-engine'], 'TRUST_CI_API_IMAGE': by_service['api'], 'TRUST_CI_WORKER_IMAGE': by_service['worker'],
         'TRUST_CI_RUNNER_IMAGE': by_service['runner-image'], 'TRUST_CI_RUNNER_BUILD_TAG': by_service['runner-image'],
         'TRUST_CI_TEST_BUILD_TAG': by_service['postgres-integration']}
     for use in deferred:
@@ -410,6 +408,22 @@ def _pipeline(request, volume, builder):
             from .security_license_scope import activate
             with cli._preparation_step('license-run-scope'):
                 license_inputs=activate(root,profile,_entry=_LICENSE_ENTRY)
+            from .security_image_delivery_build import build as build_deliveries
+            from zipfile import BadZipFile
+            from tarfile import TarError
+            from lzma import LZMAError
+            from zlib import error as ZlibError
+            pins = document(read_file(root, '.getzilla/config/ci-images.json', 65536))
+            try:
+                with cli._preparation_step('delivery-scope'):
+                    facts = build_deliveries(root, cli.TRUSTED_ROOT, volume, profile, pins)
+            except (OSError, ValueError, KeyError, TypeError, EOFError, RuntimeError, BadZipFile, TarError, LZMAError, ZlibError) as error:
+                # Without complete output evidence Factory remains strictly redistributed.
+                authority._LIVE['delivery_members'] = None
+                print(json.dumps(dict(stage="delivery-scope", status="redistributed", reason=type(error).__name__)), flush=True)
+            else:
+                authority._LIVE['delivery_members'] = facts
+                print(json.dumps(dict(stage="delivery-scope", archive_sha256=facts[1], unique_members=len(facts[0]))), flush=True)
             license_inputs.update(selection=selection,catalog=catalog)
             cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))
             cli._atomic(Path(request['profile']), canonical(profile))

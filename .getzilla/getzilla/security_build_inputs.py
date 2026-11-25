@@ -6,7 +6,7 @@ import os
 import re
 import shlex
 import stat
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from .security_artifacts import read_file
 from .security_oci import LIMITS
@@ -170,22 +170,31 @@ def describe_build(root, manifest, service, fields, files, bindings):
             arguments[argument[1]] = argument[2]
         if re.match(r'FROM\s', stripped, re.I):
             froms.append((number, stripped.split()[1:]))
-    if len(froms) != 1 or froms[0][1] != ['${PYTHON_BASE_IMAGE}']:
-        raise BuildInputError('local build requires the closed current Python base FROM form')
-    arg_nodes = _mapping(model['args'], 'build args') if 'args' in model else {}
-    if set(arg_nodes) - set(arguments) or 'PYTHON_BASE_IMAGE' not in arg_nodes:
-        raise BuildInputError('build arguments are missing or not declared by Dockerfile')
-    base = _choice(bindings, dockerfile, froms[0][0], file_hash, '${PYTHON_BASE_IMAGE}')
-    supplied = {name: _scalar(value, 'build argument') for name, value in arg_nodes.items()}
-    expression = supplied['PYTHON_BASE_IMAGE']
-    if expression.startswith('${'):
-        if not re.fullmatch(r'\$\{TRUST_CI_PYTHON_BASE_IMAGE:\?[^}]+\}', expression) or base is None:
-            raise BuildInputError('build base argument needs its exact immutable FROM selection')
-        supplied['PYTHON_BASE_IMAGE'] = base['reference']
-    if not re.fullmatch(r'[^\s$@]+@sha256:[0-9a-f]{64}', supplied['PYTHON_BASE_IMAGE']):
-        raise BuildInputError('build base is not an immutable image')
-    if base and base['reference'] != supplied['PYTHON_BASE_IMAGE']:
-        raise BuildInputError('Compose argument differs from Dockerfile base selection')
+    if dockerfile == 'trust-ci/dind/Dockerfile':
+        checker = Path(__file__).resolve().parents[2]
+        if (context != 'trust-ci/dind' or selected != [dockerfile] or 'args' in model
+                or body != read_file(checker, dockerfile, 65536) or len(froms) != 1 or len(froms[0][1]) != 1
+                or not re.fullmatch(r'docker:[0-9.]+-dind-rootless@sha256:[0-9a-f]{64}', froms[0][1][0])):
+            raise BuildInputError('daemon overlay differs from the exact reviewed recipe')
+        base = _choice(bindings, dockerfile, froms[0][0], file_hash, froms[0][1][0])
+        supplied = {}
+    else:
+        if len(froms) != 1 or froms[0][1] != ['${PYTHON_BASE_IMAGE}']:
+            raise BuildInputError('local build requires the closed current Python base FROM form')
+        arg_nodes = _mapping(model['args'], 'build args') if 'args' in model else {}
+        if set(arg_nodes) - set(arguments) or 'PYTHON_BASE_IMAGE' not in arg_nodes:
+            raise BuildInputError('build arguments are missing or not declared by Dockerfile')
+        base = _choice(bindings, dockerfile, froms[0][0], file_hash, '${PYTHON_BASE_IMAGE}')
+        supplied = {name: _scalar(value, 'build argument') for name, value in arg_nodes.items()}
+        expression = supplied['PYTHON_BASE_IMAGE']
+        if expression.startswith('${'):
+            if not re.fullmatch(r'\$\{TRUST_CI_PYTHON_BASE_IMAGE:\?[^}]+\}', expression) or base is None:
+                raise BuildInputError('build base argument needs its exact immutable FROM selection')
+            supplied['PYTHON_BASE_IMAGE'] = base['reference']
+        if not re.fullmatch(r'[^\s$@]+@sha256:[0-9a-f]{64}', supplied['PYTHON_BASE_IMAGE']):
+            raise BuildInputError('build base is not an immutable image')
+        if base and base['reference'] != supplied['PYTHON_BASE_IMAGE']:
+            raise BuildInputError('Compose argument differs from Dockerfile base selection')
     optional = {'PUBLIC_CHECKER_REPOSITORY', 'PUBLIC_CHECKER_COMMIT', 'PUBLIC_CHECKER_TREE'}
     for name, default in arguments.items():
         if name not in supplied:
