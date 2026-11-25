@@ -333,8 +333,12 @@ def _component_row(member, archive, keep, budget):
     if member.islnk() or member.issym():
         return dict(row, kind='hardlink' if member.islnk() else 'symlink', target=member.linkname)
     chunks, digest, count, head, tail, go_binary = [], hashlib.sha256(), 0, b'', b'', False
+    # Alpine installed databases can carry legacy SHA-1 member checksums.
+    # SHA-256 remains the mandatory OCI and component identity.
+    apk_sha1 = hashlib.sha1(usedforsecurity=False)
     with archive.extractfile(member) as source:
         while chunk := source.read(65536):
+            apk_sha1.update(chunk)
             budget.tick()
             count += len(chunk)
             digest.update(chunk)
@@ -345,7 +349,7 @@ def _component_row(member, archive, keep, budget):
                 chunks.append(chunk)
     if count != member.size:
         raise OCIError('Component observation member truncated')
-    row.update(kind='file', sha256=digest.hexdigest(), elf=head == b'\x7fELF',
+    row.update(kind='file', sha256=digest.hexdigest(), apk_sha1=apk_sha1.digest().hex(), elf=head == b'\x7fELF',
                executable=bool(member.mode & 0o111), go_binary=go_binary)
     if keep:
         row['body'] = b''.join(chunks)

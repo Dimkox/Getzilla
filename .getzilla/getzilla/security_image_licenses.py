@@ -134,8 +134,9 @@ class ImageComponentObservation:
         return dict(self._files)
 
 
-def observe_components(image):
+def observe_components(image, *, source_root=None, packages=None):
     """Build a component SBOM observation, never trust caller JSON as custody."""
+    index, scan_receipt = packages if packages is not None else ({}, None)
     files = _Files(oci.observe_final_files(image, _retain))
     components, unresolved, owners = [], [], defaultdict(set)
     identities, owned_paths = set(), defaultdict(set)
@@ -201,7 +202,7 @@ def observe_components(image):
             if not all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9.+:~_-]+", v) for v in (name, version, arch)):
                 raise oci.OCIError("Invalid installed Debian component identity")
             c = add(f"deb:{name}:{arch}@{version}", "dpkg")
-            if name.startswith("postgresql"):
+            if name.startswith("postgresql") and (name, version, arch) not in index.get(("debian", ""), ()):
                 gap("unsupported-postgres-components", c["id"])
             c.update(
                 source_package=package.get("Source", name),
@@ -390,8 +391,28 @@ def observe_components(image):
             condition = retained_conditions(image_sha, component["id"], original)
             if condition is not None:
                 component["source_conditions"] = condition
-    if files.data("lib/apk/db/installed"):
-        gap("unsupported-apk-components", "apk")
+    installed = files.data("lib/apk/db/installed")
+    if installed:
+        from .security_image_package_coverage import apk_inventory
+        try:
+            alpine = apk_inventory(installed[0])
+        except (ValueError, UnicodeError):
+            alpine = {}
+        if not alpine or set(alpine) != index.get(("alpine", "")):
+            gap("unsupported-apk-components", "apk")
+        for (name, version, arch), (declared, members) in alpine.items():
+            c = add(f"apk:{name}:{arch}@{version}", "apk")
+            c["evidence"].append(installed[1])
+            for path, checksum in members.items():
+                row = files.rows.get(path)
+                if not row or row["kind"] != "file" or not checksum:
+                    continue
+                # APK Q1 is SHA-1 (legacy). The OCI graph and every subject
+                # still bind the full SHA-256 of the file and its layer.
+                expected = "Q1" + base64.b64encode(bytes.fromhex(row["apk_sha1"])).decode("ascii")
+                if checksum == expected:
+                    own(c, [path])
+            terms(c, [files.data("usr/share/licenses/" + name + "/LICENSE")], declared)
     unknown = []
     go_files = []
     for path, row in files.rows.items():
@@ -407,8 +428,33 @@ def observe_components(image):
         source = path.endswith((".py", ".pyc", ".js", ".mjs", ".cjs", ".sh", ".rb", ".pl", ".jar", ".wasm"))
         if (row.get("elf") or row.get("executable") or source) and not generated:
             unknown.append(_evidence(row))
-    if go_files:
-        gap("unsupported-go-components", "go-bundles", files=go_files)
+    from .security_image_file_origins import archive_origins, project_origins
+    for name, origin, paths in archive_origins(unknown):
+        component = add("runner-download:" + name, "pinned-runner-artifact")
+        component["source_origin"] = origin
+        own(component, paths)
+        terms(component, [files.data("opt/node/LICENSE")] if name.startswith("node-") else [])
+    if source_root is not None:
+        matched = project_origins(unknown, source_root)
+        if matched:
+            component = add("getzilla:trust-ci-source", "project-source")
+            component["source_files"] = matched
+            own(component, [row["path"] for row in matched])
+            terms(component, [])
+    unknown = [row for row in unknown if not owners.get(row["path"])]
+    missing_go = []
+    for row in go_files:
+        packages_for_binary = index.get(("gobinary", row["path"]))
+        if not packages_for_binary:
+            missing_go.append(row)
+            continue
+        c = add("go-executable:" + row["path"], "go-binary")
+        c["modules"] = sorted((name, version) for name, version, _ in packages_for_binary)
+        own(c, [row["path"]])
+        terms(c, [])
+    if missing_go:
+        gap("unsupported-go-components", "go-bundles", files=missing_go)
+    unknown = [row for row in unknown if not owners.get(row["path"])]
     if unknown:
         gap("unattributed-software", "final-installed-files", files=sorted(unknown, key=lambda v: v["path"]))
     if not components and not unresolved:
@@ -426,6 +472,8 @@ def observe_components(image):
         qualification="observation-only; source/run/native guard and policy join required",
     )
     proofs = {path: row["body"] for path, row in files.rows.items() if "body" in row}
+    if scan_receipt is not None:
+        document["trivy_package_evidence"] = scan_receipt
     document["proof_bytes"] = sum(len(body) for body in proofs.values())
     return ImageComponentObservation(image, document, proofs, _PROOF)
 
@@ -569,7 +617,7 @@ def _family_projection(observation, license_rows=()):
     return document, proofs, projected, material
 
 
-def prepare_families(root, inventory, source, run, *, now=None, policy=None):
+def prepare_families(root, inventory, source, run, *, now=None, policy=None, package_tools=None):
     """Serialize actual held image families; unknown groups stop qualification."""
     import hashlib
     import os
@@ -586,6 +634,10 @@ def prepare_families(root, inventory, source, run, *, now=None, policy=None):
     registry = state.setdefault("image_families", {})
     cached = state.setdefault("image_component_observations", {})
     records, charged = [], 0
+    trivy = None
+    if package_tools is not None and state.get("builds"):
+        from .security_tools import pinned_tool
+        trivy = pinned_tool("trivy", package_tools)
     failures = []
     license_counts = Counter()
     from .security_internal_image_scope import internal_images, partition
@@ -615,7 +667,11 @@ def prepare_families(root, inventory, source, run, *, now=None, policy=None):
                 )
             observation = cached.get(image.reference)
             if type(observation) is not ImageComponentObservation or observation._image is not image:
-                observation = observe_components(image)
+                packages = None
+                if trivy is not None:
+                    from .security_image_package_coverage import scan
+                    packages = scan(image, package_tools, trivy)
+                observation = observe_components(image, source_root=state.get("root"), packages=packages)
                 cached[image.reference] = observation
             observed = observation.document()
             license_rows, blocking = partition(observed["unresolved"], image.reference in internal)
