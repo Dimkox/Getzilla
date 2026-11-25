@@ -88,6 +88,36 @@ jobs:
           if test -f "$RUNNER_TEMP/security-expanded.json"; then
             cp "$RUNNER_TEMP/security-expanded.json" "$RUNNER_TEMP/replay-result/"
           fi
+      - name: Export file and layer identities for unresolved component groups
+        if: always()
+        working-directory: trusted-checker
+        run: |
+          python -I -B - <<'PY'
+          import hashlib, json, os, pathlib, re, sys
+          sys.path.insert(0, str(pathlib.Path.cwd() / '.getzilla'))
+          from getzilla.security_artifacts import read_file, MAX_INDEX_BYTES
+          temp = pathlib.Path(os.environ['RUNNER_TEMP'])
+          store = temp / 'security-artifacts'
+          rows = []
+          for path in sorted((store / 'proofs').glob('*')):
+              if not re.fullmatch('[a-f0-9]{64}', path.name) or path.stat().st_size > MAX_INDEX_BYTES:
+                  continue
+              data = read_file(store, 'proofs/' + path.name, MAX_INDEX_BYTES)
+              if b'"held-image-observation-unqualified"' not in data[:2048]:
+                  continue
+              if hashlib.sha256(data).hexdigest() != path.name:
+                  raise ValueError('diagnostic proof hash differs')
+              doc = json.loads(data)
+              if doc.get('kind') != 'held-image-observation-unqualified':
+                  continue
+              obs = doc['observation']
+              groups = [row for row in obs['unresolved'] if row['code'] in {
+                  'unattributed-software', 'unsupported-go-components', 'unsupported-apk-components',
+                  'unsupported-postgres-components'}]
+              rows.append(dict(subject=doc['subject'], manifest=obs['manifest_digest'],
+                               config=obs['config_digest'], groups=groups))
+          (temp / 'replay-result' / 'component-gaps.json').write_text(json.dumps(rows, sort_keys=True))
+          PY
       - name: Upload diagnostic report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

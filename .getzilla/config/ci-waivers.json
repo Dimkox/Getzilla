@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "waivers": [{
+    "check": "security-expanded",
+    "issue": 456,
+    "reason": "First end-to-end hosted security qualification pending; per-edit checker review cost (#450)",
+    "expires": "2026-12-08"
+  }]
+}

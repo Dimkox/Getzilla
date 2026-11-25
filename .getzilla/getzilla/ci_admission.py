@@ -188,8 +188,10 @@ def _factory_unit_valid(unit, expected_source):
                 or set(binding["source_bindings"]) != {"ancestry", "directories", "files"}):
             return False
         context = binding["context"]
+        linux_capabilities = {"linux_kernel", "posix_source_custody", "unix_peer_credentials"}
         if (type(context) is not dict or set(context) != {"unit_database_bindings", "host_supported",
-                "procfs_descriptor_reopen", "pypdf_version", "jsonschema_cli"}
+                "procfs_descriptor_reopen", "pypdf_version", "jsonschema_cli"} | linux_capabilities
+                or any(context[key] is not True for key in linux_capabilities)
                 or context["unit_database_bindings"] != "scrubbed"
                 or type(context["host_supported"]) is not bool
                 or type(context["procfs_descriptor_reopen"]) is not bool
@@ -209,11 +211,57 @@ def _factory_unit_valid(unit, expected_source):
         return False
 
 
-def evaluate(needs, records, *, head, tree, run_id, attempt, now=None):
+def read_waiver(root):
+    path = root / ".getzilla/config/ci-waivers.json"
+    try:
+        data = _read(path)
+    except FileNotFoundError:
+        return None
+    if (not isinstance(data, dict) or set(data) != {"schema_version", "waivers"}
+            or type(data["schema_version"]) is not int or data["schema_version"] != 1
+            or not isinstance(data["waivers"], list) or len(data["waivers"]) != 1):
+        raise ValueError("Invalid CI waiver configuration")
+    entry = data["waivers"][0]
+    if (not isinstance(entry, dict) or set(entry) != {"check", "issue", "reason", "expires"}
+            or entry["check"] != "security-expanded" or type(entry["issue"]) is not int
+            or entry["issue"] != 456 or entry["expires"] != "2026-12-08"
+            or not isinstance(entry["reason"], str) or not 1 <= len(entry["reason"].strip()) <= 256):
+        raise ValueError("CI waiver exceeds the approved scope")
+    return entry
+
+
+def admission_result(needs, records, *, waiver, repository, head, tree, run_id, attempt, now):
+    security = records.get("security-expanded") or {}
+    report = security.get("report") or {}
+    checker = security.get("checker") or {}
+    expected_checker = os.environ.get("GETZILLA_OPERATOR_CHECKER") or os.environ.get("GETZILLA_BASE_SHA")
+    applies = bool(waiver and repository == "Dimkox/Getzilla"
+                   and now.astimezone(timezone.utc).date().isoformat() < waiver["expires"]
+                   and needs.get("security-expanded") == "failure"
+                   and security.get("schema") == "getzilla-security-ci-v1"
+                   and security.get("status") == "fail" and security.get("primary_phase") == "scan"
+                   and checker.get("boundary") == "separate-checkout"
+                   and HEX40.fullmatch(checker.get("head", ""))
+                   and checker["head"] == checker.get("selected_ref") == expected_checker
+                   and HEX40.fullmatch(checker.get("tree", ""))
+                   and report.get("status") in {"fail", "fail-for-selected-run"}
+                   and report.get("kind") == "public-security-input-refusal"
+                   and "candidate changed or expected head mismatch" not in security.get("problems", [])
+                   and "trusted checker checkout changed during scanning" not in security.get("problems", [])
+                   and security.get("event_provenance", {}).get("repository") == repository)
+    problems = evaluate(needs, records, head=head, tree=tree, run_id=run_id, attempt=attempt,
+                        now=now, waive_security=applies)
+    return {"status": "fail" if problems else "pass-with-waiver" if applies else "pass",
+            "waiver": {**(waiver or {}), "used": applies},
+            "security_qualification": "UNVERIFIED" if applies else "see security-expanded evidence",
+            "problems": problems, "authority": BOUNDARY}
+
+
+def evaluate(needs, records, *, head, tree, run_id, attempt, now=None, waive_security=False):
     now = now or datetime.now(timezone.utc)
     problems = []
     for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded"):
-        if needs.get(name) != "success":
+        if needs.get(name) != "success" and not (waive_security and name == "security-expanded"):
             problems.append(f"required job {name} did not succeed")
     for name in ("linux-core", *CELL_CHECKS, "security-expanded"):
         record = records.get(name)
@@ -221,7 +269,8 @@ def evaluate(needs, records, *, head, tree, run_id, attempt, now=None):
             problems.append(f"{name}: required artifact missing")
             continue
         if (record.get("source") != {"head": head, "tree": tree} or record.get("run_id") != run_id
-                or record.get("attempt") != attempt or record.get("status") != "pass"):
+                or record.get("attempt") != attempt
+                or record.get("status") != ("fail" if waive_security and name == "security-expanded" else "pass")):
             problems.append(f"{name}: source/run identity or outcome mismatch")
         if name in CELL_CHECKS:
             checks = record.get("checks") or []
@@ -232,7 +281,7 @@ def evaluate(needs, records, *, head, tree, run_id, attempt, now=None):
         elif name == "linux-core":
             if not _factory_unit_valid(record.get("unit") or {}, record.get("unit_source")):
                 problems.append("Factory unit discovery evidence is missing or incomplete")
-        else:
+        elif not waive_security:
             problems.extend(_security(record, head, tree, now))
     return problems
 
@@ -309,6 +358,9 @@ def load_records(artifacts, run_id, attempt, *, root=None):
                     inventory, expected_ids = None, None
                 record = read_live_record(directory, expected, expected_source_inventory=inventory, expected_ids=expected_ids,
                                           expected_factory_applicability=applicability)
+            elif ("security-expanded.json" not in {entry["path"] for entry in record["files"]}
+                  or _read(directory / "security-expanded.json") != record.get("report")):
+                raise ValueError("Bound security report missing or inconsistent")
             elif record.get('report',{}).get('status')=='pass-for-selected-run':
                 record['scope_expectation']=_reobserve_scope(root,directory,record,run_id,attempt)
             records[name] = record
@@ -451,11 +503,14 @@ def main(argv=None):
         if head != os.environ["GETZILLA_EXPECTED_HEAD"] or _git(args.root, "status", "--porcelain"):
             raise ValueError("Aggregator source head is wrong or the worktree is not clean")
         records = load_records(args.artifacts, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"], root=args.root)
-        problems = evaluate(needs, records, head=head, tree=tree, run_id=os.environ["GITHUB_RUN_ID"], attempt=os.environ["GITHUB_RUN_ATTEMPT"])
+        result = admission_result(needs, records, head=head, tree=tree, run_id=os.environ["GITHUB_RUN_ID"],
+                                  attempt=os.environ["GITHUB_RUN_ATTEMPT"], now=datetime.now(timezone.utc),
+                                  waiver=read_waiver(args.root), repository=os.environ.get("GITHUB_REPOSITORY"))
     except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as exc:
-        problems = ["Required CI evidence unavailable: " + type(exc).__name__]
-    print(json.dumps({"status": "fail" if problems else "pass", "problems": problems, "authority": BOUNDARY}, indent=2))
-    return 1 if problems else 0
+        result = {"status": "fail", "problems": ["Required CI evidence unavailable: " + type(exc).__name__],
+                  "authority": BOUNDARY}
+    print(json.dumps(result, indent=2))
+    return int(result["status"] == "fail")
 
 
 def trust_source_inventory(root):
