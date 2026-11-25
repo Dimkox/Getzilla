@@ -2,30 +2,30 @@
 
 Use this page for the simple path. It gives you a local candidate and evidence. It does not merge, deploy, publish, or grant production authority.
 
-**Version boundary.** This page describes the unpublished **2.3.1 source candidate**. The installer commands below deliberately install published **v2.3.0**. For that release, use its [versioned quickstart](https://github.com/Dimkox/Getzilla/blob/v2.3.0/QUICKSTART.md). Source additions such as the light lane and `getzilla test-tools` are available only in a source installation that contains them.
+These commands install the published [Getzilla v2.3.1 release](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.1).
 
 **One-command install.** These installers add whatever is missing (Git, Python 3.10+, your coding agent: Qwen Code by default, or Codex, Claude Code, Gemini CLI, GitHub Copilot CLI, Grok Build), point the agent at its models (OpenRouter with your own key from https://openrouter.ai/keys by default, or the agent's own sign-in), download Getzilla to `~/Getzilla` (override with `GETZILLA_HOME`) and run the health check. They change nothing in your projects; set `GETZILLA_PROJECT` to also print the read-only plan for an existing project, or `GETZILLA_NEW_PROJECT` to create a new project at that path. Both installers, and the engine and hooks they install, run natively on Windows, Linux and macOS.
 
 ```powershell
 # Windows: winget when available (installed from github.com/microsoft/winget-cli when missing, e.g. on Windows 10), otherwise official per-user downloads (no admin rights needed)
 $f = Join-Path $env:TEMP 'getzilla-install.ps1'
-Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.0/scripts/install.ps1 -OutFile $f
-if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '4D89D8C77617FF3B262BBF8866F05E1A14D9FB45C6BA2C3C39E298AF9A499B76') { $env:GETZILLA_REF = 'v2.3.0'; Invoke-Expression (Get-Content -Raw $f) } else { throw 'install.ps1 SHA-256 mismatch: do not run it' }
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.1/scripts/install.ps1 -OutFile $f
+if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '2D61A5EFA2267E07BE4F61016ACC99D29D3FFAFF0588D4D4B2EA171DD14FF5CF') { $env:GETZILLA_REF = 'v2.3.1'; Invoke-Expression (Get-Content -Raw $f) } else { throw 'install.ps1 SHA-256 mismatch: do not run it' }
 ```
 
 ```bash
 # Linux (apt, dnf, yum, pacman, zypper, apk)
-curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.0/scripts/install.sh
-echo "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807  getzilla-install.sh" | sha256sum -c - && GETZILLA_REF=v2.3.0 bash getzilla-install.sh
+curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.1/scripts/install.sh
+echo "8ce2a62a057a75f4c38017bf58d11be293d65e46815d5b6c1cea604c69b86b62  getzilla-install.sh" | sha256sum -c - && GETZILLA_REF=v2.3.1 bash getzilla-install.sh
 ```
 
 ```bash
 # macOS (Homebrew or Command Line Tools)
-curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.0/scripts/install.sh
-echo "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807  getzilla-install.sh" | shasum -a 256 -c - && GETZILLA_REF=v2.3.0 bash getzilla-install.sh
+curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.1/scripts/install.sh
+echo "8ce2a62a057a75f4c38017bf58d11be293d65e46815d5b6c1cea604c69b86b62  getzilla-install.sh" | shasum -a 256 -c - && GETZILLA_REF=v2.3.1 bash getzilla-install.sh
 ```
 
-The installer is verified before it runs: the commands download it from the `v2.3.0` release tag, compare its SHA-256 with the digest published here (the test suite keeps this digest equal to the shipped `scripts/install.sh` / `scripts/install.ps1`), run it only when the digest matches (the check and the run are one command, so a failed check stops it), and install Getzilla from the same tag. Never pipe the installer straight into `bash` or `iex`. If the check fails, do not run the file: re-download it and report the mismatch.
+The installer is verified before it runs: the commands download it from the `v2.3.1` release tag, compare its SHA-256 with the digest published here (the test suite keeps this digest equal to the shipped `scripts/install.sh` / `scripts/install.ps1`), run it only when the digest matches (the check and the run are one command, so a failed check stops it), and install Getzilla from the same tag. Never pipe the installer straight into `bash` or `iex`. If the check fails, do not run the file: re-download it and report the mismatch.
 
 Without a terminal to ask in, the installers use `GETZILLA_AGENT` (`qwen` default, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter` default, `native`), `GETZILLA_MODEL` and `OPENROUTER_API_KEY`. The key becomes the user environment variable `OPENROUTER_API_KEY` (and `ANTHROPIC_AUTH_TOKEN` for Claude Code) that every agent reads: an owner-only `~/.getzilla/openrouter.env` sourced from your shell profiles on Linux/macOS, persistent user variables on Windows. Open a new terminal afterwards. `--forget-key` removes it. Minimum versions: Python 3.10, Node.js 20 (Qwen Code, Codex), PowerShell 7.4 on Windows (the installer adds it). Re-run the setup any time with `python3 scripts/getzilla_setup_agent.py --agent <agent>`.
 
