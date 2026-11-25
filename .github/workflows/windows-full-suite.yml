@@ -69,3 +69,13 @@ jobs:
               print(results[-1], flush=True)
           passed = sum(1 for line in results if ": ok " in line)
           print(f"::notice title=windows-modules {passed}/{len(results)} pass::" + " | ".join(results)[:20000])
+
+  dind-upstream:
+    name: Check official rootless Docker image digests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash trust-ci/scripts/check-upstream-dind.sh
