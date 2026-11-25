@@ -29,12 +29,12 @@ class ImageComponentTests(unittest.TestCase):
         return security_oci
 
     def observe(self, layers):
-        from getzilla import security_image_licenses as license_api
+        from getzilla import security_image_components as components
 
         api = self.api()
         inv, cat = self.image(layers)
         with api.import_layouts(cat, inv, self.profile, self.stage) as images:
-            result = license_api.observe_components(images[0])
+            result = components.observe_components(images[0])
             return result.document()
 
     def debian(self):
@@ -48,22 +48,15 @@ class ImageComponentTests(unittest.TestCase):
             ("usr/share/doc/tiny/copyright", COPY),
         ]
 
-    def test_actual_dpkg_component_hash_and_complete_terms(self):
+    def test_actual_dpkg_component_hash_without_license_evidence(self):
         value = self.observe([self.debian()])
         self.assertEqual(value["unresolved"], [])
         self.assertTrue(value["complete"])
         c = value["components"][0]
         self.assertEqual(c["id"], "deb:tiny:amd64@1")
-        self.assertEqual(c["expression"], "MIT")
+        self.assertNotIn("expression", c)
         self.assertEqual(c["files"][0]["sha256"], hashlib.sha256(b"\x7fELFtiny").hexdigest())
-        self.assertTrue(c["license_paths"])
-
-    def test_declared_mit_without_fulltext_is_unknown(self):
-        rows = self.debian()
-        rows[-1] = (rows[-1][0], COPY.split(b"Permission")[0])
-        value = self.observe([rows])
-        self.assertFalse(value["complete"])
-        self.assertIn("license-term-unproved", {x["code"] for x in value["unresolved"]})
+        self.assertNotIn("license_paths", c)
 
     def test_removed_software_is_not_historical_component(self):
         value = self.observe([self.debian(), [("usr/bin/.wh.tiny", b"")]])
@@ -113,31 +106,17 @@ class ImageComponentTests(unittest.TestCase):
         self.assertIn("python-record-mismatch", {x["code"] for x in value["unresolved"]})
 
     def test_observation_expires_and_caller_json_cannot_supply_files(self):
-        from getzilla import security_image_licenses as license_api
+        from getzilla import security_image_components as components
 
         a = self.api()
         inv, cat = self.image([self.debian()])
         with a.import_layouts(cat, inv, self.profile, self.stage) as images:
-            result = license_api.observe_components(images[0])
+            result = components.observe_components(images[0])
             self.assertTrue(result.document()["complete"])
         with self.assertRaises(ValueError):
             result.document()
         with self.assertRaises(ValueError):
-            license_api.observe_components({"complete": True})
-
-    def test_unrecognized_additional_terms_cannot_hide_behind_mit(self):
-        prefix = "opt/site-packages/"
-        rows = [
-            (
-                prefix + "thing-1.dist-info/METADATA",
-                b"Name: thing\nVersion: 1\nLicense-Expression: MIT\nLicense-File: LICENSE\nLicense-File: EXTRA\n",
-            ),
-            (prefix + "thing-1.dist-info/RECORD", b""),
-            (prefix + "thing-1.dist-info/licenses/LICENSE", MIT),
-            (prefix + "thing-1.dist-info/licenses/EXTRA", b"Extra restrictions apply."),
-        ]
-        value = self.observe([rows])
-        self.assertFalse(value["complete"])
+            components.observe_components({"complete": True})
 
     def test_nonexecutable_unowned_source_is_a_finite_software_gap(self):
         value = self.observe([[("app/main.py", b"print(1)\n")]])
@@ -149,13 +128,27 @@ class ImageComponentTests(unittest.TestCase):
         value = self.observe([rows])
         self.assertIn("unsupported-go-components", {x["code"] for x in value["unresolved"]})
 
+    def test_go_component_graph_round_trips_through_held_family_json(self):
+        from getzilla import security_image_components as components
+        api = self.api()
+        rows = self.debian()
+        rows[2] = (rows[2][0], b"\x7fELF\xff Go buildinf:installed")
+        index = {("gobinary", rows[2][0]): [("example/go-module", "v1.0.0", "")]}
+        inv, cat = self.image([rows])
+        with api.import_layouts(cat, inv, self.profile, self.stage) as images:
+            observation = components.observe_components(images[0], packages=(index, None))
+            doc = observation.document()
+            held = doc
+            self.assertIn(["example/go-module", "v1.0.0"], next(c["modules"] for c in held["components"] if c["kind"] == "go-binary"))
+            self.assertEqual(api.document(api.canonical(held)), held)
+
     def test_live_observation_cannot_survive_blob_tamper(self):
-        from getzilla import security_image_licenses as license_api
+        from getzilla import security_image_components as components
 
         a = self.api()
         inv, cat = self.image([self.debian()])
         with a.import_layouts(cat, inv, self.profile, self.stage) as images:
-            result = license_api.observe_components(images[0])
+            result = components.observe_components(images[0])
             image = images[0]
             target = image.layout / "blobs/sha256" / image.config_digest[7:]
             body = target.read_bytes()
@@ -164,12 +157,12 @@ class ImageComponentTests(unittest.TestCase):
                 result.document()
 
     def test_component_dictionary_mutation_does_not_change_observation(self):
-        from getzilla import security_image_licenses as license_api
+        from getzilla import security_image_components as components
 
         a = self.api()
         inv, cat = self.image([self.debian()])
         with a.import_layouts(cat, inv, self.profile, self.stage) as images:
-            result = license_api.observe_components(images[0])
+            result = components.observe_components(images[0])
             first = result.document()
             first["components"].clear()
             self.assertEqual(len(result.document()["components"]), 1)
@@ -213,38 +206,8 @@ class ImageComponentTests(unittest.TestCase):
             records=[dict(reference=ref, platform="linux/amd64", layout=str(self.layout))],
         )
 
-    def test_common_term_symlink_is_data_and_shared_by_two_components(self):
-        from getzilla import security_image_licenses as license_api
-
-        rows = self.debian()
-        rows[-1] = (
-            rows[-1][0],
-            b"Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n\nFiles: *\nCopyright: Example\nLicense: MIT\n See /usr/share/common-licenses/MIT\n",
-        )
-        rows[0] = (
-            rows[0][0],
-            rows[0][1] + b"Package: tiny2\nStatus: install ok installed\nVersion: 1\nArchitecture: amd64\n\n",
-        )
-        rows.extend([("var/lib/dpkg/info/tiny2.list", b"/usr/bin/tiny2\n"), ("usr/bin/tiny2", b"\x7fELFtwo")])
-        layers = [
-            [(p, b, 0o644) for p, b in rows]
-            + [
-                ("usr/share/doc/tiny2/copyright", "../tiny/copyright", "symlink"),
-                ("usr/share/common-licenses/MIT", "MIT-full", "symlink"),
-                ("usr/share/common-licenses/MIT-full", MIT, 0o644),
-            ]
-        ]
-        a = self.api()
-        inv, cat = self.linked_image(layers)
-        with a.import_layouts(cat, inv, self.profile, self.stage) as images:
-            document = license_api.observe_components(images[0]).document()
-            self.assertTrue(document["complete"])
-            self.assertEqual(len(document["components"]), 2)
-            for c in document["components"]:
-                self.assertIn("usr/share/common-licenses/MIT-full", [p["path"] for p in c["license_paths"]])
-
     def test_alias_cycle_does_not_follow_host_paths(self):
-        from getzilla import security_image_licenses as license_api
+        from getzilla import security_image_components as components
 
         layers = [
             [
@@ -260,7 +223,51 @@ class ImageComponentTests(unittest.TestCase):
         inv, cat = self.linked_image(layers)
         with a.import_layouts(cat, inv, self.profile, self.stage) as images:
             with self.assertRaisesRegex(ValueError, "Cyclic"):
-                license_api.observe_components(images[0])
+                components.observe_components(images[0])
+
+    def test_imported_component_facts_reuse_bytes_and_recheck_live_blobs(self):
+        from getzilla.security_image_components import _retain
+
+        api = self.api()
+        inv, cat = self.linked_image([
+            [("pkg/vendor.txt", b"first", 0o644), ("pkg/other", "pkg/vendor.txt", "hardlink")],
+            [("pkg/.wh.vendor.txt", b"", 0o644), ("pkg/vendor.txt", b"second", 0o644)],
+        ])
+        with api.import_layouts(cat, inv, self.profile, self.stage) as images:
+            expected = api.observe_final_files(images[0], _retain)
+        with api.import_layouts(cat, inv, self.profile, self.stage, index_components=True) as images:
+            image = images[0]
+            before = dict(image._budget.totals)
+            actual = api.observe_final_files(image, _retain)
+            self.assertEqual(actual, expected)
+            self.assertEqual(actual["pkg/other"]["body"], b"first")
+            self.assertEqual(image._budget.totals["entries"], before["entries"])
+            self.assertEqual(image._budget.totals["unpacked"], before["unpacked"])
+            actual["pkg/vendor.txt"]["body"] = b"modified"
+            self.assertEqual(api.observe_final_files(image, _retain), expected)
+            manifest = json.loads((image.layout / "blobs/sha256" / image.manifest_digest[7:]).read_bytes())
+            layer = image.layout / "blobs/sha256" / manifest["layers"][0]["digest"][7:]
+            layer.write_bytes(bytes(layer.stat().st_size))
+            with self.assertRaisesRegex(api.OCIError, "blob changed"):
+                api.observe_final_files(image, _retain)
+
+    def test_component_cache_bound_falls_back_and_cache_hit_keeps_proof_limit(self):
+        from unittest.mock import patch
+        from getzilla.security_image_components import _retain
+
+        api = self.api()
+        inv, cat = self.image([[("vendor.txt", b"abc")]])
+        with patch.object(api, "_COMPONENT_CACHE_BYTES", 1):
+            with api.import_layouts(cat, inv, self.profile, self.stage, index_components=True) as images:
+                image = images[0]
+                before = image._budget.totals["entries"]
+                self.assertEqual(api.observe_final_files(image, _retain)["vendor.txt"]["body"], b"abc")
+                self.assertEqual(image._budget.totals["entries"], before + 1)
+        with api.import_layouts(cat, inv, self.profile, self.stage, index_components=True) as images:
+            image = images[0]
+            image._budget._component_proof_bytes = api._COMPONENT_PROOFS_TOTAL
+            with self.assertRaisesRegex(api.OCIError, "proof exceeds bound"):
+                api.observe_final_files(image, _retain)
 
     def test_shared_proof_counter_enforces_limit_before_body_read(self):
         a = self.api()
@@ -271,19 +278,13 @@ class ImageComponentTests(unittest.TestCase):
                 a.observe_final_files(images[0], lambda p: True)
 
     def test_opaque_whiteout_keeps_same_layer_new_final_data(self):
-        from getzilla import security_image_licenses as license_api
+        from getzilla import security_image_components as components
 
         rows = self.debian()
         a = self.api()
         inv, cat = self.image([rows, [("usr/share/doc/tiny/.wh..wh..opq", b""), rows[-1]]])
         with a.import_layouts(cat, inv, self.profile, self.stage) as images:
-            self.assertTrue(license_api.observe_components(images[0]).document()["complete"])
-
-    def test_source_only_copyright_globs_do_not_choose_binary_license(self):
-        rows = self.debian()
-        rows[-1] = (rows[-1][0], COPY + b"\nFiles: docs/*\nCopyright: Other\nLicense: custom\n Full custom terms.\n")
-        value = self.observe([rows])
-        self.assertIn("dpkg-binary-license-scope", {v["code"] for v in value["unresolved"]})
+            self.assertTrue(components.observe_components(images[0]).document()["complete"])
 
     def test_cpython_umbrella_does_not_close_bundled_extensions(self):
         value = self.observe(
@@ -294,7 +295,7 @@ class ImageComponentTests(unittest.TestCase):
                 ]
             ]
         )
-        self.assertIn("cpython-bundled-terms-unproved", {v["code"] for v in value["unresolved"]})
+        self.assertEqual(value["unresolved"], [])
         self.assertEqual(len(value["components"]), 1)
 
     def test_vendor_component_catalog_is_not_repeated_for_each_distribution(self):
@@ -346,15 +347,31 @@ class ImageComponentTests(unittest.TestCase):
             self.assertEqual(final["usr/share/doc/tiny/copyright"]["sha256"], hashlib.sha256(MIT).hexdigest())
 
     def test_retained_proof_bytes_are_actual_and_expire_with_live_context(self):
-        from getzilla import security_image_licenses as license_api
+        from getzilla import security_image_components as components
 
         a = self.api()
         inv, cat = self.image([self.debian()])
         with a.import_layouts(cat, inv, self.profile, self.stage) as images:
-            result = license_api.observe_components(images[0])
+            result = components.observe_components(images[0])
             proof = result.proof_files()
-            self.assertEqual(proof["usr/share/doc/tiny/copyright"], COPY)
+            self.assertNotIn("usr/share/doc/tiny/copyright", proof)
+            self.assertEqual(proof["var/lib/dpkg/status"], self.debian()[0][1])
             proof.clear()
             self.assertTrue(result.proof_files())
         with self.assertRaises(ValueError):
             result.proof_files()
+
+    def test_whiteout_cannot_supply_removed_lower_hardlink_target(self):
+        api = self.api()
+        inventory, catalog = self.linked_image(
+            [
+                [("usr/share/common-licenses/MIT", MIT, 0o644)],
+                [
+                    ("usr/share/doc/tiny/copyright", "usr/share/common-licenses/MIT", "hardlink"),
+                    ("usr/share/common-licenses/.wh.MIT", b"", 0o644),
+                ],
+            ]
+        )
+        with api.import_layouts(catalog, inventory, self.profile, self.stage) as images:
+            with self.assertRaises(ValueError):
+                api.observe_final_files(images[0], lambda path: True)

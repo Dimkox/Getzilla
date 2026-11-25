@@ -1,5 +1,7 @@
 # Getzilla Factory M4-M8 control/evaluation and L5 landing runtime
 
+Factory downloads `postgres:17-alpine@sha256:e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8` from Docker Hub. The image publisher distributes it under its component licenses, including GPL-2.0-only for BusyBox.
+
 ## Run one local coding task
 
 `run-local` executes an explicitly selected client in a new detached Git worktree,

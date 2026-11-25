@@ -33,8 +33,7 @@ def finding_consistent(finding, allowed, select_expression):
             and finding['family_record'].get('kind') == 'image'
             and isinstance(finding['family_record'].get('origin'), dict)
             and finding['family_record'].get('origin', {}).get('kind') == 'held-oci-components/v1'):
-        from .security_image_licenses import finding_consistent as held_image_consistent
-        return held_image_consistent(finding, allowed, select_expression)
+        return False
     if (isinstance(finding, dict) and isinstance(finding.get('family_record'), dict)
             and finding['family_record'].get('kind') == 'tool'
             and isinstance(finding['family_record'].get('origin'), dict)

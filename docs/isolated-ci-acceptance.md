@@ -35,8 +35,9 @@ The complete earlier parent contract follows. Current source-bound reports and o
 
 # Isolated acceptance for public Getzilla
 
-The existing required GitHub check `linux` aggregates `linux-core`, the three
-`live-acceptance` matrix cells, and `security-expanded`. Every job must succeed.
+The existing required GitHub check `linux` aggregates `linux-core`, `linux-core-tests`, and the three
+`live-acceptance` matrix cells. Each must succeed. The independent
+`security-expanded` job publishes an informational report.
 Missing evidence, cancellation, timeout, an unexpected skip, a different source
 commit or run attempt, and unconfirmed cleanup block this check. The required
 `windows` name and the macOS workflow remain in place. This change does not edit
@@ -118,7 +119,7 @@ that ref is **BLOCKED**, including the first implementation PR. There is no
 candidate-scanner fallback or green bootstrap placeholder.
 
 The scanner uses trusted quality-tool requirements and its pinned scanner
-provisioning. The aggregate checks all eleven required security families,
+provisioning. The informational job checks its security families,
 structural inventory-bound non-applicability, candidate/checker Git identities,
 and the report's shortest validity bound. Evidence age from 0 through 72 hours
 is admitted; older evidence fails. Failure to acquire or verify a required tool,

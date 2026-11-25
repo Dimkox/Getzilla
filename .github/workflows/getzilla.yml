@@ -310,6 +310,24 @@ jobs:
         id: node_profile_admission
         if: success() && steps.source_checkout.outcome == 'success' && steps.node_runtime.outcome == 'success'
         run: python -m unittest tests.test_skill_sandbox.BmadDependencyGraft.test_synthetic_cjs_esm_load_and_all_input_mounts_are_read_only
+      - name: Scan changed source files for secrets
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          sys.path.insert(0, ".getzilla")
+          from getzilla.security_tools import native_secret_observations
+          base = os.environ["GETZILLA_BASE_SHA"]
+          head = os.environ["GETZILLA_EXPECTED_HEAD"]
+          command = ["git", "ls-files", "-z"] if base == "0" * 40 else [
+              "git", "diff", "--name-only", "-z", "--diff-filter=ACMRT", f"{base}...{head}", "--"]
+          paths = [os.fsdecode(p) for p in subprocess.check_output(command).split(b"\0") if p]
+          result = native_secret_observations(Path.cwd(), paths)
+          print(result["summary"])
+          sys.exit(result["outcome"] != "pass")
       - name: Known vulnerabilities in pinned dependencies (OSV)
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         run: python scripts/getzilla_vulns.py --online --db "$RUNNER_TEMP/getzilla-osv"
@@ -774,7 +792,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: [linux-core, linux-core-tests, live-acceptance, security-expanded]
+    needs: [linux-core, linux-core-tests, live-acceptance]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -792,13 +810,12 @@ jobs:
       - name: Download only evidence from this run and attempt
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          pattern: getzilla-*-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: getzilla-{linux-core,live-*}-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/required-evidence
       - name: Require all jobs and bound evidence before the existing linux check passes
         if: always()
         env:
           GETZILLA_NEEDS: ${{ toJSON(needs) }}
-          GETZILLA_OPERATOR_CHECKER: ${{ vars.GETZILLA_SECURITY_CHECKER_SHA }}
         run: python scripts/getzilla_ci_admission.py --artifacts "${{ runner.temp }}/required-evidence"
 
   windows:

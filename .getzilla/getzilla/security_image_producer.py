@@ -19,10 +19,9 @@ import tarfile
 import tempfile
 import time
 
-from .security_artifacts import read_file
+from .security_artifacts import ArtifactError, read_file
 from . import security_image_authority as authority
 from .security_image_authority import (  # noqa: F401 compatibility function/seal aliases
-    _LICENSE_ENTRY,
     _MEMBER_SEAL,
     ci_member_evidence,
     ci_use_observations,
@@ -185,9 +184,30 @@ def _choice_name(expression):
     return match[1] if match else None
 
 
+def registry_inputs(inventory):
+    # A selected local recipe gets its binding only from its completed BuildKit export.
+    keys = ("manifest", "line", "source_sha256", "source_reference")
+    local = {tuple(recipe[k] for k in keys) for recipe in inventory.get("builds", ())}
+    for use in inventory["images"]:
+        if use["source_reference"].startswith("compose-build:"):
+            if tuple(use[k] for k in keys) not in local:
+                raise BackendUnavailable("local output lacks its source recipe")
+        else:
+            yield use
+
+
+PG = "e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8"
+
+
+def require_factory_pin(rows, pins):
+    uses = [row["source_reference"] for row in rows if row["manifest"] == "factory/compose.yaml"]
+    if uses != ["postgres:17-alpine@sha256:" + PG] or pins["postgres"]["reference"] != "postgres@sha256:" + PG:
+        raise ValueError("Factory and the reviewed PostgreSQL server must use the same immutable image")
+
+
 @contextmanager
 def produce(root, source, run, volume, builder):
-    """Acquire actual source graphs and build four recipes covering five uses."""
+    """Acquire actual source graphs and build five recipes covering six uses."""
     if authority._LIVE is not None or type(builder) is not BuildKit:
         raise BackendUnavailable('nested build producer is forbidden')
     root, volume = Path(root), Path(volume)
@@ -201,15 +221,11 @@ def produce(root, source, run, volume, builder):
     ci = document(read_file(root, '.getzilla/config/ci-images.json', 65536))
     if ci.get('schema_version') != 1 or ci.get('platform') != 'linux/amd64':
         raise BackendUnavailable('current source CI base image declaration is unsupported')
+    require_factory_pin(raw_inventory['images'], ci)
     choices = {'TRUST_CI_POSTGRES_IMAGE': ci['postgres']['reference'], '${PYTHON_BASE_IMAGE}': ci['python']['reference']}
-    example = read_file(root, 'trust-ci/.env.example', 65536).decode()
-    dind = re.findall(r'^TRUST_CI_DIND_IMAGE=([a-z0-9:/._-]+)@sha256:REPLACE_WITH_DIND_DIGEST$', example, re.M)
-    if len(dind) != 1:
-        raise BackendUnavailable('current source lacks one explicit DIND tag declaration')
-    choices['TRUST_CI_DIND_IMAGE'] = dind[0]
     bindings, roots, resolved = [], {}, {}
     deferred = []
-    for use in raw_inventory['images']:
+    for use in registry_inputs(raw_inventory):
         expression = use['source_reference']
         name = _choice_name(expression)
         target = choices.get(expression, choices.get(name, expression))
@@ -225,11 +241,12 @@ def produce(root, source, run, volume, builder):
     build_count = len(build_inventory.get('builds', []))
     deferred_codes = {'unresolved-image', 'missing-image-source-selection', 'unused-image-source-selection'}
     refused = [gap for gap in build_inventory['gaps'] if gap['code'] not in deferred_codes]
-    if build_count != 5 or refused:
+    expected_services = {'api','migrate','worker','runner-image','postgres-integration','docker-engine'}
+    if (build_count != len(expected_services) or {r['service'] for r in build_inventory['builds']} != expected_services or refused):
         detail = refused[0]['code'] if refused else 'build-count'
         if refused and refused[0]['message'] == 'unresolved COPY source':
             detail += ': unresolved COPY source'
-        raise BackendUnavailable(f'local build inventory: expected 5, found {build_count}; '
+        raise BackendUnavailable(f'local build inventory: expected 6, found {build_count}; '
                                  f'{len(refused)} blocking gaps; first condition: {detail}')
     # The hard mounted volume contains every registry blob, context, cache and
     # output. Kernel ENOSPC refuses even while an untrusted build is running.
@@ -263,7 +280,7 @@ def produce(root, source, run, volume, builder):
             completed[recipe['build_sha256']] = reference
             by_service[recipe['service']] = reference
             bindings.append(_binding(recipe, reference, recipe['platform']))
-    built_choices = {'TRUST_CI_API_IMAGE': by_service['api'], 'TRUST_CI_WORKER_IMAGE': by_service['worker'],
+    built_choices = {'TRUST_CI_DIND_IMAGE': by_service['docker-engine'], 'TRUST_CI_API_IMAGE': by_service['api'], 'TRUST_CI_WORKER_IMAGE': by_service['worker'],
         'TRUST_CI_RUNNER_IMAGE': by_service['runner-image'], 'TRUST_CI_RUNNER_BUILD_TAG': by_service['runner-image'],
         'TRUST_CI_TEST_BUILD_TAG': by_service['postgres-integration']}
     for use in deferred:
@@ -283,7 +300,7 @@ def produce(root, source, run, volume, builder):
     # Validate the ORIGINAL catalog against independently recollected raw source
     # before any declaration projection. No producer success bypasses OCI checks.
     with ExitStack() as verified:
-        imported=verified.enter_context(import_layouts(catalog, inventory, profile, volume,_budget=shared_budget,measure_entries=True))
+        imported=verified.enter_context(import_layouts(catalog, inventory, profile, volume,_budget=shared_budget,measure_entries=True,index_components=True))
         from .public_security_context import selection_document, project_catalog
         from .public_security_context import _clock
         selection = selection_document(inventory, source, run, _clock().isoformat())
@@ -407,22 +424,57 @@ def _pipeline(request, volume, builder):
                            package_target=package_target)
             _event('declare')
             profile = cli.prepare_inputs(root, database, artifacts, tools, write_profile=True, **options)
-            from .security_license_scope import activate
-            with cli._preparation_step('license-run-scope'):
-                license_inputs=activate(root,profile,_entry=_LICENSE_ENTRY)
-            license_inputs.update(selection=selection,catalog=catalog)
-            cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))
+            cli._atomic(Path(request['report']).parent / 'security-run-inputs.json',
+                        canonical(dict(selection=selection, catalog=catalog)))
             cli._atomic(Path(request['profile']), canonical(profile))
             _event('prepare')
-            with cli._preparation_step('prepare-inputs'):
-                preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
-                                                 refresh=True, provision=True, **options)
+            from .security_oci import ImageSecurityRefusal
+            from .security_dind_exception import qualify
+            try:
+                state = authority._LIVE
+                state['dind_exception'] = qualify(root, state['declared_inventory'], Registry(deadline=builder.deadline))
+                with cli._preparation_step('prepare-inputs'):
+                    preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
+                                                     refresh=True, provision=True, **options)
+            except ArtifactError as error:
+                # Identify the checker source statements without exposing inputs, exception
+                # messages, URLs, local variables or host filesystem paths in diagnostics.
+                frames = []
+                frame = error.__traceback__
+                while frame is not None and len(frames) < 32:
+                    filename = Path(frame.tb_frame.f_code.co_filename)
+                    if filename.parent == Path(__file__).parent and re.fullmatch(r'security_[a-z_]+\.py', filename.name):
+                        frames.append([filename.name, frame.tb_lineno])
+                    frame = frame.tb_next
+                detail = dict(checker_frames=frames)
+                if hasattr(error, 'catalog_budget'):
+                    detail['catalog_budget'] = error.catalog_budget
+                cli._atomic(Path(request['report']).parent / 'package-refusal.json', canonical(detail))
+                raise
+            except ImageSecurityRefusal as error:
+                _event('evaluate')
+                # A known image CVE or an unproved PostgreSQL assessment is a hard
+                # refusal, including while the #456 infrastructure waiver exists.
+                report = dict(error.report, license_evaluation=cli.LICENSE_EVALUATION, qualification="UNVERIFIED", source=source, run=request['run'])
+                cli._atomic(Path(request['report']), canonical(report))
+                return report
+            finally:
+                if state.get('dind_cli_removal'):
+                    cli._atomic(Path(request['report']).parent / 'security-dind-cli.json',
+                                canonical(dict(state['dind_cli_removal'], module_scan=state.get('dind_cli_module_scan'))))
             with cli._preparation_step('prepare-result'):
                 cli._atomic(Path(request['preparation']), canonical(preparation))
                 if preparation.get('status') != 'prepared':
                     raise BackendUnavailable('input preparation did not meet existing obligations')
             _event('evaluate')
             report = cli.evaluate(root, database, artifacts, tools, profile=profile, **options)
+            servers = list(state.get("postgresql_servers", {}).values())
+            if state.get("dind_cli_removal"):
+                report["dind_cli_removal"] = state["dind_cli_removal"]
+                cli._atomic(Path(request['report']).parent / 'security-dind-cli.json',
+                            canonical(dict(state['dind_cli_removal'], module_scan=state.get('dind_cli_module_scan'))))
+            if servers:
+                report["postgresql_servers"] = servers
             cli._atomic(Path(request['report']), canonical(report))
             # Both reports retain UNVERIFIED/fail when ordinary obligations fail.
             # Build completion never changes scanner/finalizer outcome.
@@ -592,7 +644,7 @@ def _offline_tool_control(request, volume):
                 raise BackendUnavailable('scratch COPY control did not retain owned marker bytes')
         if tool == 'trivy':
             output = volume / 'trivy-consumer.json'
-            command = [str(volume / 'pinned-trivy'), 'image', '--scanners', 'license', '--offline-scan',
+            command = [str(volume / 'pinned-trivy'), 'image', '--scanners', 'secret', '--offline-scan',
                 '--skip-db-update', '--skip-java-db-update', '--skip-version-check', '--format', 'json',
                 '--input', str(image.layout) + '@' + image.manifest_digest, '--output', str(output)]
             code, _, stderr = _run_capped(command, cwd=volume, env={'PATH': os.defpath, 'HOME': str(volume),
@@ -601,7 +653,7 @@ def _offline_tool_control(request, volume):
             if code:
                 from .security_image_backend import _diagnostic
                 raise BackendUnavailable('pinned offline Trivy consumer refused', detail=dict(
-                    phase='trivy-consumer', command_id='trivy-license-only', exit_code=code, errno=None,
+                    phase='trivy-consumer', command_id='trivy-offline-control', exit_code=code, errno=None,
                     stderr=_diagnostic(stderr)))
             report = document(read_file(volume, output.name, 16 * 1024 * 1024))
             from .security_oci import scanner_identity

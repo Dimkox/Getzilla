@@ -1,4 +1,10 @@
 services:
+  docker-engine:
+    build:
+      context: ./dind
+      dockerfile: Dockerfile
+    platform: linux/amd64
+
   migrate:
     build:
       context: .

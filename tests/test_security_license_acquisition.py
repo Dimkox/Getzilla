@@ -95,6 +95,16 @@ class AcquisitionTests(unittest.TestCase):
             self.acquire()
         self.assertFalse((self.root / 'manifest.json').exists())
 
+    def test_shared_catalog_overflow_reports_charges_and_keeps_manifest_unpublished(self):
+        record = {'kind': 'image', 'acquired_at': NOW.isoformat()}
+        with mock.patch.object(acquisition, 'artifact_identity', return_value='test-image'), \
+                mock.patch.object(acquisition, 'family_evidence', return_value={'bound_bytes': 11}), \
+                self.assertRaises(ArtifactError) as refused:
+            self.acquire(families=[record], byte_budget=10)
+        self.assertEqual(refused.exception.catalog_budget, dict(limit=10, total=11, frontier=0,
+                         families={'image': 11}, last_family='image', last_bytes=11))
+        self.assertFalse((self.root / 'manifest.json').exists())
+
     def test_transitive_requirements_are_not_claimed_resolved_by_direct_pin_download(self):
         self.payload = wheel(requires=['transitive>=1'])
         self.acquire()

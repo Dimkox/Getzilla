@@ -97,8 +97,26 @@ class SandboxSpec:
     # /vulndb so the network-less runner can check known vulnerabilities.
     vulnerability_db_host_path: str | None = None
 
+    runner_manifest_digest: str | None = None
+    runner_config_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.runner_manifest_digest is None and self.runner_config_digest is None and '@' in self.image:
+            return
+        for digest in (self.runner_manifest_digest, self.runner_config_digest):
+            if not isinstance(digest, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+                raise PolicyError('runner requires an exact manifest and config digest pair')
+        if '@' in self.image:
+            matches = self.image.rsplit('@', 1)[1] == self.runner_manifest_digest
+        else:
+            matches = self.image == self.runner_config_digest
+        if not matches:
+            raise PolicyError('sandbox image conflicts with the runner digest pair')
+
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> 'SandboxSpec':
+        if data.get('pull', 'never') != 'never':
+            raise PolicyError('sandbox pull policy must be never')
         runtime = str(data.get('runtime', '')).strip()
         if runtime not in {'docker', 'podman'}:
             raise PolicyError('sandbox runtime must be docker or podman; host execution is forbidden')
@@ -129,12 +147,16 @@ class SandboxSpec:
             pids_limit=pids_limit,
             tmpfs_mb=tmpfs_mb,
             vulnerability_db_host_path=vulnerability_db,
+            runner_manifest_digest=data.get('runner_manifest_digest'),
+            runner_config_digest=data.get('runner_config_digest'),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             'runtime': self.runtime,
             'image': self.image,
+            **({'runner_manifest_digest': self.runner_manifest_digest,
+                'runner_config_digest': self.runner_config_digest} if self.runner_config_digest else {}),
             'user': self.user,
             'memory_mb': self.memory_mb,
             'cpus': self.cpus,

@@ -16,7 +16,7 @@ import yaml
 W = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(W / '.getzilla'))
 from getzilla import architecture_fitness as fitness
-from getzilla import security_corresponding_source, security_license_scope, security_python_target  # noqa: F401 preloaded before the I/O guard
+from getzilla import security_corresponding_source, security_python_target  # noqa: F401 preloaded before the I/O guard
 from getzilla import security_inventory as inventory
 from getzilla import security_cli as cli
 from getzilla import security_tools as tools
@@ -226,9 +226,8 @@ class Closed393InputTests(unittest.TestCase):
                 with self.subTest(consumer=function.__name__), self.assertRaises(BeforeProducer):
                     self.owned(lambda: function(Path('/owned'),environ=env))
                 self.assertEqual(calls[-1],uses)
-            with self.assertRaises(BeforeProducer):
+            with self.assertRaisesRegex(expanded.SecurityDataError, 'unsupported security data source'):
                 self.owned(lambda: expanded.validate_data_source(binding,root=Path('/owned'),environ=env))
-            self.assertEqual(calls[-1],uses)
 
     def test_invalid_selection_field_types_have_closed_refusal(self):
         row = dict(path='compose.yaml',line=1,source_sha256='a'*64,expression='${OWNED_IMAGE}',

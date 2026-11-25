@@ -340,6 +340,15 @@ def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, imag
     return results + refresh_image_database(tools, now=now)
 
 
+def trivy_options(scratch):
+    # The pinned CLI treats an empty --config value as an unreadable filename.
+    # Both files are in the private scanner scratch directory, outside the source.
+    config, ignore = scratch / "trivy.yaml", scratch / "empty.trivyignore"
+    config.write_bytes(b"{}\n")
+    ignore.write_bytes(b"")
+    return ["--config", str(config), "--ignorefile", str(ignore)]
+
+
 def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
     """Explicit DB-only refresh; separate from local OCI import and image pulls."""
     results = []
@@ -349,7 +358,7 @@ def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
         scratch = Path(directory)
         try:
             command = [str(trivy), 'image', '--download-db-only', '--db-repository', TRIVY_DB_URL,
-                       '--cache-dir', str(tools / 'cache'), '--config', '', '--quiet', '--skip-version-check']
+                       '--cache-dir', str(tools / 'cache'), *trivy_options(scratch), '--quiet', '--skip-version-check']
             result = _process(command, scratch, scratch)
             if result.returncode != 0:
                 raise SecurityDataError('Trivy database acquisition failed')
@@ -429,7 +438,7 @@ def scan_layouts(inventory: dict, tools: Path, *, binding: dict, now=None, proce
                 # Reserve the largest accepted report before the isolated port writes it.
                 budget.charge('storage', MAX_REPORT)
                 command = [str(trivy), 'image', '--input', input_name, '--scanners', 'vuln',
-                    '--cache-dir', str(tools / 'cache'), '--config', '', '--ignorefile', '',
+                    '--cache-dir', str(tools / 'cache'), *trivy_options(scratch),
                     '--offline-scan', '--skip-db-update', '--skip-java-db-update', '--skip-check-update',
                     '--skip-version-check', '--show-suppressed', '--list-all-pkgs', '--parallel', '1',
                     '--max-image-size', str(min(retained['profile']['max_unpacked_bytes'], 256 * 1024 * 1024)),
@@ -463,7 +472,32 @@ def scan_layouts(inventory: dict, tools: Path, *, binding: dict, now=None, proce
             'data_sources': []}
 
 
+def _component_coverage(report, image, inventory, tools, trivy, pages):
+    from . import security_image_authority as authority
+    from .security_image_components import observe_components
+    from .security_image_package_coverage import package_evidence
+
+    if image is None:
+        raise SecurityDataError('Installed component coverage requires exact offline OCI bytes')
+    state = authority._LIVE
+    source_root = None
+    if state is not None:
+        held = state['images'].get(image.reference)
+        if (state['native_guard'] is not authority._GUARD or authority._GUARD is None
+                or state['declared_inventory'] != inventory or held is None
+                or (held.manifest_digest, held.config_digest, held.platform) !=
+                   (image.manifest_digest, image.config_digest, image.platform)):
+            raise SecurityDataError('Component scan differs from the owned image graph')
+        image, source_root = held, state['root']
+    packages = package_evidence(report, image, tools, trivy)
+    observed = observe_components(image, source_root=source_root, packages=packages, advisory_pages=pages).document()
+    if state is not None and 'postgresql_server' in observed:
+        state.setdefault('postgresql_servers', {})[image.manifest_digest] = observed['postgresql_server']
+    return [dict(gap, manifest=image.manifest_digest) for gap in observed['unresolved']]
+
+
 def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
+    from .security_oci import ImageSecurityRefusal
     env = os.environ if environ is None else environ
     tools = tools_directory(TRUSTED_ROOT, env)
     if not env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS') and ((tools / 'oci/manifest.json').exists() or (tools / 'oci/manifest.json').is_symlink()):
@@ -479,6 +513,7 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
         return {'outcome':'blocked', 'summary':'declared images require verified offline OCI artifacts',
                 'findings':[], 'gaps':[{'code':'unqualified-image-selection'}], 'images':[], 'data_sources':[]}
     results, gaps, findings = [], [], []
+    source = None
     try:
         trivy = pinned_tool('trivy', tools)
         source = trivy_database_source(tools, now=now)
@@ -497,6 +532,7 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                 imported = nullcontext([])
             with imported as images:
                 verified = {image.reference: image for image in images}
+                pages = {}
                 for index, item in enumerate(inventory['images']):
                     reference = item['reference']
                     if not _DIGEST_IMAGE.fullmatch(reference):
@@ -509,7 +545,7 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                     input_args = (['--input', str(image.layout) + '@' + image.manifest_digest] if image is not None
                                   else ['--image-src', 'docker'])
                     command = [str(trivy), 'image', '--scanners', 'vuln', *input_args,
-                               '--cache-dir', str(tools / 'cache'), '--config', '', '--ignorefile', '',
+                               '--cache-dir', str(tools / 'cache'), *trivy_options(scratch),
                                '--offline-scan', '--skip-db-update', '--skip-java-db-update', '--skip-check-update',
                                '--skip-version-check', '--show-suppressed', '--list-all-pkgs', '--parallel', '1',
                                '--max-image-size', '2GB', '--format', 'json', '--output', str(report_path),
@@ -518,14 +554,20 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                                       timeout=image.remaining_seconds() if image is not None else 900)
                     if result.returncode != 0:
                         raise SecurityDataError('Trivy image process did not complete successfully')
-                    parsed = image_report(_process_report(report_path, result), reference, expected_image_id=item.get('image_id'), verified_oci=image)
-                    findings.extend(parsed['findings'])
-                    results.append({'image': reference, **parsed})
+                    raw_report = _process_report(report_path, result)
+                    parsed = image_report(raw_report, reference, expected_image_id=item.get('image_id'), verified_oci=image)
+                    from . import security_dind_exception as dind
+                    blocking, accepted = dind.partition(parsed['findings'], image, inventory, now or datetime.now(timezone.utc))
+                    findings.extend(blocking)
+                    try:
+                        gaps.extend(_component_coverage(raw_report, image, inventory, tools, trivy, pages))
+                    except ImageSecurityRefusal as exc:
+                        gaps.append(exc.report)
+                    results.append({'image': reference, **parsed, 'accepted_evidence': accepted})
         if trivy_database_source(tools, now=now) != source:
             raise SecurityDataError('Trivy database changed during scanning')
     except (OSError, ValueError, RuntimeError) as exc:
         gaps.append({'code': 'image-scan-unavailable', 'message': str(exc)})
-        source = None
     return {'outcome': 'blocked' if gaps else ('finding' if findings else 'pass'),
             'summary': f'{len(results)} image scans; {len(findings)} findings; {len(gaps)} gaps',
             'findings': findings, 'gaps': gaps, 'images': results,
@@ -797,7 +839,7 @@ def scan_source(root: Path, inventory: dict, *, environ=None, trusted_root: Path
                     command = [sys.executable, '-I', '-m', 'bandit', '-c', str(bandit_config),
                                '--ignore-nosec', '-q', '-f', 'json', '-o', str(output), '--', *files]
                 else:
-                    command = [str(pinned_tool('trivy', tools)), 'config', '--config', '', '--ignorefile', '',
+                    command = [str(pinned_tool('trivy', tools)), 'config', *trivy_options(scratch),
                                '--skip-check-update', '--skip-version-check', '--include-non-failures',
                                '--format', 'json', '--output', str(output), '.']
                 # Only these tools define exit 1 as findings. Trivy config has

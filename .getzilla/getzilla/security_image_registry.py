@@ -19,6 +19,7 @@ import urllib.request
 
 from .security_oci import INDEX_MEDIA, MANIFEST_MEDIA, LIMITS, active_limits, _descriptor, _index_children, OPAQUE_ATTESTATION, canonical, document
 
+DOCKER_CATALOG = 'https://raw.githubusercontent.com/docker-library/official-images/master/library/docker'
 _ORIGINS = {'registry-1.docker.io', 'auth.docker.io', 'github.com'}
 # Docker's published pull CDN, not arbitrary redirects or authentication realms.
 _BLOB_CDN = {'production.cloudfront.docker.com'}
@@ -35,7 +36,7 @@ class RegistryError(ValueError):
 
 _FAULT_KEYS = {'version', 'category', 'phase', 'request_kind', 'origin', 'errno', 'http_status', 'command_id'}
 _FAULT_HOSTS = _ORIGINS | _BLOB_CDN | {'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'unknown'}
-_FAULT_CATEGORIES = {'request', 'dns', 'tls', 'http', 'timeout', 'os', 'protocol', 'bound', 'worker'}
+_FAULT_CATEGORIES = {'request', 'dns', 'tls', 'http', 'timeout', 'os', 'protocol', 'redirect-refused', 'bound', 'worker'}
 _FAULT_PHASES = {'registry-request', 'registry-connect', 'registry-headers', 'registry-body', 'registry-worker', 'registry-reply'}
 
 
@@ -101,6 +102,8 @@ class _Redirect(urllib.request.HTTPRedirectHandler):
         self.source = source
 
     def redirect_request(self, request, response, code, message, headers, url):
+        if self.source == DOCKER_CATALOG:
+            raise RegistryError('official DinD catalog redirect refused')
         source = urllib.parse.urlsplit(self.source)
         hosts = {source.hostname}
         if source.hostname == 'registry-1.docker.io' and '/blobs/sha256:' in source.path:
@@ -108,7 +111,8 @@ class _Redirect(urllib.request.HTTPRedirectHandler):
         if source.hostname == 'github.com':
             hosts |= {'release-assets.githubusercontent.com', 'objects.githubusercontent.com'}
         if not _url(url, hosts):
-            raise RegistryError('registry redirect leaves registered origins')
+            raise RegistryError('registry redirect leaves registered origins', detail=
+                                _request_fault(self.source, 'redirect-refused', 'registry-headers', status=code))
         result = super().redirect_request(request, response, code, message, headers, url)
         if urllib.parse.urlsplit(url).hostname != source.hostname:
             result.remove_header('Authorization')
@@ -118,7 +122,8 @@ class _Redirect(urllib.request.HTTPRedirectHandler):
 def _http(request, *, opener=None, clock=time.monotonic):
     """Worker stream reader: no whole-body read and no response decompression."""
     if (set(request) != {'url', 'headers', 'maximum', 'seconds'}
-            or not _url(request['url'], _ORIGINS) or type(request['maximum']) is not int
+            or not (_url(request['url'], _ORIGINS) or (request['url'] == DOCKER_CATALOG and request['headers'] == {} and request['maximum'] == 131072))
+            or type(request['maximum']) is not int
             or not 0 < request['maximum'] <= LIMITS['max_storage_bytes']
             or not isinstance(request['seconds'], (int, float)) or not 0 < request['seconds'] <= 30):
         raise RegistryError('invalid bounded registry request', category='request')

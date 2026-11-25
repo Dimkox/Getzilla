@@ -72,6 +72,23 @@ class RequestedImageMembersTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             read(image, ["site/pkg.dist-info/WHEEL"])
 
+    def test_replay_counts_import_member_and_component_headers_before_refusal(self):
+        from unittest.mock import patch
+        from getzilla.security_cli import _input_fault_detail
+
+        from getzilla import security_oci as api
+
+        inventory, catalog = self.image([[("LICENSE", b"owned"), ("file", b"x")]])
+        with patch.object(api, "_MAX_TAR_ENTRIES", 5):
+            with api.import_layouts(catalog, inventory, self.profile, self.stage) as images:
+                api.read_members(images[0], ["LICENSE"])
+                with self.assertRaises(api.OCIError) as refused:
+                    api.observe_final_files(images[0], lambda name: name == "LICENSE")
+                report = _input_fault_detail(api.bound_fault(refused.exception))
+                self.assertEqual(report["attempted"], 6)
+                self.assertEqual(report["reader"], "component")
+                self.assertEqual(report["header_counts"], {"import": 2, "member": 2, "component": 1})
+
     def test_whiteout_and_opaque_directory_remove_lower_license(self):
         for removal in ("site/pkg.dist-info/.wh.LICENSE", "site/pkg.dist-info/.wh..wh..opq"):
             with self.subTest(removal=removal):

@@ -223,7 +223,7 @@ class StructuralYamlInventoryTests(unittest.TestCase):
     def assert_incomplete(self, inventory):
         self.assertFalse(inventory['complete'], inventory)
         self.assertTrue(inventory['gaps'])
-        self.assert_required_blocked('security-inventory', 'security-container-images', 'security-licenses',
+        self.assert_required_blocked('security-inventory', 'security-container-images',
                                      'security-kev', 'security-epss', 'security-malicious-packages')
 
     def test_compose_block_flow_and_decoded_quoted_keys_have_the_same_image_obligations(self):
@@ -238,7 +238,7 @@ class StructuralYamlInventoryTests(unittest.TestCase):
                 self.assertTrue(inventory['complete'], inventory)
                 self.assertEqual([item['reference'] for item in inventory['images']], [IMAGE])
                 self.assertGreater(inventory['images'][0]['line'], 0)
-                self.assert_required_blocked('security-container-images', 'security-kev', 'security-epss', 'security-licenses')
+                self.assert_required_blocked('security-container-images', 'security-kev', 'security-epss')
 
     def test_compose_override_names_do_not_hide_the_same_structural_model(self):
         for path in ('docker-compose.override.yml', 'docker-compose.production.yaml', 'compose.override.yml'):
@@ -246,7 +246,7 @@ class StructuralYamlInventoryTests(unittest.TestCase):
                 inventory = self.fixture(path, f'services: {{db: {{image: "{IMAGE}"}}}}\n')
                 self.assertTrue(inventory['complete'], inventory)
                 self.assertEqual([item['reference'] for item in inventory['images']], [IMAGE])
-                self.assert_required_blocked('security-container-images', 'security-licenses')
+                self.assert_required_blocked('security-container-images')
 
     def test_actions_step_block_flow_and_quoted_keys_retain_tools(self):
         variants = [f'jobs:\n  scan:\n    steps:\n      - uses: {ACTION}\n',
@@ -258,7 +258,6 @@ class StructuralYamlInventoryTests(unittest.TestCase):
                 inventory = self.fixture('.github/workflows/check.yml', text)
                 self.assertTrue(inventory['complete'], inventory)
                 self.assertEqual([item['reference'] for item in inventory['tools']], [ACTION])
-                self.assert_required_blocked('security-licenses')
 
     def test_actions_job_container_string_object_and_service_images_are_inventoried(self):
         variants = [f'jobs:\n  scan:\n    container: {IMAGE}\n    steps: [{{run: echo ok}}]\n',
@@ -272,14 +271,14 @@ class StructuralYamlInventoryTests(unittest.TestCase):
                 inventory = self.fixture('.github/workflows/check.yml', text)
                 self.assertTrue(inventory['complete'], inventory)
                 self.assertEqual([item['reference'] for item in inventory['images']], [IMAGE])
-                self.assert_required_blocked('security-container-images', 'security-kev', 'security-epss', 'security-licenses')
+                self.assert_required_blocked('security-container-images', 'security-kev', 'security-epss')
 
     def test_docker_action_is_an_image(self):
         for reference in ('docker://' + IMAGE, 'docker://postgres:latest'):
             inventory = self.fixture('.github/workflows/check.yml', f'jobs: {{scan: {{steps: [{{uses: "{reference}"}}]}}}}\n')
             self.assertEqual([item['reference'] for item in inventory['images']], [reference.removeprefix('docker://')])
             self.assertEqual(inventory['complete'], reference.endswith('a' * 64))
-            self.assert_required_blocked('security-container-images', 'security-licenses')
+            self.assert_required_blocked('security-container-images')
 
     def test_reusable_or_local_actions_are_unresolved_composition(self):
         for reference in ('./.github/actions/local', './.github/workflows/reusable.yml',

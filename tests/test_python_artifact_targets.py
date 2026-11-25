@@ -20,7 +20,7 @@ from getzilla import security_image_authority as image_authority
 from getzilla import security_license_acquisition as acquisition, security_artifacts as artifacts
 from getzilla import security_licenses as licenses, security_cli as cli
 from getzilla import security_license_contracts as license_contracts
-from getzilla import security_image_producer as producer, expanded_security as expanded
+from getzilla import security_image_producer as producer
 
 NOW = datetime(2026, 11, 18, tzinfo=timezone.utc)
 MIT = json.loads((ROOT/'tests/fixtures/security-license-texts.json').read_bytes())['MIT']['text'].encode()
@@ -363,18 +363,13 @@ class PythonArtifactTargetTests(unittest.TestCase):
                 mock.patch.object(producer,'_pipeline_tools',return_value=self.root/'tools'), \
                 mock.patch.object(cli,'source_binding',return_value={}), \
                 mock.patch.object(cli,'validate_selection_authority'), \
-                mock.patch('getzilla.security_license_scope.activate',return_value={}) as activate, \
+                mock.patch.object(producer.authority, '_LIVE', {'declared_inventory': {}}), mock.patch('getzilla.security_dind_exception.qualify', return_value=False), \
                 mock.patch.object(cli,'prepare_inputs',side_effect=[{}, {'status':'prepared'}]) as prepare, \
                 mock.patch.object(cli,'evaluate',return_value={'status':'fail'}) as evaluate, \
                 mock.patch.object(cli,'_atomic'), redirect_stdout(io.StringIO()):
-            producer._pipeline(request,self.root,object())
-            activate.assert_called_once_with(self.root/'source',{},_entry=producer._LICENSE_ENTRY)
+            producer._pipeline(request,self.root,mock.Mock(deadline=1000))
             self.assertEqual([call.kwargs['package_target'] for call in prepare.call_args_list],[descriptor,descriptor])
             self.assertEqual(evaluate.call_args.kwargs['package_target'],descriptor)
-            expected=self.binding(dict(digest='a'*64))
-            profile=dict(source=expected['source'],run=expected['run'],inventory_sha256=expected['inventory_sha256'],
-                profile_sha256=expected['profile_sha256'],python_target=descriptor)
-            self.assertEqual(expanded._license_target({'GETZILLA_SECURITY_INPUT_PROFILE':json.dumps(profile)}),{'target_binding':expected})
 
     def test_current_target_cannot_clear_declared_factory_offline_delivery(self):
         target=self.target()

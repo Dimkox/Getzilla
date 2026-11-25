@@ -17,6 +17,9 @@ from getzilla import security_image_backend as native, security_oci as oci
 from getzilla.security_artifacts import ArtifactError
 
 
+REDACTION_MARKER = "PRIVATE_MARKER"
+
+
 class PreparationFaultControls(unittest.TestCase):
     def setUp(self):
         effects = ExitStack()
@@ -49,11 +52,11 @@ class PreparationFaultControls(unittest.TestCase):
                 raise error
         self.assertIs(caught.exception, error)
         self.assertEqual(cli._preparation_fault(error), detail)
-        self.assertNotIn('PRIVATE_MARKER', json.dumps(detail))
+        self.assertNotIn(REDACTION_MARKER, json.dumps(detail))
 
     def test_unsealed_unknown_or_malformed_facts_never_enter_fault(self):
         self.marked()
-        forged = ArtifactError('artifact-size', 'PRIVATE_MARKER')
+        forged = ArtifactError('artifact-size', REDACTION_MARKER)
         forged._getzilla_preparation = dict(stage='package-artifacts', error_kind='artifact', error_code='artifact-size', errno=None)
         self.assertEqual(cli._preparation_fault(forged), {})
         forged._getzilla_preparation = (None, dict(forged._getzilla_preparation))
@@ -66,35 +69,35 @@ class PreparationFaultControls(unittest.TestCase):
         with mock.patch.object(producer.os, 'write') as write:
             producer._fault(native_forged)
         self.assertNotIn('preparation', json.loads(write.call_args.args[1])['fault'])
-        for changes in (dict(secret='PRIVATE_MARKER'), dict(stage='PRIVATE_MARKER'),
-                        dict(error_kind='PRIVATE_MARKER'), dict(error_code='PRIVATE_MARKER'),
+        for changes in (dict(secret=REDACTION_MARKER), dict(stage=REDACTION_MARKER),
+                        dict(error_kind=REDACTION_MARKER), dict(error_code=REDACTION_MARKER),
                         dict(errno=True), dict(errno=2**100)):
             detail = dict(cli._preparation_fault(self.marked()), **changes)
             self.assertEqual(cli._preparation_detail(detail), {})
-        marked = self.marked(ArtifactError('PRIVATE_MARKER', 'PRIVATE_MARKER'))
+        marked = self.marked(ArtifactError(REDACTION_MARKER, REDACTION_MARKER))
         self.assertEqual(cli._preparation_fault(marked)['error_code'], 'other')
 
-    def test_actual_prepare_join_identifies_package_failure_and_stops_later_work(self):
+    def test_actual_prepare_join_identifies_feed_failure_and_stops_later_work(self):
         self.assertTrue(callable(getattr(cli, '_preparation_step', None)), 'missing closed preparation boundary')
-        error = ArtifactError('artifact-origin', 'PRIVATE_MARKER')
+        error = ArtifactError('artifact-origin', REDACTION_MARKER)
         inventory = dict(dependencies=[dict(ecosystem='PyPI')], tools=[], images=[], digest='a'*64)
         source = dict(owned='source')
         with ExitStack() as ports:
             for name, value in (('read_image_selection', None), ('collect_inventory', inventory),
                                 ('_policy_digest', 'a'*64), ('source_binding', source),
-                                ('validate_input_profile', {}), ('provision_tools', []), ('refresh_feeds', [])):
+                                ('validate_input_profile', {}), ('provision_tools', [])):
                 ports.enter_context(mock.patch.object(cli, name, return_value=value))
-            ports.enter_context(mock.patch.object(cli, 'acquire_pypi', side_effect=error))
+            ports.enter_context(mock.patch.object(cli, 'refresh_feeds', side_effect=error))
             later = ports.enter_context(mock.patch.object(cli, 'security_obligations'))
             with self.assertRaises(ArtifactError) as caught:
                 cli.prepare_inputs(self.root, self.root/'db', self.root/'artifacts', self.root/'tools',
                                    profile={}, refresh=True, provision=True)
         self.assertIs(caught.exception, error)
-        self.assertEqual(cli._preparation_fault(error)['stage'], 'package-artifacts')
+        self.assertEqual(cli._preparation_fault(error)['stage'], 'feeds')
         later.assert_not_called()
 
     def test_errno_and_existing_oci_bound_detail_survive_without_new_authority(self):
-        error = self.marked(PermissionError(13, 'PRIVATE_MARKER'), stage='profile-validation')
+        error = self.marked(PermissionError(13, REDACTION_MARKER), stage='profile-validation')
         self.assertEqual(cli._preparation_fault(error), dict(stage='profile-validation',
             error_kind='os', error_code=None, errno=13))
         profile = dict(oci.LIMITS, max_storage_bytes=1, images=[], platform='linux/amd64')
@@ -113,10 +116,10 @@ class PreparationFaultControls(unittest.TestCase):
         self.assertEqual(emitted['preparation'], fault['preparation'])
         self.assertEqual(emitted['attempted'], 2)
         with self.assertRaises(ValueError):
-            cli._input_fault_detail(dict(fault, secret='PRIVATE_MARKER'))
+            cli._input_fault_detail(dict(fault, secret=REDACTION_MARKER))
         with cli._preparation_step('feeds'):
             pass
-        self.assertEqual(cli._preparation_fault(RuntimeError('PRIVATE_MARKER')), {})
+        self.assertEqual(cli._preparation_fault(RuntimeError(REDACTION_MARKER)), {})
 
     def test_producer_and_public_refusal_forward_same_closed_observation(self):
         error = self.marked()
@@ -125,7 +128,7 @@ class PreparationFaultControls(unittest.TestCase):
         encoded = write.call_args.args[1]
         worker = json.loads(encoded)['fault']
         self.assertEqual(worker['preparation'], cli._preparation_fault(error))
-        self.assertNotIn('PRIVATE_MARKER', encoded.decode())
+        self.assertNotIn(REDACTION_MARKER, encoded.decode())
 
         def collect(process, diagnostic, state, **options):
             diagnostic.extend(encoded)
@@ -150,7 +153,7 @@ class PreparationFaultControls(unittest.TestCase):
 
     def test_actual_pipeline_prepare_publication_keeps_phase_and_original_refusal(self):
         self.assertTrue(callable(getattr(cli, '_preparation_step', None)))
-        error = PermissionError(13, 'PRIVATE_MARKER')
+        error = PermissionError(13, REDACTION_MARKER)
         request = dict(root=str(self.root/'source'), database=str(self.root/'db'),
             artifacts=str(self.root/'artifacts'), tools=str(self.root/'tools'),
             profile=str(self.root/'profile'), preparation=str(self.root/'preparation'),
@@ -166,11 +169,11 @@ class PreparationFaultControls(unittest.TestCase):
                 mock.patch.object(producer, '_pipeline_tools', return_value=self.root/'tools'), \
                 mock.patch.object(cli, 'source_binding', return_value={}), \
                 mock.patch.object(cli, 'validate_selection_authority'), \
-                mock.patch('getzilla.security_license_scope.activate',return_value={}), \
+                mock.patch.object(producer.authority, '_LIVE', {'declared_inventory': {}}), mock.patch('getzilla.security_dind_exception.qualify',return_value=False), \
                 mock.patch.object(cli, 'prepare_inputs', side_effect=[{}, {'status': 'prepared'}]), \
                 mock.patch.object(cli, '_atomic', side_effect=atomic), redirect_stdout(events):
             with self.assertRaises(PermissionError) as caught:
-                producer._pipeline(request, self.root, object())
+                producer._pipeline(request, self.root, mock.Mock(deadline=1000))
         self.assertIs(caught.exception, error)
         self.assertEqual(cli._preparation_fault(error)['stage'], 'prepare-result')
         self.assertEqual([json.loads(line)['stage'] for line in events.getvalue().splitlines()], ['declare', 'prepare'])
@@ -199,7 +202,7 @@ class PreparationFaultControls(unittest.TestCase):
                     if variant != 'stale':
                         value = copy.deepcopy(child)
                         if variant == 'unknown':
-                            value['fault']['preparation']['secret'] = 'PRIVATE_MARKER'
+                            value['fault']['preparation']['secret'] = REDACTION_MARKER
                         cli._atomic(output, oci.canonical(value))
                     return SimpleNamespace(returncode=1, terminal_state='timeout' if variant == 'timeout' else 'completed',
                         cleanup_error='owned cleanup' if variant == 'cleanup' else None)
@@ -216,4 +219,4 @@ class PreparationFaultControls(unittest.TestCase):
                     report = cli._supervised_preparation(args, {})
                 self.assertEqual(report.get('fault'), child['fault'] if variant == 'fresh' else None)
                 self.assertEqual((report['status'], report['qualification']), ('unavailable', 'UNVERIFIED'))
-                self.assertNotIn('PRIVATE_MARKER', json.dumps(report))
+                self.assertNotIn(REDACTION_MARKER, json.dumps(report))

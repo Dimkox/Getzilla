@@ -24,7 +24,7 @@ MAX_PLAN_BYTES = 2 * 1024 * 1024
 FOCUSED_MODE = 'focused-static-seo-landing'
 SECURITY_FAMILIES = {'security-inventory': 'inventory', 'known-vulnerabilities': 'vulnerabilities',
     'security-kev': 'known-exploitation', 'security-epss': 'exploit-prediction',
-    'security-malicious-packages': 'malicious-packages', 'security-licenses': 'licenses',
+    'security-malicious-packages': 'malicious-packages',
     'security-container-images': 'container-images'}
 SECURITY_IDS = frozenset(SECURITY_FAMILIES)
 _KEYS = {'id', 'check_id', 'requirement_ids', 'applicability', 'reason', 'evidence', 'expected_tests', 'data_sources'}

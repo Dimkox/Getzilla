@@ -21,7 +21,7 @@ from time import monotonic
 ADAPTER = '.getzilla/getzilla/security_corresponding_source.py'
 LEGAL = '.getzilla/config/license-exception-inputs/factory-source-delivery-v1/'
 # Reviewed engine constants, never loaded from candidate policy or environment.
-SURFACE_SHA256 = '8181af07747a003f16e76eba7b6b5acb933ad7e94c9ff372cb2dfa2a72dff2de'
+SURFACE_SHA256 = '9a56c9b4c412e5de66279501838c344853329f4ec6f96d5069a2542d57954cfa'
 CATALOG = {
     'certifi': ('2026.10.19', '55233d49508cbaedddaab023a20f446ec60616cf2b2923a17c75eb9fef44752d',
                 '64baf557a90ab3f2061ecf1f002dd65df65d86ea93e4eaa6d7c603ec650f14e2',

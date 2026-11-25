@@ -14,31 +14,17 @@ from pathlib import Path
 from typing import Any
 
 from .security_osv_snapshot import Dependency, VulnerabilityError, load_config, query_offline
-from .security_data import CVE_ID, SecurityDataError, osv_decision_ids, read_snapshot
+from .security_data import CVE_ID, SOURCE_URLS, SecurityDataError, osv_decision_ids, read_snapshot
 from .security_intelligence import IntelligenceError, enrich_findings, validate_epss, validate_kev
 from .security_inventory import canonical_digest, collect_inventory, read_image_selection, declared_inventory
 
 CHECK_FAMILIES = {
     'security-inventory': 'inventory', 'known-vulnerabilities': 'vulnerabilities',
     'security-kev': 'known-exploitation', 'security-epss': 'exploit-prediction',
-    'security-malicious-packages': 'malicious-packages', 'security-licenses': 'licenses',
+    'security-malicious-packages': 'malicious-packages',
     'security-container-images': 'container-images',
 }
 _SOURCE_FIELDS = ('source_id', 'source_url', 'content_sha256', 'payload_size', 'acquisition', 'coverage')
-
-
-def _license_target(environ):
-    env = os.environ if environ is None else environ
-    raw = env.get('GETZILLA_SECURITY_INPUT_PROFILE')
-    if raw is None:
-        return {}
-    from .security_artifacts import MAX_INDEX_BYTES
-    from .security_data import _json
-    from .security_python_target import binding
-    if type(raw) is not str or len(raw.encode()) > MAX_INDEX_BYTES:
-        raise SecurityDataError('Python artifact target input profile unavailable or excessive')
-    value = binding(_json(raw.encode()))
-    return {'target_binding':value} if value is not None else {}
 
 
 def _clock(now: datetime | None) -> datetime:
@@ -64,13 +50,7 @@ def _database_name(root: Path, database: Path) -> str:
 
 
 def _policy_digest(root: Path) -> str:
-    path = root / '.getzilla/config/license-policy.json'
-    if not path.exists():
-        return canonical_digest({'license_policy': 'absent', 'expanded_security_version': 1})
-    if path.is_symlink() or path.stat().st_size > 65536:
-        return canonical_digest({'license_policy': 'invalid', 'expanded_security_version': 1})
-    return canonical_digest({'license_policy_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-                             'expanded_security_version': 1})
+    return canonical_digest({'expanded_security_version': 2, 'checks': CHECK_FAMILIES})
 
 
 def _read_source(database: Path, source_id: str, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -154,17 +134,12 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
         from .security_python_target import source_pins,validate_target,closure_graphs
         package_pins=source_pins(root,inventory,validate_target(profile['python_target']))
         package_graphs=closure_graphs(root,inventory)
-    factory_inputs=None
-    if 'factory_inputs' in profile:
-        from .security_factory_inputs import declaration as factory_declaration
-        from .security_license_contracts import load_policy
-        factory_inputs=factory_declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=Path(roots['tools']))
     package_ci_uses=None
     if 'python_ci_uses' in profile:
         from .security_image_authority import ci_use_observations
         package_ci_uses=ci_use_observations(root,inventory,before,run,package_graphs)
     validate_input_profile(profile, before, inventory, roots, run, _policy_digest(TRUSTED_ROOT),
-                           now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
+                           now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
     if catalog is not None:
         validate_selection(catalog, inventory, profile['image_profile'])
     after, after_run = _selection_authority(root, env)
@@ -204,15 +179,8 @@ def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime |
         if trivy_database_source(tools_directory(root, environ), now=now) != binding:
             raise SecurityDataError('image database differs from the frozen required source')
         return True
-    if binding['source_id'] == 'artifact-license-catalog':
-        from .security_license_contracts import load_policy
-        env = os.environ if environ is None else environ
-        artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
-        inventory = selected_inventory(root, environ=env, now=now)
-        proof = artifact_catalog_source(inventory, artifacts, load_policy(policy_root or root), now=now, **_license_target(env))
-        if proof != binding:
-            raise SecurityDataError('license catalog differs from the frozen required source')
-        return True
+    if not isinstance(binding['source_id'], str) or binding['source_id'] not in SOURCE_URLS:
+        raise SecurityDataError('unsupported security data source')
     if not isinstance(binding['database'], str):
         raise SecurityDataError('invalid database binding')
     named = Path(binding['database'])
@@ -244,29 +212,17 @@ def security_obligations(root: Path, inventory: dict[str, Any] | None = None, *,
         except (OSError, ValueError, RuntimeError):
             descriptors['trivy-db'] = {'database': str(tools_path / 'cache/db/trivy.db'),
                                        'source_id': 'trivy-db', 'unavailable': True}
-    if dependencies or images or tools or unknown:
-        from .security_license_contracts import load_policy
-        env = os.environ if environ is None else environ
-        artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
-        try:
-            descriptors['artifact-license-catalog'] = artifact_catalog_source(
-                inventory, artifacts, load_policy(policy_root or root), now=current, **_license_target(environ))
-        except (OSError, ValueError, RuntimeError):
-            descriptors['artifact-license-catalog'] = {'database': str(artifacts.absolute()),
-                                                       'source_id': 'artifact-license-catalog', 'unavailable': True}
     applicability = {
         'security-inventory': True, 'known-vulnerabilities': bool(dependencies) or unknown,
         'security-kev': bool(dependencies or images) or unknown,
         'security-epss': bool(dependencies or images) or unknown,
         'security-malicious-packages': bool(dependencies) or unknown,
-        'security-licenses': bool(dependencies or images or tools) or unknown,
         'security-container-images': bool(images) or unknown,
     }
     image_sources = ['trivy-db'] if images else []
     feeds = {'known-vulnerabilities': source_ids, 'security-kev': ['kev', *source_ids, *image_sources],
              'security-epss': ['epss', *source_ids, *image_sources],
-             'security-malicious-packages': source_ids, 'security-container-images': image_sources,
-             'security-licenses': ['artifact-license-catalog']}
+             'security-malicious-packages': source_ids, 'security-container-images': image_sources}
     evidence = {'schema_version': 1, 'inventory_sha256': inventory['digest'], 'complete': inventory['complete'],
                 'policy_sha256': _policy_digest(policy_root or root), 'manifest_count': len(inventory['manifests']),
                 'dependency_count': len(dependencies), 'image_count': len(images), 'tool_count': len(tools),
@@ -382,7 +338,7 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
     if inventory['images'] and inventory['complete']:
         from .security_tools import scan_images, tools_directory
         image_scan = scan_images(inventory, environ={**env, 'GETZILLA_SECURITY_TOOLS': str(tools_directory(root, env))}, now=current)
-    for name in ('security-kev', 'security-epss', 'security-malicious-packages', 'security-licenses', 'security-container-images'):
+    for name in ('security-kev', 'security-epss', 'security-malicious-packages', 'security-container-images'):
         obligation = obligations[name]
         if obligation['applicability'] == 'not_applicable':
             results.append(_result(name, 'not_applicable', 'complete source inventory proves no applicable objects', inventory, policy))
@@ -400,6 +356,8 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                 if image_scan is not None and image_scan['outcome'] == 'blocked':
                     raise SecurityDataError('image vulnerability inventory is incomplete')
                 all_findings = findings + (image_scan.get('findings', []) if image_scan else [])
+                if image_scan:
+                    all_findings += [f for image in image_scan.get('images', []) for f in image.get('accepted_evidence', [])]
                 all_sources = [proof, *source_evidence, *(image_scan.get('data_sources', []) if image_scan else [])]
                 if all_sources != obligation['data_sources']:
                     raise SecurityDataError('enrichment source changed since its required plan was derived')
@@ -422,43 +380,21 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                 results.append(_result(name, 'finding' if hits else 'pass',
                                        f'{len(hits)} active malicious-package catalog matches in complete OSV ecosystem snapshots',
                                        inventory, policy, sources=source_evidence, findings=hits))
-            elif name == 'security-licenses':
-                from .security_licenses import evaluate_artifacts
-                from .security_license_contracts import load_policy
-                artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
-                license_policy = load_policy(policy_root or root)
-                target_options=_license_target(env)
-                from .security_license_scope import current as current_run_scope
-                run_context=current_run_scope(root,inventory,target_options.get('target_binding'))
-                report = evaluate_artifacts(inventory, artifacts, license_policy, now=current, **target_options,
-                    **({'run_context':run_context} if run_context is not None else {}))
-                selected=report.get('selected_run')
-                outcome = ('pass' if selected['status']=='pass-for-selected-run' else 'blocked') if selected is not None else 'pass' if report['status'] == 'pass' else 'blocked'
-                proof = artifact_catalog_source(inventory, artifacts, license_policy, now=current, **_license_target(env))
-                if [proof] != obligation['data_sources']:
-                    raise SecurityDataError('license artifact inputs changed during evaluation')
-                check=_result(name, outcome, selected['summary'] if selected is not None else report['summary'], inventory, policy,
-                    sources=[proof],findings=selected['details'] if selected is not None else report.get('details', []),
-                    gaps=selected['gaps'] if selected is not None else report.get('gaps', []))
-                if selected is not None:
-                    check['details'][0].update(selected_run=selected,raw_coverage=report['raw_coverage'],
-                        raw_license_diagnostics=report.get('gaps',[]))
-                results.append(check)
             else:
                 if image_scan is None:
                     raise SecurityDataError('no image scan covered the required image inventory')
                 report = image_scan
                 if report.get('data_sources', []) != obligation['data_sources']:
                     raise SecurityDataError('image database changed since the required plan was derived')
-                results.append(_result(name, report['outcome'], report['summary'], inventory, policy,
-                                       sources=report.get('data_sources', []), findings=report.get('findings', []), gaps=report.get('gaps', [])))
+                check = _result(name, report['outcome'], report['summary'], inventory, policy,
+                                sources=report.get('data_sources', []), findings=report.get('findings', []), gaps=report.get('gaps', []))
+                if any(image.get('accepted_evidence') for image in report.get('images', [])):
+                    from .security_dind_exception import DECISION
+                    check['details'][0]['dind_exception'] = [dict(DECISION)]
+                results.append(check)
         except (ImportError, OSError, ValueError, RuntimeError) as exc:
             results.append(_result(name, 'blocked', str(exc), inventory, policy,
                                    sources=obligation['data_sources'], gaps=[{'code': 'required-input-unavailable', 'message': str(exc)}]))
-    from .security_license_contracts import attach_factory_offline_intent, factory_offline_intent, load_policy
-    for check in results:
-        if check.get('name') == 'security-licenses':
-            attach_factory_offline_intent(check, factory_offline_intent(root, load_policy(policy_root or root)))
     return results
 
 

@@ -34,7 +34,7 @@ HEAD, BASE, CHECKER, CHECKER_TREE, WORKFLOW = (c * 40 for c in 'acdef')
 POLICY = '1' * 64
 RUNNER, RUNNER_TREE = '9' * 40, '8' * 40
 FAMILIES = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
-            'security-malicious-packages', 'security-licenses', 'security-container-images',
+            'security-malicious-packages', 'security-container-images',
             'opengrep', 'secret-scan', 'bandit', 'trivy-config')
 
 

@@ -147,7 +147,7 @@ class OwnedReceiptFixtureTests(unittest.TestCase):
             security = {row['check_id']: row for row in plan['obligations'] if row['check_id'].startswith('security-')
                         or row['check_id'] == 'known-vulnerabilities'}
             self.assertEqual(security['known-vulnerabilities']['applicability'], 'required')
-            self.assertEqual(security['security-licenses']['evidence']['dependency_count'], 1)
+            self.assertEqual(security['security-inventory']['evidence']['dependency_count'], 1)
             self.assertTrue(security['known-vulnerabilities']['data_sources'][0]['unavailable'])
             self.assertEqual(report['check_status'], 'fail')
 

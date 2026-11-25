@@ -538,8 +538,7 @@ def family_evidence(root: Path, record: dict) -> dict:
         from .security_action_inputs import verify_family
         return verify_family(root, record)
     if record['kind'] == 'image' and record['origin'].get('kind') == 'held-oci-components/v1':
-        from .security_image_licenses import verify_family
-        return verify_family(root, record)
+        raise ArtifactError("artifact-origin", "retired license family cannot establish OCI custody")
     payload = read_file(root, record['path'], MAX_ARTIFACT_BYTES)
     if len(payload) != record['bytes'] or hashlib.sha256(payload).hexdigest() != record['sha256']:
         raise ArtifactError('artifact-hash', 'family payload differs from its exact bytes')

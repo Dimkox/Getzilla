@@ -113,7 +113,6 @@ def measured_ci_profile():
 _LIVE = None
 
 
-_LICENSE_ENTRY = object()
 
 
 _MEMBER_SEAL = object()

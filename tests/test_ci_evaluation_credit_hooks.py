@@ -10,8 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".getzilla"))
 from getzilla import security_ci_inputs as ci, security_oci as oci
 from getzilla import security_licenses as licenses
 from tests import test_ci_image_license_inputs as ci_fixtures
-from tests import test_security_license_run_scope as scope_fixtures
-from tests.test_security_licenses import artifact, wheel, manifest, inventory, POLICY, NOW
+from tests.test_security_licenses import artifact, wheel, manifest, POLICY, NOW
 
 
 class EvaluationCreditHookTests(unittest.TestCase):
@@ -90,30 +89,3 @@ class EvaluationCreditHookTests(unittest.TestCase):
             wrong["run"]["run_id"] = "other"
             with self.assertRaises(ValueError):
                 ci.validated_evaluation(wrong, result)
-
-    def test_parent_auxiliary_success_credits_exact_backend_and_keeps_raw_gaps(self):
-        module = scope_fixtures.SelectedRunLicenseTests()
-        module.root = self.owned.root
-        self.addCleanup(module.doCleanups)
-        parent = dict(self.fixture.parent, source_pins=self.consumer["source_pins"])
-        inv = inventory(
-            *self.consumer["dependencies"],
-            builds=[dict(dockerfile=self.consumer["recipe"], build_sha256=self.consumer["build_sha256"])],
-        )
-        inv["digest"] = parent["inventory_sha256"]
-        with self.live() as image:
-            context = module.live(inv, self.fixture.source, self.fixture.run, parent)
-            context.state.update(ci_uses=self.fixture.uses, images={image.reference: image})
-            manifest(self.root, inv, self.records, acquired=NOW)
-            output = licenses.evaluate_artifacts(
-                inv, self.root, POLICY, now=NOW, target_binding=parent, run_context=context
-            )
-            key = (
-                "build-input:"
-                + self.consumer["build_sha256"]
-                + ":"
-                + self.fixture.target.digest(self.fixture.target._subject(self.project))
-            )
-            self.assertIn(key, context.passed, output)
-            self.assertTrue(output["gaps"], "raw source gaps must remain separate")
-            self.assertEqual(output["selected_run"]["status"], "pass-for-selected-run")

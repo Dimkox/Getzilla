@@ -2,9 +2,9 @@
   "schema_version": 1,
   "platform": "linux/amd64",
   "postgres": {
-    "reference": "postgres@sha256:e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4",
-    "image_id": "sha256:ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085",
-    "source": "https://github.com/docker-library/repo-info/blob/61b58bb5b27c01b2490b3f83d092f873418cb2b3/repos/postgres/remote/17-alpine.md"
+    "reference": "postgres@sha256:e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8",
+    "image_id": "sha256:fa7e2700e906190f900a3c9d47e87f9032cfa38b60d9ac25129a357f85c2da8c",
+    "source": "https://github.com/docker-library/repo-info/blob/c93ab592739465d7e57dbd41d72522ce0a849e34/repos/postgres/remote/17-alpine.md"
   },
   "python": {
     "reference": "python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9",

@@ -104,7 +104,7 @@ class ContainerExecutor:
         }
         for key, value in sorted(container_env.items()):
             argv.extend(('--env', f'{key}={value}'))
-        argv.append(self.sandbox.image)
+        argv.append(self.sandbox.runner_config_digest or self.sandbox.image)
         argv.extend(command)
         return argv
 

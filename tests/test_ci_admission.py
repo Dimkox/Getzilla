@@ -13,7 +13,7 @@ HEAD, TREE, CHECKER = "a" * 40, "b" * 40, "c" * 40
 INVENTORY, POLICY = "d" * 64, "e" * 64
 NOW = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
 NAMES = ("security-inventory", "known-vulnerabilities", "security-kev", "security-epss",
-         "security-malicious-packages", "security-licenses", "security-container-images", "opengrep",
+         "security-malicious-packages", "security-container-images", "opengrep",
          "secret-scan", "bandit", "trivy-config")
 
 
@@ -104,7 +104,7 @@ class CiAdmissionTests(unittest.TestCase):
         self.assertIn("linux-core", jobs)
         self.assertIn("live-acceptance", jobs)
         self.assertIn("security-expanded", jobs)
-        self.assertIn("needs: [linux-core, linux-core-tests, live-acceptance, security-expanded]", jobs["linux"])
+        self.assertIn("needs: [linux-core, linux-core-tests, live-acceptance]", jobs["linux"])
         self.assertIn("if: always()", jobs["linux"])
         self.assertIn("getzilla_ci_admission.py", jobs["linux"])
         self.assertIn("fail-fast: false", jobs["live-acceptance"])
@@ -145,72 +145,25 @@ class CiAdmissionTests(unittest.TestCase):
                 "outcome": "pass"}]} for name in NAMES]}
         return records
 
-    def evaluate(self, records=None, needs=None, now=NOW):
+    def evaluate(self, records=None, needs=None):
         module = self.module()
         return module.evaluate(needs or {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")},
-            records or self.records(), head=HEAD, tree=TREE, run_id="123", attempt="2", now=now)
+            records or self.records(), head=HEAD, tree=TREE, run_id="123", attempt="2")
 
-    def test_waiver_is_limited_to_bound_security_failure_before_expiry(self):
-        module = self.module()
-        config = module.read_waiver(Path(__file__).resolve().parents[1])
-        needs = dict.fromkeys(("linux-core", "linux-core-tests", "live-acceptance", "security-expanded"), "success")
+    def test_expanded_job_and_artifact_are_independent_of_linux(self):
         records = self.records()
-        args = dict(waiver=config, repository="Dimkox/Getzilla", head=HEAD, tree=TREE,
-                    run_id="123", attempt="2", now=NOW)
-        def decision(**changes):
-            from unittest.mock import patch
-            with patch.dict("os.environ", {"GETZILLA_OPERATOR_CHECKER": CHECKER}):
-                return module.admission_result(needs, records, **(args | changes))
-        self.assertEqual(decision()["status"], "pass")
-        self.assertFalse(decision()["waiver"]["used"])
-        needs["security-expanded"] = "failure"
-        security = records["security-expanded"]
-        security.update(schema="getzilla-security-ci-v1", status="fail", primary_phase="scan",
-                        event_provenance={"repository": "Dimkox/Getzilla"}, report={"kind": "public-security-input-refusal", "status": "fail"})
-        self.assertEqual(decision()["status"], "pass-with-waiver")
-        self.assertEqual(decision()["waiver"]["issue"], 456)
-        original = security["report"]
-        for status in ("fail", "fail-for-selected-run"):
-            with self.subTest(scan_status=status):
-                security["report"] = {"kind": "security-expanded", "status": status,
-                                      "checks": [{"name": "known-vulnerabilities", "status": "fail"}]}
-                result = decision()
-                self.assertEqual(result["status"], "fail")
-                self.assertFalse(result["waiver"]["used"])
-        security["report"] = original
-        self.assertEqual(decision(now=datetime(2026,12,8,tzinfo=timezone.utc))["status"], "fail")
-        self.assertEqual(decision(repository="Fork/Getzilla")["status"], "fail")
-        for job in ("linux-core", "linux-core-tests", "live-acceptance"):
-            needs[job] = "failure"
-            self.assertEqual(decision()["status"], "fail")
-            needs[job] = "success"
-        for result in ("cancelled", "skipped"):
-            needs["security-expanded"] = result
-            self.assertEqual(decision()["status"], "fail")
-        needs["security-expanded"] = "failure"
-        security["attempt"] = "1"
-        self.assertEqual(decision()["status"], "fail")
         del records["security-expanded"]
-        self.assertEqual(decision()["status"], "fail")
-
-    def test_waiver_configuration_is_closed(self):
-        import json
-        import tempfile
-        module = self.module()
-        entry = module.read_waiver(Path(__file__).resolve().parents[1])
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            path = root / ".getzilla/config/ci-waivers.json"
-            path.parent.mkdir(parents=True)
-            self.assertIsNone(module.read_waiver(root))
-            for rows in ([dict(entry, check="linux-core")], [entry, entry],
-                         [dict(entry, unexpected=True)], [dict(entry, expires="2027-01-01")]):
-                path.write_text(json.dumps({"schema_version": 1, "waivers": rows}))
-                with self.assertRaises(ValueError):
-                    module.read_waiver(root)
-            path.write_text("{")
-            with self.assertRaises(ValueError):
-                module.read_waiver(root)
+        needs = dict.fromkeys(("linux-core", "linux-core-tests", "live-acceptance"), "success")
+        args = dict(head=HEAD, tree=TREE, run_id="123", attempt="2")
+        for outcome in (None, "cancelled", "failure", "success"):
+            jobs = dict(needs)
+            if outcome:
+                jobs["security-expanded"] = outcome
+            result = self.module().admission_result(jobs, records, **args)
+            self.assertEqual(result["status"], "pass")
+            self.assertEqual(result["security-expanded"], "informational")
+        for job in needs:
+            self.assertEqual(self.module().admission_result(needs | {job: "failure"}, records, **args)["status"], "fail")
 
     def test_all_required_evidence_passes_on_the_exact_source(self):
         self.assertEqual(self.evaluate(), [])
@@ -242,6 +195,9 @@ class CiAdmissionTests(unittest.TestCase):
         del records["lifecycle"]
         self.assertTrue(self.evaluate(records))
 
+    def validate_security_envelope(self, records=None, now=NOW):
+        return self.module()._security((records or self.records())["security-expanded"], HEAD, TREE, now)
+
     def test_security_missing_duplicate_or_summary_only_na_is_rejected(self):
         for mutation in ("missing", "duplicate", "na"):
             records = self.records()
@@ -252,41 +208,41 @@ class CiAdmissionTests(unittest.TestCase):
                 checks.append(deepcopy(checks[0]))
             else:
                 checks[-1].update(status="skip", summary="not applicable", details=[])
-            self.assertTrue(self.evaluate(records), mutation)
+            self.assertTrue(self.validate_security_envelope(records), mutation)
 
     def test_security_unknown_extra_pass_is_rejected_and_named_ruff_is_optional(self):
         records = self.records()
         records["security-expanded"]["report"]["checks"].append({"name": "unexpected-check", "status": "pass"})
-        self.assertTrue(self.evaluate(records))
+        self.assertTrue(self.validate_security_envelope(records))
         records["security-expanded"]["report"]["checks"][-1]["name"] = "ruff"
-        self.assertEqual(self.evaluate(records), [])
+        self.assertEqual(self.validate_security_envelope(records), [])
 
     def test_security_cannot_invent_assurance_or_omit_source_cleanliness(self):
         for value in (None, "externally-qualified"):
             records = self.records()
             records["security-expanded"]["report"]["assurance"] = value
-            self.assertTrue(self.evaluate(records), value)
+            self.assertTrue(self.validate_security_envelope(records), value)
         for field in ("candidate_clean", "checker_clean", "same_project"):
             for value in (None, False, "true", 1):
                 records = self.records()
                 records["security-expanded"]["report"]["source"][field] = value
-                self.assertTrue(self.evaluate(records), (field, value))
+                self.assertTrue(self.validate_security_envelope(records), (field, value))
 
     def test_security_structural_na_is_inventory_bound(self):
         records = self.records()
         check = records["security-expanded"]["report"]["checks"][-1]
         check.update(status="skip", details=[{"kind": "security-result", "schema_version": 1, "outcome": "not_applicable",
             "applicability_evidence": {"complete": True, "inventory_sha256": INVENTORY, "reason": "complete-inventory-no-objects"}}])
-        self.assertEqual(self.evaluate(records), [])
+        self.assertEqual(self.validate_security_envelope(records), [])
         check["details"][0]["applicability_evidence"]["inventory_sha256"] = "0" * 64
-        self.assertTrue(self.evaluate(records))
+        self.assertTrue(self.validate_security_envelope(records))
 
     def test_security_expires_strictly_after_72_hours(self):
-        self.assertEqual(self.evaluate(now=NOW + timedelta(hours=72)), [])
-        self.assertTrue(self.evaluate(now=NOW + timedelta(hours=72, microseconds=1)))
+        self.assertEqual(self.validate_security_envelope(now=NOW + timedelta(hours=72)), [])
+        self.assertTrue(self.validate_security_envelope(now=NOW + timedelta(hours=72, microseconds=1)))
         records = self.records()
         records["security-expanded"]["report"]["valid_until_utc"] = None
-        self.assertTrue(self.evaluate(records))
+        self.assertTrue(self.validate_security_envelope(records))
 
 
 if __name__ == "__main__":

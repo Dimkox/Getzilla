@@ -185,14 +185,14 @@ class OCIInputHandoffTests(unittest.TestCase):
         self.assertGreaterEqual(cli.count("refresh_image_database("), 2)
 
     def test_owned_source_selection_and_fresh_preparation_stage_order(self):
+        import yaml  # noqa: F401 load the parser before denying external file I/O
         from getzilla import security_inventory as inv
         from getzilla.security_corresponding_source import classify
         from getzilla.security_python_target import binding as python_binding
-        from getzilla.security_license_scope import current
         from getzilla import security_cli as cli
         from getzilla import security_tools as tools
 
-        self.assertTrue(all(map(callable, (classify, python_binding, current))))
+        self.assertTrue(all(map(callable, (classify, python_binding))))
         source = "services:\n  api:\n    image: ${OWNED_IMAGE:?select}\n"
         (self.root / "compose.yaml").write_text(source)
         selected = "example.invalid/owned@sha256:" + "a" * 64
@@ -250,10 +250,7 @@ class OCIInputHandoffTests(unittest.TestCase):
             patch.object(cli, "read_file", side_effect=owned_read),
             patch.object(cli, "refresh_images", side_effect=imported),
             patch.object(cli, "refresh_feeds", return_value=[]),
-            patch.object(cli, "acquire_pypi", return_value={"gaps": []}),
             patch.object(cli, "security_obligations", side_effect=obligations),
-            patch.object(cli, "load_policy", return_value={}),
-            patch.object(cli, "evaluate_artifacts", return_value={"status": "fail"}),
             patch.object(tools, "pinned_tool", return_value=self.root / "UNEXECUTED"),
             patch.object(tools, "_process", side_effect=process),
             patch.object(tools, "trivy_database_source", return_value={"source_id": "owned-mocked-db"}),

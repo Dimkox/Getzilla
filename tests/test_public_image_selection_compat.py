@@ -75,10 +75,9 @@ class Reused393ImageContracts(unittest.TestCase):
     def test_new_owned_compose_profile_and_early_unqualified_transport_refusal(self):
         # Load the trusted helpers before limiting all file reads to the fixture.
         from getzilla.security_corresponding_source import classify
-        from getzilla.security_license_scope import current
         from getzilla.security_python_target import binding
 
-        self.assertTrue(all(map(callable, (classify, current, binding, yaml.safe_load))))
+        self.assertTrue(all(map(callable, (classify, binding, yaml.safe_load))))
         parent = W / '.getzilla/runtime/scratch/new393-fixtures'
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as name:
@@ -204,9 +203,8 @@ class Reused393ImageContracts(unittest.TestCase):
                 with self.subTest(consumer=function.__name__), self.assertRaises(BeforeProducer):
                     self.owned(lambda: function(Path('/owned'),environ=env))
                 self.assertEqual(calls[-1],uses)
-            with self.assertRaises(BeforeProducer):
+            with self.assertRaisesRegex(expanded.SecurityDataError, 'unsupported security data source'):
                 self.owned(lambda: expanded.validate_data_source(binding,root=Path('/owned'),environ=env))
-            self.assertEqual(calls[-1],uses)
 
 
     def test_invalid_selection_field_types_have_closed_refusal(self):

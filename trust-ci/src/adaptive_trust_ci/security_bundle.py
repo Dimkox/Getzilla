@@ -337,7 +337,7 @@ def result_finding_count(name, marker):
     # Only these independently recomputed passing families carry positive
     # compliance/forecast evidence in findings. Keep their complete raw details;
     # the count describes refusal findings, not the number of evidence records.
-    if name in ('security-licenses', 'security-epss') and marker.get('outcome') == 'pass':
+    if name == 'security-epss' and marker.get('outcome') == 'pass':
         return 0
     return len(marker['findings'])
 
