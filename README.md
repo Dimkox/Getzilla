@@ -11,7 +11,7 @@
 
 # Getzilla
 
-Getzilla **v2.3.1** is published from main commit `bf82ca5c7c26331baa7e86d947057d56179cc753`. The installation commands below use this tag. Production acceptance on Claw is pending. [Release and checksums](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.1) · [Post-release handoff](START_HERE.md)
+Latest published: [v2.3.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.1) from main commit `bf82ca5c7c26331baa7e86d947057d56179cc753`. The installation commands below use this tag. Production acceptance on Claw is pending. [Release and checksums](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.1) · [Post-release handoff](START_HERE.md)
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
