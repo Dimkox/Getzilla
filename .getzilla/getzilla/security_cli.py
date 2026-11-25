@@ -501,6 +501,7 @@ def _detail_consistent(name: str, detail: dict, inventory: str, policy: str, cur
     extra = {'family', 'reason_code', 'applicability_evidence'}
     extra |= ({'accepted'} if name == 'known-vulnerabilities' else
               {'factory_offline_use','selected_run','raw_coverage','raw_license_diagnostics'} if name == 'security-licenses' else
+              {'dind_exception'} if name == 'security-container-images' else
               {'binary_inputs'} if name == 'secret-scan' else
               {'coverage'} if name in {'opengrep', 'bandit', 'trivy-config'} else set())
     if (not required <= set(detail) <= required | extra or type(detail.get('schema_version')) is not int
@@ -511,6 +512,11 @@ def _detail_consistent(name: str, detail: dict, inventory: str, policy: str, cur
             or any(not isinstance(detail[k], list) for k in ('data_sources', 'findings', 'gaps'))
             or detail['gaps']):
         return False
+    if 'dind_exception' in detail:
+        from . import security_dind_exception as dind
+        if (name != 'security-container-images' or detail['outcome'] != 'pass'
+                or detail['dind_exception'] != [dind.DECISION] or not dind.active(current) or not dind.authorized_digest(inventory)):
+            return False
     if detail['outcome'] == 'not_applicable':
         return (not detail['findings'] and not detail['data_sources']
                 and isinstance(detail.get('accepted', []), list) and not detail.get('accepted'))

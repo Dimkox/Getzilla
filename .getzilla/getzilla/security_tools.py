@@ -528,8 +528,10 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                     if result.returncode != 0:
                         raise SecurityDataError('Trivy image process did not complete successfully')
                     parsed = image_report(_process_report(report_path, result), reference, expected_image_id=item.get('image_id'), verified_oci=image)
-                    findings.extend(parsed['findings'])
-                    results.append({'image': reference, **parsed})
+                    from . import security_dind_exception as dind
+                    blocking, accepted = dind.partition(parsed['findings'], image, inventory, now or datetime.now(timezone.utc))
+                    findings.extend(blocking)
+                    results.append({'image': reference, **parsed, 'accepted_evidence': accepted})
         if trivy_database_source(tools, now=now) != source:
             raise SecurityDataError('Trivy database changed during scanning')
     except (OSError, ValueError, RuntimeError) as exc:

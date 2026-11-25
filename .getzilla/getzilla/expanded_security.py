@@ -400,6 +400,8 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                 if image_scan is not None and image_scan['outcome'] == 'blocked':
                     raise SecurityDataError('image vulnerability inventory is incomplete')
                 all_findings = findings + (image_scan.get('findings', []) if image_scan else [])
+                if image_scan:
+                    all_findings += [f for image in image_scan.get('images', []) for f in image.get('accepted_evidence', [])]
                 all_sources = [proof, *source_evidence, *(image_scan.get('data_sources', []) if image_scan else [])]
                 if all_sources != obligation['data_sources']:
                     raise SecurityDataError('enrichment source changed since its required plan was derived')
@@ -450,8 +452,12 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                 report = image_scan
                 if report.get('data_sources', []) != obligation['data_sources']:
                     raise SecurityDataError('image database changed since the required plan was derived')
-                results.append(_result(name, report['outcome'], report['summary'], inventory, policy,
-                                       sources=report.get('data_sources', []), findings=report.get('findings', []), gaps=report.get('gaps', [])))
+                check = _result(name, report['outcome'], report['summary'], inventory, policy,
+                                sources=report.get('data_sources', []), findings=report.get('findings', []), gaps=report.get('gaps', []))
+                if any(image.get('accepted_evidence') for image in report.get('images', [])):
+                    from .security_dind_exception import DECISION
+                    check['details'][0]['dind_exception'] = [dict(DECISION)]
+                results.append(check)
         except (ImportError, OSError, ValueError, RuntimeError) as exc:
             results.append(_result(name, 'blocked', str(exc), inventory, policy,
                                    sources=obligation['data_sources'], gaps=[{'code': 'required-input-unavailable', 'message': str(exc)}]))

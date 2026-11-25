@@ -146,3 +146,14 @@ none of the three Docker socket paths existed. The engine's only network was an
 internal isolated bridge. Its namespace had no IPv4 default route and could not
 reach the registry used by the fetch container. The probe and its invocation are
 in [the integration test](../../trust-ci/tests/run_offline_runner.sh).
+
+The diagnostic exception covers the single linux/amd64 base manifest listed above,
+the binary `usr/local/bin/dockerd`, the affected module version and CVE-2026-85747.
+The checker verifies the tested deployment controls, the sole use of that upstream
+manifest as the base of the Trust CI daemon, and the official catalog and current
+amd64 digest during acquisition. A catalog change, a new digest, an unavailable
+upstream check or expiry at 00:00 UTC on 25 December ends eligibility. A change
+to the catalog can therefore end eligibility before a fix is confirmed. Other
+binaries, including `usr/local/bin/docker` in the original base, and independently
+built manifests retain their blocking findings. KEV and EPSS evaluations receive
+the original vulnerability evidence.

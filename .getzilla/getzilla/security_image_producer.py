@@ -452,7 +452,10 @@ def _pipeline(request, volume, builder):
             cli._atomic(Path(request['profile']), canonical(profile))
             _event('prepare')
             from .security_oci import ImageSecurityRefusal
+            from .security_dind_exception import qualify
             try:
+                state = authority._LIVE
+                state['dind_exception'] = qualify(root, state['declared_inventory'], Registry(deadline=builder.deadline))
                 with cli._preparation_step('prepare-inputs'):
                     preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
                                                      refresh=True, provision=True, **options)
