@@ -219,22 +219,24 @@ class ProjectStateTests(unittest.TestCase):
         state = self.state
         self.assertEqual(state['repository'], 'Dimkox/Getzilla')
         self.assertEqual(state['product_version'], (ROOT / 'VERSION').read_text().strip())
+        previous = state['historical_getzilla_v2_3_0_published_release']
         published = state['published_release']
-        self.assertEqual(published['tag'], 'v2.3.0')
-        self.assertEqual(published['published_at'], '2026-10-21T11:01:37Z')
-        self.assertEqual(published['tag_object'], '815aeabc5d215d65e72651692a6457920de9fa71')
+        self.assertEqual(previous['tag'], 'v2.3.0')
+        self.assertEqual(published['tag'], 'v2.3.1')
+        self.assertEqual(published['published_at'], '2026-11-24T21:54:59Z')
+        self.assertEqual(published['tag_object'], 'a5ec4d0380ace424e02784386a11c021e475ed6a')
         self.assertEqual(published['tag_kind'], 'annotated')
-        self.assertEqual(published['merge_commit'], '2bb417431f1e4b9494e4af71ebf27adb1d04d898')
-        self.assertEqual(published['tree'], '81076df2cd7db8713f7178ead66ebaa2728f861e')
+        self.assertEqual(published['merge_commit'], 'bf82ca5c7c26331baa7e86d947057d56179cc753')
+        self.assertEqual(published['tree'], '630c703be6d5f5251ea115da2b313adb28bc5dda')
         self.assertEqual([(asset['name'], asset['size']) for asset in published['assets']], [
-            ('getzilla-2.3.0.zip', 21371145), ('getzilla-2.3.0.zip.sha256', 85),
+            ('getzilla-2.3.1.zip', 33510091), ('getzilla-2.3.1.zip.sha256', 85),
         ])
         self.assertEqual(published['installers'], {
-            'scripts/install.sh': {'sha256': 'aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807'},
-            'scripts/install.ps1': {'sha256': '4d89d8c77617ff3b262bbf8866f05e1a14d9fb45c6ba2c3c39e298af9a499b76'},
+            'scripts/install.sh': {'sha256': '8ce2a62a057a75f4c38017bf58d11be293d65e46815d5b6c1cea604c69b86b62'},
+            'scripts/install.ps1': {'sha256': '2d61a5efa2267e07be4f61016acc99d29d3ffaff0588d4d4b2ea171dd14ff5cf'},
         })
-        self.assertEqual(published['artifact']['sha256'], '782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11')
-        self.assertEqual(published['artifact']['sidecar_sha256'], 'e895af0a8b2a52eb1a977943570265cdd5446cf106ad4bd25f7ff9253aed23db')
+        self.assertEqual(published['artifact']['sha256'], '24401bc11eefdb2c6e1b394f2b3bd6a610b468c420a80f5a9865a72a8d47e344')
+        self.assertEqual(published['artifact']['sidecar_sha256'], '3934f3a92d7c0e4dc5c774c594c8ec8cd5420433a21ac995552b183c7353143a')
         history = state['historical_getzilla_v2_2_1_published_release']
         self.assertEqual((history['tag'], history['tag_object']), ('v2.2.1', '5bec32144e82bec3c4a789a4b9cb3ce75dc97024'))
         self.assertEqual(history['artifact']['sha256'], '0eb872f02f96f246965004637c2c1d6b32cadb988b6c84513a55b251f7fefc68')
@@ -246,28 +248,29 @@ class ProjectStateTests(unittest.TestCase):
         self.assertFalse(published['operational_activation'])
         continuation = state['current_continuation']
         self.assertIsNone(continuation['issue'])
-        self.assertEqual(continuation['branch'], 'integration/all-fixes-20261117')
+        self.assertEqual(continuation['branch'], 'main')
         self.assertEqual(continuation['initial_issue_inventory_count'], 64)
         self.assertEqual(continuation['issue_inventory_count'], 68)
         self.assertEqual(len(continuation['issues']), 68)
         self.assertEqual(len(set(continuation['issues'])), 68)
         self.assertEqual(continuation['discovered_regressions'], [433, 434, 435, 436])
-        self.assertEqual(continuation['open_pull_requests_to_reconcile'], [425, 411, 393, 318])
+        self.assertEqual(continuation['open_pull_requests_to_reconcile'], [411])
         self.assertEqual(continuation['production_target']['name'], 'Claw')
         self.assertEqual(continuation['production_target']['acceptance_status'], 'not_verified')
-        self.assertFalse(continuation['release_published'])
+        self.assertTrue(continuation['release_published'])
+        self.assertEqual(continuation['merged_pull_requests'], [425, 393, 318])
         self.assertFalse(continuation['operational_acceptance'])
-        self.assertIsNone(continuation['checked_head'])
+        self.assertEqual(continuation['checked_head'], 'c20dbf39779212eb995b7389079769d1644157e7')
         self.assertEqual(state['historical_issue134_continuation_20261024']['issue'], 134)
         self.assertEqual(state['historical_issue134_continuation_20261024']['branch'], 'ccr-315b4684-r3j424')
         self.assertEqual(state['current_ci']['required_checks'], ['linux', 'windows'])
         self.assertEqual(state['current_ci']['github_app_id'], 15368)
         self.assertFalse(state['current_ci']['current_candidate_verified'])
-        self.assertEqual(continuation['source_base'], state['observed_main_sha'])
+        self.assertEqual(continuation['merge_commit'], state['observed_main_sha'])
         self.assertEqual(continuation['target_version'], state['product_version'])
-        self.assertIn('one final PR verifier', continuation['next_action'])
-        self.assertIn('Native harness', continuation['next_action'])
-        self.assertIn('Keep v2.3.0 immutable', continuation['next_action'])
+        self.assertIn('68 release issues', continuation['next_action'])
+        self.assertIn('#411', continuation['next_action'])
+        self.assertIn('Claw', continuation['next_action'])
         finished = state['historical_pr79_continuation']
         self.assertEqual((finished['issue'], finished['pull_request'], finished['route_id']), (72, 79, '43786cadd549'))
         self.assertTrue((ROOT / finished['change_package'] / 'brief.md').is_file())
@@ -322,7 +325,7 @@ class ProjectStateTests(unittest.TestCase):
         state = self.state
         self.assertEqual(state["schema_version"], 2)
         self.assertEqual(state["product_version"], "2.3.1")
-        self.assertEqual(state["latest_published_release"], "v2.3.0")
+        self.assertEqual(state["latest_published_release"], "v2.3.1")
         self.assertEqual(state["historical_predecessor_identity"]["observed_main_sha"], OBSERVED_MAIN_SHA)
         self.assertRegex(state["historical_predecessor_identity"]["observed_at"], r"^2026-09-24T\d{2}:\d{2}:\d{2}Z$")
         self.assertEqual(set(state["milestones"]), MILESTONES)
@@ -1106,7 +1109,7 @@ class ProjectStateTests(unittest.TestCase):
         self.assertEqual(state["local_candidate"]["version"], "2.1.1")
         self.assertFalse(state["local_candidate"]["published"])
         self.assertFalse(state["local_candidate"]["operational_activation"])
-        self.assertEqual(state["published_release"]["tag"], "v2.3.0")
+        self.assertEqual(state["published_release"]["tag"], "v2.3.1")
         self.assertIn("Historical pre-publication", state["local_candidate"]["record_scope"])
         self.assertEqual(state["historical_predecessor_identity"]["observed_main_sha"], OBSERVED_MAIN_SHA)
 

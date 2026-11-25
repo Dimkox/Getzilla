@@ -1513,7 +1513,7 @@ module.main()
         published_version = published['tag'].removeprefix('v')
         self.assertEqual(published_version, '2.1.1')
         self.assertEqual(state['latest_published_release'], state['published_release']['tag'])
-        self.assertEqual(state['published_release']['tag'], 'v2.3.0')
+        self.assertEqual(state['published_release']['tag'], 'v2.3.1')
         artifact = published['artifact']
         self.assertEqual(artifact['binding'], 'immutable_release_tag')
         self.assertEqual(artifact['storage'], 'github_release_asset')
