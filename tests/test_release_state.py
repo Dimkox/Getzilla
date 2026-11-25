@@ -24,18 +24,25 @@ REQUIRED = ('linux', 'windows')
 
 
 def fixture() -> dict:
-    return json.loads((ROOT / 'RELEASE_STATE.json').read_text(encoding='utf-8'))
+    return {
+        'schema_version': 'release-state-v1',
+        'source': {'version': '2.3.1', 'state': 'source_candidate'},
+        'published': {'version': '2.3.0', 'tag': 'v2.3.0', 'tag_object': '1' * 40,
+                      'commit': '2' * 40, 'tree': '3' * 40,
+                      'artifact': {'name': 'getzilla-2.3.0.zip', 'sha256': '4' * 64}},
+    }
 
 
 class ReleaseStateTests(unittest.TestCase):
     def test_candidate_and_published_may_differ(self) -> None:
-        state = load_release_state(ROOT / 'RELEASE_STATE.json')
+        state = parse_release_state(fixture())
         self.assertEqual(state.source_state, 'source_candidate')
         self.assertNotEqual(state.source_version, state.published_version)
 
-    def test_audit_222_221_fixture_valid(self) -> None:
-        state = parse_release_state(fixture())
-        self.assertEqual((state.source_version, state.published_version), ('2.3.1', '2.3.0'))
+    def test_published_repository_state_matches_release_documents(self) -> None:
+        state = load_release_state(ROOT / 'RELEASE_STATE.json')
+        self.assertEqual(state.source_state, 'released')
+        self.assertEqual((state.source_version, state.published_version), ('2.3.1', '2.3.1'))
         self.assertTrue(validate_release_consistency(state, ROOT).ok, validate_release_consistency(state, ROOT).errors)
 
     def test_version_mismatch_blocks(self) -> None:

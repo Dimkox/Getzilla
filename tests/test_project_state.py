@@ -268,7 +268,9 @@ class ProjectStateTests(unittest.TestCase):
         self.assertFalse(state['current_ci']['current_candidate_verified'])
         self.assertEqual(continuation['merge_commit'], state['observed_main_sha'])
         self.assertEqual(continuation['target_version'], state['product_version'])
-        self.assertIn('68 release issues', continuation['next_action'])
+        reconciliation = continuation['issue_reconciliation']
+        self.assertEqual((reconciliation['closed'], reconciliation['open']), (17, 51))
+        self.assertEqual(reconciliation['closed'] + reconciliation['open'], len(continuation['issues']))
         self.assertIn('#411', continuation['next_action'])
         self.assertIn('Claw', continuation['next_action'])
         finished = state['historical_pr79_continuation']

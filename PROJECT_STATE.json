@@ -103,15 +103,15 @@
     ],
     "target_version": "2.3.1",
     "source_base": "e99548d7cefca730cfad63c2f8cea1afe67bacd8",
-    "status": "published_pending_issue_reconciliation_and_claw_acceptance",
-    "owner_scope": "Resolve all 64 originally inventoried open issues and integration regressions #433, #434, #435 and #436, outstanding commits and open PRs through one combined PR, full verification, merge and release; production target is Claw.",
+    "status": "published_pending_pr411_reconciliation_and_claw_acceptance",
+    "owner_scope": "The v2.3.1 goal of resolving all 64 original issues and four integration regressions was not achieved. Release reconciliation closed 17 of 68 issues and left 51 open.",
     "production_target": {
       "name": "Claw",
       "authority_basis": "Explicit owner target selection in the current delivery session; exact operation/resource grants and technical prerequisites still apply.",
       "acceptance_status": "not_verified"
     },
-    "delivered_since_published_release": "PR #425 is included in the published release. Individual issue acceptance is reconciled separately.",
-    "next_action": "Reconcile the 68 release issues and compare open PR #411 to main. Prepare the Claw acceptance and rollback plan for the exact owner target. Obtain owner permission for each production action.",
+    "delivered_since_published_release": "Release PR #425 is published. The remaining 51 issues are prioritized backlog.",
+    "next_action": "Compare PR #411 with main. Prepare the Claw acceptance and rollback plan for the exact owner target. Obtain owner permission for each production action. Schedule the remaining 51 issues by backlog priority.",
     "checked_head": "c20dbf39779212eb995b7389079769d1644157e7",
     "merge_commit": "bf82ca5c7c26331baa7e86d947057d56179cc753",
     "release_published": true,
@@ -127,7 +127,12 @@
       425,
       393,
       318
-    ]
+    ],
+    "issue_reconciliation": {
+      "closed": 17,
+      "open": 51,
+      "evidence": "https://github.com/Dimkox/Getzilla/pull/475#issuecomment-7175448144"
+    }
   },
   "historical_pr79_continuation": {
     "issue": 72,
