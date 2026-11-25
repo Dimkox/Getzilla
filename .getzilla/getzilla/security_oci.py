@@ -64,6 +64,14 @@ class OCIError(ValueError):
         self.detail = _bound_detail(detail) if detail is not None else {}
 
 
+class ImageSecurityRefusal(RuntimeError):
+    """Non-waivable failure observed by the trusted image checker."""
+    def __init__(self, reason, **evidence):
+        super().__init__(reason)
+        self.report = dict(kind=self.report_kind, status="fail", reason=reason, **evidence)
+
+
+
 _BOUND_LIMITS = {'compressed': 'max_compressed_bytes', 'unpacked': 'max_unpacked_bytes',
                  'storage': 'max_storage_bytes', 'layers': 'max_layers',
                  'expanded': 'max_unpacked_bytes', 'entries': 'max_tar_entries'}

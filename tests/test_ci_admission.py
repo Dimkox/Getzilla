@@ -174,6 +174,10 @@ class CiAdmissionTests(unittest.TestCase):
             security["report"] = {"kind": "postgresql-server-check", "status": "fail", "reason": reason}
             self.assertEqual(decision()["status"], "fail")
             self.assertFalse(decision()["waiver"]["used"])
+        security["report"] = {"kind": "image-component-vulnerability", "status": "fail",
+                              "cves": ["CVE-2026-85747"]}
+        self.assertEqual(decision()["status"], "fail")
+        self.assertFalse(decision()["waiver"]["used"])
         for status in ("fail", "fail-for-selected-run"):
             with self.subTest(scan_status=status):
                 security["report"] = {"kind": "security-expanded", "status": status,

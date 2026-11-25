@@ -19,6 +19,28 @@ class PackageEvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 apk_inventory(bad)
 
+    def test_debian_release_and_epoch_are_part_of_the_exact_installed_version(self):
+        package = dict(Name="postgresql-client-15", Version="15.20", Release="0+deb12u1", Arch="amd64")
+        image = SimpleNamespace(config_digest="fixture")
+        report = dict(SchemaVersion=2, ArtifactType="container_image", Metadata={"ImageID": "fixture"},
+                      Results=[dict(Class="os-pkgs", Type="debian", Target="Debian", Packages=[package])])
+        expected = ("postgresql-client-15", "15.20-0+deb12u1", "amd64")
+        self.assertEqual(package_index(report, image)[("debian", "")], {expected})
+        package.update(Epoch=1)
+        self.assertNotIn(expected, package_index(report, image)[("debian", "")])
+        self.assertIn(("postgresql-client-15", "1:15.20-0+deb12u1", "amd64"), package_index(report, image)[("debian", "")])
+
+    def test_vendored_vulnerable_docker_cli_is_blocked_even_under_another_name(self):
+        from getzilla.security_image_package_coverage import VulnerableImageBinary, check_known_binary
+        image = SimpleNamespace(config_digest="config", manifest_digest="manifest")
+        row = dict(path="other/name", layer="layer",
+                   sha256="f71558dcbb6c2e028fc5c7cf67270ef6fafd9cc865570b73700d405b2c2ebc02")
+        with self.assertRaises(VulnerableImageBinary) as failed:
+            check_known_binary(row, image)
+        self.assertEqual(failed.exception.report["cves"], ["CVE-2026-85747"])
+        self.assertEqual(failed.exception.report["kind"], "image-component-vulnerability")
+        self.assertIsNone(check_known_binary(dict(row, sha256="0"*64), image))
+
     def test_go_needs_a_versioned_root_at_the_exact_scanned_path(self):
         report = dict(SchemaVersion=2, ArtifactType="container_image", Metadata={"ImageID": "fixture"},
                       Results=[dict(Class="lang-pkgs", Type="gobinary", Target="usr/bin/tiny",
@@ -30,6 +52,17 @@ class PackageEvidenceTests(unittest.TestCase):
             package_index(report, SimpleNamespace(config_digest="other"))
         report["Results"][0]["Packages"][0].pop("Relationship")
         self.assertEqual(package_index(report, image), {})
+
+    def test_debian_go_coverage_requires_exact_upstream_executable_installed_owner_and_scanned_version(self):
+        from getzilla.security_image_package_coverage import debian_go_coverage, _DEBIAN_GO
+        sha, name, version, _ = _DEBIAN_GO["usr/bin/ctr"]
+        row = dict(path="usr/bin/ctr", sha256=sha, layer="observed-layer")
+        index = {("debian", ""): {(name, version, "amd64")}}
+        owners = {f"deb:{name}:amd64@{version}"}
+        self.assertEqual(debian_go_coverage(row, owners, index)["provider"], "trivy-debian")
+        self.assertIsNone(debian_go_coverage(dict(row, sha256="0"*64), owners, index))
+        self.assertIsNone(debian_go_coverage(row, owners | {"other"}, index))
+        self.assertIsNone(debian_go_coverage(row, owners, {}))
 
     def test_upstream_support_script_requires_its_exact_path_hash_and_layer(self):
         from getzilla.security_image_file_origins import upstream_origin

@@ -419,7 +419,9 @@ def observe_components(image, *, source_root=None, packages=None, advisory_pages
             terms(c, [files.data("usr/share/licenses/" + name + "/LICENSE")], declared)
     unknown = []
     go_files = []
+    from .security_image_package_coverage import check_known_binary
     for path, row in files.rows.items():
+        check_known_binary(row, image)
         if row.get("elf") and row.get("go_binary"):
             go_files.append(_evidence(row))
         if row["kind"] == "file" and path.endswith(".jar"):
@@ -464,10 +466,15 @@ def observe_components(image, *, source_root=None, packages=None, advisory_pages
             own(component, [row["path"] for row in matched])
             terms(component, [])
     unknown = [row for row in unknown if not owners.get(row["path"])]
-    missing_go = []
+    missing_go, debian_go = [], []
     for row in go_files:
         packages_for_binary = index.get(("gobinary", row["path"]))
         if not packages_for_binary:
+            from .security_image_package_coverage import debian_go_coverage
+            package_proof = debian_go_coverage(row, owners.get(row["path"]), index)
+            if package_proof:
+                debian_go.append(package_proof)
+                continue
             missing_go.append(row)
             continue
         c = add("go-executable:" + row["path"], "go-binary")
@@ -494,6 +501,8 @@ def observe_components(image, *, source_root=None, packages=None, advisory_pages
         qualification="observation-only; source/run/native guard and policy join required",
     )
     proofs = {path: row["body"] for path, row in files.rows.items() if "body" in row}
+    if debian_go:
+        document["debian_go_coverage"] = debian_go
     if postgres_check is not None:
         document["postgresql_server"] = postgres_check
     if scan_receipt is not None:
@@ -640,6 +649,8 @@ def _family_projection(observation, license_rows=()):
     projected = dict(components=components, term_sources=derivations)
     if "trivy_package_evidence" in document:
         projected["trivy_package_evidence"] = document["trivy_package_evidence"]
+    if "debian_go_coverage" in document:
+        projected["debian_go_coverage"] = document["debian_go_coverage"]
     if "postgresql_server" in document:
         projected["postgresql_server"] = document["postgresql_server"]
     if license_rows:

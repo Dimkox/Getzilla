@@ -11,6 +11,7 @@ import time
 import urllib.request
 
 from .security_acquisition import _NoQueryRedirects
+from .security_oci import ImageSecurityRefusal
 
 URL = "https://www.postgresql.org/support/security/17/"
 MAX_BYTES = 1024 * 1024
@@ -25,10 +26,8 @@ BINARY_DIGESTS = {
 }
 
 
-class PostgresRefusal(RuntimeError):
-    def __init__(self, reason, **evidence):
-        super().__init__(reason)
-        self.report = dict(kind="postgresql-server-check", status="fail", reason=reason, **evidence)
+class PostgresRefusal(ImageSecurityRefusal):
+    report_kind = "postgresql-server-check"
 
 
 class _Tables(HTMLParser):

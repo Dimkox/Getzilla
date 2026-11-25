@@ -414,14 +414,14 @@ def _pipeline(request, volume, builder):
             cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))
             cli._atomic(Path(request['profile']), canonical(profile))
             _event('prepare')
-            from .security_postgresql import PostgresRefusal
+            from .security_oci import ImageSecurityRefusal
             try:
                 with cli._preparation_step('prepare-inputs'):
                     preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
                                                      refresh=True, provision=True, **options)
-            except PostgresRefusal as error:
+            except ImageSecurityRefusal as error:
                 _event('evaluate')
-                # A server CVE or an unproved PostgreSQL assessment is a hard
+                # A known image CVE or an unproved PostgreSQL assessment is a hard
                 # refusal, including while the #456 infrastructure waiver exists.
                 report = dict(error.report, qualification="UNVERIFIED", source=source, run=request['run'])
                 cli._atomic(Path(request['report']), canonical(report))
