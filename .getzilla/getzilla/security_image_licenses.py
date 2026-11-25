@@ -498,7 +498,7 @@ class _HeldFamily:
         self.guard, self.store, self.seal = state["native_guard"], store, seal
 
 
-def _family_projection(observation):
+def _family_projection(observation, license_rows=()):
     """Project complete text fields, retaining their exact original data source.
 
     DEP5 field decoding removes only its standard continuation/dot encoding.
@@ -508,7 +508,7 @@ def _family_projection(observation):
     import hashlib
 
     document, proofs = observation.document(), observation.proof_files()
-    if document["unresolved"] or document["complete"] is not True:
+    if document["unresolved"] != list(license_rows) or document["complete"] != (not license_rows):
         from .security_artifacts import ArtifactError
 
         first = document["unresolved"][0]
@@ -522,10 +522,22 @@ def _family_projection(observation):
         derivations.append(dict(path=path, source=source, **derivation))
         return path
 
+    affected = {row["group"] for row in license_rows}
+    if affected - {c["id"] for c in document["components"]}:
+        raise oci.OCIError("Unbound internal license observation")
     for component in document["components"]:
         c = {key: copy.deepcopy(component[key]) for key in ("id", "expression", "requires")}
         c["files"] = [{k: row[k] for k in ("path", "sha256", "bytes")} for row in component["files"]]
         c["license_paths"], c["notice_paths"] = [], []
+        if component["id"] in affected and component["expression"] is None:
+            # The files and the original license bytes stay in the held proof.
+            # No expression or complete term is asserted for this component.
+            c["license_status"] = "internal-report-only"
+            for proof in component["notice_paths"]:
+                path = term(proofs[proof["path"]], proof, dict(kind="identity"))
+                c["notice_paths"].append(path)
+            components.append(c)
+            continue
         for proof in component["license_paths"]:
             raw = proofs[proof["path"]]
             if component["kind"] == "dpkg" and proof["path"].endswith("/copyright"):
@@ -550,10 +562,14 @@ def _family_projection(observation):
         components.append(c)
     # The final installed graph keeps physical software ownership. Term paths
     # form a separate reusable namespace; no exclusive archive partition exists.
-    return document, proofs, dict(components=components, term_sources=derivations), material
+    projected = dict(components=components, term_sources=derivations)
+    if license_rows:
+        projected["license_observations"] = dict(status="internal-report-only",
+            counts=dict(Counter(row["code"] for row in license_rows)))
+    return document, proofs, projected, material
 
 
-def prepare_families(root, inventory, source, run, *, now=None):
+def prepare_families(root, inventory, source, run, *, now=None, policy=None):
     """Serialize actual held image families; unknown groups stop qualification."""
     import hashlib
     import os
@@ -571,6 +587,12 @@ def prepare_families(root, inventory, source, run, *, now=None):
     cached = state.setdefault("image_component_observations", {})
     records, charged = [], 0
     failures = []
+    license_counts = Counter()
+    from .security_internal_image_scope import internal_images, partition
+    from .security_license_contracts import _policy
+    internal = set()
+    if policy is not None and "image_license_scope" in _policy(policy):
+        internal = internal_images(inventory["images"], state["images"])
     state["image_family_diagnostics"] = []
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -596,7 +618,9 @@ def prepare_families(root, inventory, source, run, *, now=None):
                 observation = observe_components(image)
                 cached[image.reference] = observation
             observed = observation.document()
-            if observed["unresolved"] or observed["complete"] is not True:
+            license_rows, blocking = partition(observed["unresolved"], image.reference in internal)
+            license_counts.update(row["code"] for row in license_rows)
+            if blocking or observed["complete"] != (not observed["unresolved"]):
                 proof_rows = [
                     dict(image_path=path, **save(body)) for path, body in sorted(observation.proof_files().items())
                 ]
@@ -617,9 +641,11 @@ def prepare_families(root, inventory, source, run, *, now=None):
                         "artifact-size", "unqualified image component diagnostic exceeds metadata bound"
                     )
                 state["image_family_diagnostics"].append(save(diagnostic))
-                failures.extend(observed["unresolved"])
+                if not blocking:
+                    raise ArtifactError("license-image-components", "inconsistent held image completeness")
+                failures.extend(blocking)
                 continue
-            observed, proofs, projected, material = _family_projection(observation)
+            observed, proofs, projected, material = _family_projection(observation, license_rows)
             proof_rows = []
             for path, body in sorted(proofs.items()):
                 proof_rows.append(dict(image_path=path, **save(body)))
@@ -694,6 +720,8 @@ def prepare_families(root, inventory, source, run, *, now=None):
                 + ",".join(item["path"] for item in state["image_family_diagnostics"]),
             )
             error.image_gap_counts = dict(Counter(row["code"] for row in failures))
+            if license_counts:
+                error.license_observations = dict(status="internal-report-only", counts=dict(license_counts))
             raise error
         return records
     finally:
@@ -775,6 +803,7 @@ def verify_family(root, record):
         bound_bytes=bound,
         component_inventory_json=raw.decode("utf-8"),
         held_image=True,
+        **({"license_observations": component["license_observations"]} if "license_observations" in component else {}),
     )
 
 
@@ -818,6 +847,13 @@ def finding_consistent(finding, allowed, select_expression):
         evidence = verify_family(held.root, record)
         selected, licenses, notices = [], [], []
         for component in evidence["components"]:
+            if component.get("license_status") == "internal-report-only":
+                if not evidence.get("license_observations") or component["expression"] is not None:
+                    return False
+                for path in component["notice_paths"]:
+                    if not evidence["files"][path].strip():
+                        return False
+                continue
             chosen, identifiers = select_expression(component["expression"], allowed)
             owned = {item["path"] for item in component["files"]}
             paths = owned | set(component["license_paths"] + component["notice_paths"])
@@ -839,6 +875,9 @@ def finding_consistent(finding, allowed, select_expression):
             notice_files=notices,
             obligations="internal use; exact source/component/license evidence retained",
         )
+        if "license_observations" in evidence:
+            expected.update(license_observations=evidence["license_observations"],
+                            obligations="internal use; partial license evidence reported")
         return finding == expected
     except (ArtifactError, ValueError, TypeError, KeyError, OSError):
         return False

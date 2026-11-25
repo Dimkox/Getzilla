@@ -332,6 +332,16 @@ _IMAGE_GAP_CODES = frozenset((
 
 def _preparation_detail(value):
     """Closed refusal observations only; never authority, exception text or paths."""
+    if type(value) is dict and "license_observations" in value:
+        from .security_internal_image_scope import GAP_CODES
+        obs = value["license_observations"]
+        base = _preparation_detail({k: v for k, v in value.items() if k != "license_observations"})
+        if (not base.get("image_gap_counts") or type(obs) is not dict or set(obs) != {"status", "counts"}
+                or obs["status"] != "internal-report-only" or type(obs["counts"]) is not dict
+                or not obs["counts"] or obs["counts"].keys() - GAP_CODES
+                or any(type(n) is not int or not 0 < n < 2 ** 31 for n in obs["counts"].values())):
+            return {}
+        return dict(base, license_observations=obs)
     if type(value) is dict and 'image_gap_counts' in value:
         counts = value['image_gap_counts']
         base = _preparation_detail({key: item for key, item in value.items() if key != 'image_gap_counts'})
@@ -377,6 +387,7 @@ def _preparation_step(stage):
                 error_code=code if kind == 'artifact' else None,
                 errno=number if type(number) is int and 0 <= number <= 4095 else None)
             if type(error) is ArtifactError and stage == 'package-artifacts' and hasattr(error, 'image_gap_counts'):
-                detail = _preparation_detail(dict(detail, image_gap_counts=error.image_gap_counts)) or detail
+                detail = _preparation_detail(dict(detail, image_gap_counts=error.image_gap_counts,
+                    **({"license_observations": error.license_observations} if hasattr(error, "license_observations") else {}))) or detail
             error._getzilla_preparation = (_PREPARATION_SEAL, detail)
         raise

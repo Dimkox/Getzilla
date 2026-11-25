@@ -9,6 +9,18 @@
     "ISC",
     "0BSD"
   ],
+  "image_license_scope": {
+    "decision": "owner 2026-11-25, #456",
+    "internal": "report-only",
+    "report_only_gaps": [
+      "dpkg-binary-license-scope",
+      "dpkg-legacy-license-scope",
+      "dpkg-copyright-format-unproved",
+      "license-text-unrecognized",
+      "license-term-unproved",
+      "cpython-bundled-terms-unproved"
+    ]
+  },
   "usage_distribution": {
     "build-ci": "internal",
     "manifest:trust-ci/requirements-test.txt#runtime-and-development": "internal",

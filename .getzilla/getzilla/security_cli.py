@@ -158,7 +158,8 @@ def _prepare_families(inventory,artifacts,tools,families,*,now=None,run_context=
         if not isinstance(run_context, Scope):
             raise SecurityDataError('image family preparation needs actual selected-run scope')
         run_context.validate(inventory,run_context.binding)
-        selected.extend(prepare_images(artifacts,inventory,run_context.binding['source'],run_context.binding['run'],now=now))
+        selected.extend(prepare_images(artifacts,inventory,run_context.binding['source'],run_context.binding['run'],now=now,
+            policy=load_policy(TRUSTED_ROOT)))
     if any(row.get('kind')=='release-tool' for row in inventory['tools']):
         with _preparation_step('release-tool-source'):
             release=prepare_release(inventory,artifacts,tools,now=now)

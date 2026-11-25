@@ -204,8 +204,7 @@ A scope decision records intended use; it does not prove artifact contents.
 The Factory offline builder installs files extracted from wheels. Validation
 must bind the completed archive and its retained license/NOTICE files to the
 actual delivered bytes and approved target profile. Cached source wheels do
-not establish that link. Tools and images still require exact component and
-license evidence. The six approved licenses and per-artifact obligations are
+not establish that link. Redistributed outputs require exact component and license evidence. Internal CI and Trust CI images record license observations as a report only (owner decision 2026-11-25, #456). Component ownership, unsupported-ecosystem coverage, vulnerability, secret and integrity findings remain blocking for every image. The six approved licenses and per-artifact obligations are
 unchanged; uses outside those verified license alternatives and unresolved
 composition require review.
 

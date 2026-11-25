@@ -193,6 +193,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     raise ArtifactError('license-obligation-missing', 'family needs explicit internal use or a qualified final-output adapter')
                 selected, licenses, notices = [], [], []
                 for component in evidence['components']:
+                    if evidence.get("held_image") and component.get("license_status") == "internal-report-only":
+                        if ("image_license_scope" not in policy or distribution != "internal"
+                                or not evidence.get("license_observations") or component["expression"] is not None):
+                            raise ArtifactError("license-obligation-missing", "internal observation outside its licensed scope")
+                        if any(not evidence['files'].get(path, b'').strip() for path in component['notice_paths']):
+                            raise ArtifactError('license-obligation-missing', 'declared component NOTICE is empty')
+                        continue
                     from .security_license_family_conditions import allowed_for
                     component_allowed = allowed_for(record, component, policy['auto_allow'],
                         selected_internal=distribution == 'internal' and (selected_required or
@@ -215,6 +222,11 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     'component_inventory_json': read_file(artifacts,record['components']['path'],MAX_INDEX_BYTES).decode('utf-8'),
                     'license_files': licenses, 'notice_files': notices,
                     'obligations': 'internal use; exact source/component/license evidence retained'}
+                if "license_observations" in evidence:
+                    if "image_license_scope" not in policy or distribution != "internal":
+                        raise ArtifactError("license-obligation-missing", "internal observation requires its scope decision")
+                    detail.update(license_observations=evidence["license_observations"],
+                                  obligations="internal use; partial license evidence reported")
                 if raw_distribution=='internal':
                     result['details'].append(detail)
                 if selected_required:

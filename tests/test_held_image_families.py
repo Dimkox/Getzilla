@@ -175,6 +175,81 @@ class HeldFamilyTests(fixtures.ImageComponentTests):
             self.assertTrue(document["observation"]["unresolved"])
             self.assertEqual(state.get("image_families", {}), {})
 
+    def test_internal_license_observation_reaches_evaluator_and_preserves_original_bytes(self):
+        from datetime import datetime, timezone
+        from getzilla.security_licenses import evaluate_artifacts, load_policy, _select_expression
+
+        rows = self.debian()
+        rows[-1] = (rows[-1][0], b"legacy text in original image")
+        policy = load_policy(Path(__file__).resolve().parents[1])
+        with self.fixture(rows) as (root, inv, source, run, state):
+            inv["images"][0].update(manifest="trust-ci/runner.Dockerfile", distribution="internal")
+            inv.update(dependencies=[], tools=[], complete=True, gaps=[])
+            now = datetime.now(timezone.utc)
+            records = image_licenses.prepare_families(root, inv, source, run, policy=policy, now=now)
+            (root / "manifest.json").write_text(json.dumps(dict(schema_version=1,
+                inventory_digest=inv["digest"], last_verified_sync_utc=now.isoformat(),
+                records=records, gaps=[])))
+            out = evaluate_artifacts(inv, root, policy)
+            self.assertEqual((out["status"], out["gaps"]), ("pass", []))
+            finding = out["details"][0]
+            self.assertEqual(finding["license_observations"], {"status": "internal-report-only",
+                "counts": {"dpkg-legacy-license-scope": 1}})
+            self.assertTrue(image_licenses.finding_consistent(finding, policy["auto_allow"], _select_expression))
+            self.assertIn(rows[-1][1], family_evidence(root, records[0])["files"].values())
+            finding["license_observations"]["counts"].clear()
+            self.assertFalse(image_licenses.finding_consistent(finding, policy["auto_allow"], _select_expression))
+
+    def test_unknown_and_redistributed_images_keep_the_same_license_gap(self):
+        from getzilla.security_licenses import load_policy
+        policy = load_policy(Path(__file__).resolve().parents[1])
+        rows = self.debian()
+        rows[-1] = (rows[-1][0], b"legacy terms")
+        with self.fixture(rows) as (root, inv, source, run, state):
+            use = inv["images"][0]
+            use["manifest"] = "trust-ci/runner.Dockerfile"
+            for distribution in (None, "redistributed", "unknown"):
+                if distribution is not None:
+                    use["distribution"] = distribution
+                with self.subTest(distribution=distribution), self.assertRaises(ArtifactError) as exc:
+                    image_licenses.prepare_families(root, inv, source, run, policy=policy)
+                self.assertEqual(exc.exception.image_gap_counts, {"dpkg-legacy-license-scope": 1})
+
+    def test_internal_image_cannot_downgrade_unowned_software(self):
+        from getzilla.security_licenses import load_policy
+        rows = self.debian()
+        rows[-1] = (rows[-1][0], b"unrecognized terms")
+        rows.append(("usr/local/bin/not-owned", b"\x7fELFdata"))
+        with self.fixture(rows) as (root, inv, source, run, state):
+            inv["images"][0].update(manifest="trust-ci/runner.Dockerfile", distribution="internal")
+            with self.assertRaises(ArtifactError) as exc:
+                image_licenses.prepare_families(root, inv, source, run,
+                    policy=load_policy(Path(__file__).resolve().parents[1]))
+            self.assertEqual(exc.exception.image_gap_counts, {"unattributed-software": 1})
+            self.assertEqual(exc.exception.license_observations["counts"], {"dpkg-legacy-license-scope": 1})
+
+    def test_shared_image_or_recompressed_layer_stays_strict(self):
+        from types import SimpleNamespace
+        from getzilla.security_internal_image_scope import internal_images
+        a = dict(reference="build", distribution="internal", manifest="trust-ci/runner.Dockerfile")
+        b = dict(reference="shipped", distribution="redistributed", manifest="factory/compose.yaml")
+        images = {"build": SimpleNamespace(layer_identities={"gzip-a", "tar-a"}),
+                  "shipped": SimpleNamespace(layer_identities={"gzip-b", "tar-a"})}
+        self.assertEqual(internal_images([a, b], images), set())
+        images["shipped"].layer_identities = {"gzip-b", "tar-b"}
+        self.assertEqual(internal_images([a, b], images), {"build"})
+        self.assertEqual(internal_images([a, b, dict(b, reference="build")], images), set())
+
+    def test_internal_image_policy_has_closed_shape_and_categories(self):
+        from getzilla.security_license_contracts import _policy, load_policy
+        policy = load_policy(Path(__file__).resolve().parents[1])
+        policy.pop("digest")
+        block = policy["image_license_scope"]
+        for change in ({"report_only_gaps": block["report_only_gaps"] + ["unattributed-software"]},
+                      {"report_only_gaps": []}, {"extra": True}, {"internal": "allow"}):
+            with self.subTest(change=change), self.assertRaises(ArtifactError):
+                _policy(dict(policy, image_license_scope={**block, **change}))
+
     def test_whiteout_cannot_supply_removed_lower_hardlink_target(self):
         api = self.api()
         inventory, catalog = self.linked_image(

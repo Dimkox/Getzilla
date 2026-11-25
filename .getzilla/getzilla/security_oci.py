@@ -487,9 +487,9 @@ def _parse_layer(raw, media, expected, budget, *, visit=None, reader="import"):
 
 
 class VerifiedOCIImage:
-    __slots__ = ('reference', 'platform', 'layout', 'manifest_digest', 'config_digest', '_proof', '_files', '_budget', '_components')
+    __slots__ = ('reference', 'platform', 'layout', 'manifest_digest', 'config_digest', '_proof', '_files', '_budget', '_components', 'layer_identities')
 
-    def __init__(self, reference, platform, layout, manifest_digest, config_digest, proof, budget, files, components=None):
+    def __init__(self, reference, platform, layout, manifest_digest, config_digest, proof, budget, files, components=None, layer_identities=()):
         if proof is not _PROOF:
             raise OCIError('Verified OCI identity requires import')
         self.reference, self.platform, self.layout = reference, platform, layout
@@ -498,6 +498,7 @@ class VerifiedOCIImage:
         self._budget = budget
         self._files = files
         self._components = components
+        self.layer_identities = frozenset(layer_identities)
 
     def remaining_seconds(self):
         if self._proof is not _PROOF:
@@ -818,6 +819,7 @@ def _import_one(record, profile, stage, budget, components=None):
         (stage / 'blobs').mkdir(mode=0o700)
         (stage / 'blobs/sha256').mkdir(mode=0o700)
         seen, active, candidates, roles = {}, set(), [], {}
+        layer_identities = set()
 
         def blob(desc, *, opaque=False):
             media, digest, size = _descriptor(desc, opaque_attestation=opaque)
@@ -914,6 +916,7 @@ def _import_one(record, profile, stage, budget, components=None):
                     if layer_media not in allowed_layers or not isinstance(diff_id, str) or not HEX.fullmatch(diff_id):
                         raise OCIError('Unsupported OCI layer or diff ID')
                     _layer(blob(layer), layer_media, diff_id, budget, components)
+                    layer_identities.update((layer['digest'], diff_id))
                 if not attestation and platform == profile['platform']:
                     candidates.append((desc, config_desc['digest']))
             active.remove(digest)
@@ -936,7 +939,7 @@ def _import_one(record, profile, stage, budget, components=None):
                 stream.write(raw)
             files[name] = (hashlib.sha256(raw).hexdigest(), len(raw))
         return VerifiedOCIImage(record['reference'], profile['platform'], stage,
-                                descriptor['digest'], config_digest, _PROOF, budget, files, components)
+                                descriptor['digest'], config_digest, _PROOF, budget, files, components, layer_identities)
     finally:
         source.close()
 

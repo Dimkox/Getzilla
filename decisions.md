@@ -1218,3 +1218,7 @@ Pin cases and grading rules in one contract digest, and declare model, prompt, t
 ### 2026-11-04 — Neutral hook root discovery
 
 Require the engine initializer when a launcher selects an installed hook root. After shared hooks move into `.getzilla`, checking only that directory also accepts a planted hook-only subtree; the regression must use the neutral path.
+
+## 2026-11-25 — License evidence for internal CI images (#456)
+
+Getzilla does not ship its CI and Trust CI images, so the owner classifies six gaps in license evidence for their internal use as report-only. The source and installer ZIP, Factory packages, offline archives and images sharing a layer with a distributed output retain strict licensing checks. Component attribution, unsupported ecosystems, vulnerabilities, secrets and integrity remain blocking for every image.
