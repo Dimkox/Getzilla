@@ -1056,10 +1056,12 @@ class ProjectStateTests(unittest.TestCase):
             _section((ROOT / "docs/REFERENCE.md").read_text(encoding="utf-8"), "Current state"),
             _section((ROOT / "START_HERE.md").read_text(encoding="utf-8"), "Current project state"),
         )
-        for section in current_sections:
+        # REFERENCE records the November 19 base; START_HERE owns the post-release handoff.
+        section_commits = (self.state["current_continuation"]["source_base"], self.state["observed_main_sha"])
+        for section, commit in zip(current_sections, section_commits, strict=True):
             self.assertIn(CURRENT_CHECK, section)
             self.assertIn(str(CURRENT_APP_ID), section)
-            self.assertIn(self.state["observed_main_sha"], section)
+            self.assertIn(commit, section)
             self.assertNotIn("adaptive-trust-ci/verified@6737355947c2", section)
 
         start_here = (ROOT / "START_HERE.md").read_text(encoding="utf-8")
