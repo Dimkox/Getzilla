@@ -426,7 +426,7 @@ class StructureTests(unittest.TestCase):
         roadmap = (ROOT / "DARK_FACTORY_ROADMAP.md").read_text(encoding="utf-8")
         self.assertEqual(version, "2.3.1")
         self.assertTrue(readme.startswith(f"# Getzilla v{version}\n"))
-        self.assertIn("Identity: **v2.3.1**", readme)
+        self.assertIn("Identity: **2.3.1 source candidate**", readme)
         self.assertTrue(
             changelog.startswith("# Changelog\n\n## 2.3.1 — 2026-10-21 (source candidate)\n")
         )
