@@ -101,6 +101,12 @@ jobs:
           from getzilla.security_artifacts import read_file, MAX_INDEX_BYTES
           temp = pathlib.Path(os.environ['RUNNER_TEMP'])
           store = temp / 'security-artifacts'
+          inputs = temp / 'security-run-inputs.json'
+          if inputs.exists():
+              selection = json.loads(inputs.read_bytes())['selection']
+              uses = [u for u in selection['uses'] if u['path'] in {'trust-ci/dind/Dockerfile', 'trust-ci/compose.yaml'}
+                      and ('DIND' in u['expression'] or 'dind-rootless' in u['expression'])]
+              (temp / 'replay-result' / 'dind-bindings.json').write_text(json.dumps(uses, sort_keys=True))
           rows = []
           graphs = set()
           for path in sorted((store / 'proofs').glob('*')):
