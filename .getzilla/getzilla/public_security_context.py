@@ -180,7 +180,6 @@ def _profile_declaration(source,inventory,roots,run,policy,*,now=None,image_arti
         'security-kev': ['kev', *osv, *images] if counts['dependencies'] or counts['images'] else [],
         'security-epss': ['epss', *osv, *images] if counts['dependencies'] or counts['images'] else [],
         'security-malicious-packages': osv,
-        'security-licenses': ['artifact-license-catalog'] if any(counts.values()) else [],
         'security-container-images': images}
     body['image_profile'] = None
     if counts['images']:
@@ -333,23 +332,6 @@ _IMAGE_GAP_CODES = frozenset((
 
 def _preparation_detail(value):
     """Closed refusal observations only; never authority, exception text or paths."""
-    if type(value) is dict and "license_observations" in value:
-        from .security_internal_image_scope import GAP_CODES
-        obs = value["license_observations"]
-        base = _preparation_detail({k: v for k, v in value.items() if k != "license_observations"})
-        if not base.get("image_gap_counts") or type(obs) is not dict:
-            return {}
-        scopes = {"internal-report-only", "referenced-report-only"}
-        if set(obs) == {"status", "counts"} and isinstance(obs["status"], str) and obs["status"] in scopes:
-            counts = [obs["counts"]]
-        elif obs and obs.keys() <= scopes:
-            counts = obs.values()
-        else:
-            return {}
-        if any(type(row) is not dict or not row or row.keys() - GAP_CODES
-               or any(type(n) is not int or not 0 < n < 2 ** 31 for n in row.values()) for row in counts):
-            return {}
-        return dict(base, license_observations=obs)
     if type(value) is dict and 'image_gap_counts' in value:
         counts = value['image_gap_counts']
         base = _preparation_detail({key: item for key, item in value.items() if key != 'image_gap_counts'})
@@ -395,7 +377,6 @@ def _preparation_step(stage):
                 error_code=code if kind == 'artifact' else None,
                 errno=number if type(number) is int and 0 <= number <= 4095 else None)
             if type(error) is ArtifactError and stage == 'package-artifacts' and hasattr(error, 'image_gap_counts'):
-                detail = _preparation_detail(dict(detail, image_gap_counts=error.image_gap_counts,
-                    **({"license_observations": error.license_observations} if hasattr(error, "license_observations") else {}))) or detail
+                detail = _preparation_detail(dict(detail, image_gap_counts=error.image_gap_counts)) or detail
             error._getzilla_preparation = (_PREPARATION_SEAL, detail)
         raise

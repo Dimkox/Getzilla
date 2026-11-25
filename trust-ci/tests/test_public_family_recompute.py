@@ -18,7 +18,7 @@ def guard(event, args):
 
 sys.addaudithook(guard)
 NAMES = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
-         'security-malicious-packages', 'security-licenses', 'security-container-images',
+         'security-malicious-packages', 'security-container-images',
          'opengrep', 'secret-scan', 'bandit', 'trivy-config')
 
 
@@ -89,7 +89,7 @@ class FullFamilyRecomputation(unittest.TestCase):
         self.assertEqual(self.calls,[])
     def test_positive_compliance_records_are_preserved_and_not_vulnerability_counts(self):
         marker = {'outcome': 'pass', 'findings': [{'owned': 'positive-record'}]}
-        for name in ('security-licenses', 'security-epss'):
+        for name in ('security-epss',):
             self.assertEqual(self.guarded(lambda: bundle.result_finding_count(name, marker)), 0)
         self.assertEqual(self.guarded(lambda: bundle.result_finding_count('known-vulnerabilities', marker)), 1)
         self.assertEqual(marker['findings'], [{'owned': 'positive-record'}])

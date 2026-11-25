@@ -382,7 +382,7 @@ def _component_row(member, archive, keep, budget):
 class _ComponentIndex:
     """Private per-import facts. Capture only while performing the original validated TAR read."""
     def __init__(self):
-        from .security_image_licenses import _retain
+        from .security_image_components import _retain
         self.retain = _retain
         self.layers = {}
         self.binary_hashes = {}

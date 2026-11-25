@@ -955,7 +955,7 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertEqual(
                 {item['name'] for item in report['checks']},
-                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context', 'quality-gate', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'security-inventory', 'security-kev', 'security-epss', 'security-malicious-packages', 'security-licenses', 'security-container-images'},
+                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context', 'quality-gate', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'security-inventory', 'security-kev', 'security-epss', 'security-malicious-packages', 'security-container-images'},
             )
 
     def test_pr_mode_keeps_eligible_landing_inventory_on_full_path(self) -> None:
@@ -2118,7 +2118,7 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertEqual(
                 {item['name'] for item in report['checks']},
-                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context', 'quality-gate', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'security-inventory', 'security-kev', 'security-epss', 'security-malicious-packages', 'security-licenses', 'security-container-images'},
+                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context', 'quality-gate', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'security-inventory', 'security-kev', 'security-epss', 'security-malicious-packages', 'security-container-images'},
             )
 
 

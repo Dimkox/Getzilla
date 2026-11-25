@@ -14,3 +14,7 @@ downloaded PostgreSQL image under #456 when all three deliveries prove its layer
 and binaries are absent. The ZIP's two pinned CI manifests and linked configs
 provide offline identity evidence. Every distributed image payload retains strict
 license obligations, and vulnerability findings remain blocking for all images.
+
+### 2026-11-25 — Remove the license admission gate (#456)
+
+The owner retired license evaluation and corresponding-source acquisition for every subject and will handle licensing questions when they arise. This supersedes the internal and referenced image decisions. Vulnerability, secret, integrity and component-coverage checks stay mandatory, and Factory continues to package its legal files.

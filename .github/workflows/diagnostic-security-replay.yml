@@ -91,68 +91,9 @@ jobs:
           if test -f "$RUNNER_TEMP/security-dind-cli.json"; then
             cp "$RUNNER_TEMP/security-dind-cli.json" "$RUNNER_TEMP/replay-result/"
           fi
-          if test -f "$RUNNER_TEMP/security-delivery-scope.json"; then
-            cp "$RUNNER_TEMP/security-delivery-scope.json" "$RUNNER_TEMP/replay-result/"
-          fi
           if test -f "$RUNNER_TEMP/security-expanded.json"; then
             cp "$RUNNER_TEMP/security-expanded.json" "$RUNNER_TEMP/replay-result/"
           fi
-      - name: Export file and layer identities for unresolved component groups
-        if: always()
-        working-directory: trusted-checker
-        run: |
-          python -I -B - <<'PY'
-          import hashlib, json, os, pathlib, re, sys
-          sys.path.insert(0, str(pathlib.Path.cwd() / '.getzilla'))
-          from getzilla.security_artifacts import read_file, MAX_INDEX_BYTES
-          temp = pathlib.Path(os.environ['RUNNER_TEMP'])
-          store = temp / 'security-artifacts'
-          inputs = temp / 'security-run-inputs.json'
-          if inputs.exists():
-              selection = json.loads(inputs.read_bytes())['selection']
-              uses = [u for u in selection['uses'] if u['path'] in {'trust-ci/dind/Dockerfile', 'trust-ci/compose.yaml'}
-                      and ('DIND' in u['expression'] or 'dind-rootless' in u['expression'])]
-              (temp / 'replay-result' / 'dind-bindings.json').write_text(json.dumps(uses, sort_keys=True))
-          rows = []
-          graphs = set()
-          for path in sorted((store / 'proofs').glob('*')):
-              if not re.fullmatch('[a-f0-9]{64}', path.name) or path.stat().st_size > MAX_INDEX_BYTES:
-                  continue
-              data = read_file(store, 'proofs/' + path.name, MAX_INDEX_BYTES)
-              if b'"held-image-observation-unqualified"' not in data[:2048]:
-                  continue
-              if hashlib.sha256(data).hexdigest() != path.name:
-                  raise ValueError('diagnostic proof hash differs')
-              doc = json.loads(data)
-              if doc.get('kind') != 'held-image-observation-unqualified':
-                  continue
-              obs = doc['observation']
-              graph = obs['manifest_digest']
-              if graph not in graphs:
-                  graphs.add(graph)
-                  ownership = []
-                  for c in obs['components']:
-                      if c['kind'] in {'apk','go-binary','pinned-runner-artifact','project-source',
-                                       'upstream-image-file','source-built-postgresql'}:
-                          ownership.append({k: c[k] for k in ('id','kind','files','source_origin','source_files','modules')
-                                            if k in c})
-                  name = 'owners-' + graph.removeprefix('sha256:') + '.json'
-                  if not re.fullmatch(r'owners-[a-f0-9]{64}\.json', name):
-                      raise ValueError('expected a verified manifest digest')
-                  (temp / 'replay-result' / name).write_text(json.dumps(ownership, sort_keys=True))
-              groups = [row for row in obs['unresolved'] if row['code'] in {
-                  'unattributed-software', 'unsupported-go-components', 'unsupported-apk-components',
-                  'unsupported-postgres-components'}]
-              rows.append(dict(subject=doc['subject'], manifest=obs['manifest_digest'],
-                               config=obs['config_digest'], groups=groups,
-                               trivy=obs.get('trivy_package_evidence'), postgresql_server=obs.get('postgresql_server'),
-                               blocking_licenses=[row['group'] for row in obs['unresolved'] if row['code']=='license-term-unproved'],
-                               source_groups=[dict(id=c['id'], files=len(c['files']))
-                                              for c in obs['components'] if c['kind'] in
-                                              {'apk','go-binary','pinned-runner-artifact','project-source'}],
-                               blocking_codes=sorted({g['code'] for g in obs['unresolved']})))
-          (temp / 'replay-result' / 'component-gaps.json').write_text(json.dumps(rows, sort_keys=True))
-          PY
       - name: Upload diagnostic report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

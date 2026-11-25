@@ -472,7 +472,32 @@ def scan_layouts(inventory: dict, tools: Path, *, binding: dict, now=None, proce
             'data_sources': []}
 
 
+def _component_coverage(report, image, inventory, tools, trivy, pages):
+    from . import security_image_authority as authority
+    from .security_image_components import observe_components
+    from .security_image_package_coverage import package_evidence
+
+    if image is None:
+        raise SecurityDataError('Installed component coverage requires exact offline OCI bytes')
+    state = authority._LIVE
+    source_root = None
+    if state is not None:
+        held = state['images'].get(image.reference)
+        if (state['native_guard'] is not authority._GUARD or authority._GUARD is None
+                or state['declared_inventory'] != inventory or held is None
+                or (held.manifest_digest, held.config_digest, held.platform) !=
+                   (image.manifest_digest, image.config_digest, image.platform)):
+            raise SecurityDataError('Component scan differs from the owned image graph')
+        image, source_root = held, state['root']
+    packages = package_evidence(report, image, tools, trivy)
+    observed = observe_components(image, source_root=source_root, packages=packages, advisory_pages=pages).document()
+    if state is not None and 'postgresql_server' in observed:
+        state.setdefault('postgresql_servers', {})[image.manifest_digest] = observed['postgresql_server']
+    return [dict(gap, manifest=image.manifest_digest) for gap in observed['unresolved']]
+
+
 def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
+    from .security_oci import ImageSecurityRefusal
     env = os.environ if environ is None else environ
     tools = tools_directory(TRUSTED_ROOT, env)
     if not env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS') and ((tools / 'oci/manifest.json').exists() or (tools / 'oci/manifest.json').is_symlink()):
@@ -488,6 +513,7 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
         return {'outcome':'blocked', 'summary':'declared images require verified offline OCI artifacts',
                 'findings':[], 'gaps':[{'code':'unqualified-image-selection'}], 'images':[], 'data_sources':[]}
     results, gaps, findings = [], [], []
+    source = None
     try:
         trivy = pinned_tool('trivy', tools)
         source = trivy_database_source(tools, now=now)
@@ -506,6 +532,7 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                 imported = nullcontext([])
             with imported as images:
                 verified = {image.reference: image for image in images}
+                pages = {}
                 for index, item in enumerate(inventory['images']):
                     reference = item['reference']
                     if not _DIGEST_IMAGE.fullmatch(reference):
@@ -527,16 +554,20 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                                       timeout=image.remaining_seconds() if image is not None else 900)
                     if result.returncode != 0:
                         raise SecurityDataError('Trivy image process did not complete successfully')
-                    parsed = image_report(_process_report(report_path, result), reference, expected_image_id=item.get('image_id'), verified_oci=image)
+                    raw_report = _process_report(report_path, result)
+                    parsed = image_report(raw_report, reference, expected_image_id=item.get('image_id'), verified_oci=image)
                     from . import security_dind_exception as dind
                     blocking, accepted = dind.partition(parsed['findings'], image, inventory, now or datetime.now(timezone.utc))
                     findings.extend(blocking)
+                    try:
+                        gaps.extend(_component_coverage(raw_report, image, inventory, tools, trivy, pages))
+                    except ImageSecurityRefusal as exc:
+                        gaps.append(exc.report)
                     results.append({'image': reference, **parsed, 'accepted_evidence': accepted})
         if trivy_database_source(tools, now=now) != source:
             raise SecurityDataError('Trivy database changed during scanning')
     except (OSError, ValueError, RuntimeError) as exc:
         gaps.append({'code': 'image-scan-unavailable', 'message': str(exc)})
-        source = None
     return {'outcome': 'blocked' if gaps else ('finding' if findings else 'pass'),
             'summary': f'{len(results)} image scans; {len(findings)} findings; {len(gaps)} gaps',
             'findings': findings, 'gaps': gaps, 'images': results,

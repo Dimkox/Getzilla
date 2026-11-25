@@ -176,3 +176,17 @@ The component list includes dependencies for all platforms. Missing packages,
 an unavailable scan or additional findings block the result. Only the exact
 distribution module finding can proceed to the independent removal check.
 [Upstream vendor manifest](https://github.com/docker/cli/blob/c48360f51c53d2029ab6721ad4d012f9e14df846/vendor/modules.txt)
+
+### Seven HIGH findings after isolating the daemon
+
+The offline loader and Unix socket supersede the pull and TCP configuration described in the original scan above. The following dispositions use the pinned amd64 binaries. They create no additional scanner exceptions.
+
+| CVE | Evidence in the selected binaries | Fix and disposition |
+|---|---|---|
+| CVE-2026-17106 | Module match in the buildx plugin. The loader and worker never invoke buildx. | Update go-archive to v0.3.0 or remove the unused plugin and rescan the resulting filesystem. |
+| CVE-2026-41567 | Affected Moby symbols in buildx. No CI step invokes this plugin. | Upstream lists moby/v2 v2.0.0-beta.14. Retire the unused plugin or use a fixed upstream build. |
+| CVE-2026-42306 | Affected Moby symbols in buildx. The job does not invoke the plugin. | Same upstream module migration. Verify plugin removal against the final filesystem. |
+| CVE-2026-39821 | Module-level x/net match in runc, which starts jobs. Runtime reachability remains unresolved. | Require a fixed runtime built with x/net v0.57.0 or later. |
+| CVE-2026-46600 | Module-level x/net match in runc. Isolation alone cannot establish that local resolver handling is unreachable. | Require x/net v0.56.0 or later. |
+| CVE-2026-78661 | Affected HTML parser symbols in the runtime shim and ctr. Module-level matches also occur in runc, rootlesskit and Compose. | Require x/net v0.62.0 or later. The current job has no demonstrated HTML path, but the active shim prevents a binary-wide exemption. |
+| CVE-2026-78669 | Affected HTTP/2 symbols in the runtime shim and ctr, plus a module match in runc. The shim participates in job startup. | Require x/net v0.60.0 or later. Keep blocking until the runtime is fixed or its inputs establish non-reachability. |

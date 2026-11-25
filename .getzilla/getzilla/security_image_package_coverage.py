@@ -1,11 +1,9 @@
 """Component identities from the pinned Trivy binary and the live OCI graph."""
-from pathlib import Path
 import re
-import tempfile
+import hashlib
 
 from . import security_dind_exception as dind
 from . import security_oci as oci
-from . import security_tools as tools_api
 
 
 class VulnerableImageBinary(oci.ImageSecurityRefusal):
@@ -125,48 +123,35 @@ def package_index(report, image):
     return packages
 
 
-def scan(image, tools, trivy):
+def package_evidence(report, image, tools, trivy):
+    """Bind the package inventory to the exact Trivy vulnerability scan."""
     from .security_acquisition import TRIVY_VERSION
-    with tempfile.TemporaryDirectory(dir=tools, prefix="image-packages-") as temp:
-        scratch = Path(temp)
-        output = scratch / "sbom.json"
-        target = str(image.layout) + "@" + image.manifest_digest
-        command = [str(trivy), "image", "--input", target, "--scanners", "license", "--list-all-pkgs",
-                   "--offline-scan", "--skip-db-update", "--skip-java-db-update", "--skip-check-update",
-                   "--skip-version-check", *tools_api.trivy_options(scratch), "--parallel", "1",
-                   "--max-image-size", "2GB", "--format", "json", "--output", str(output)]
-        from .public_security_context import _preparation_step
-        with _preparation_step("image-package-scan"):
-            result = tools_api._process(command, scratch, scratch, timeout=image.remaining_seconds())
-            report = tools_api._process_report(output, result)
-        with _preparation_step("image-package-identity"):
-            oci.scanner_identity(report, image)
-            index = package_index(report, image)
-        import hashlib
-        receipt = dict(scanner="trivy", version=TRIVY_VERSION, manifest=image.manifest_digest,
-                       config=image.config_digest, report_sha256=hashlib.sha256(oci.canonical(report)).hexdigest())
-        receipt["unmatched_package_targets"] = [
-            dict(target=r["Target"], type=r["Type"], packages=[
-                {key: row[key] for key in ("Name", "Version", "Arch", "Relationship") if key in row}
-                for row in r.get("Packages", [])
-                if (r["Type"] == "debian" and row["Name"].startswith("postgresql"))
-                or (r["Type"] == "gobinary" and row.get("Relationship") == "root")
-            ][:32])
-            for r in report["Results"] if r.get("Type") == "debian" or (
-                r.get("Type") == "gobinary" and ("gobinary", r["Target"].lstrip("/")) not in index)
-        ][:64]
-        if (image.manifest_digest == dind.MANIFEST and image.config_digest == dind.CLI["config"]
-                and image.reference == dind.REFERENCE and image.platform == dind.CLI["platform"]):
-            from . import security_dind_cli_modules as cli_modules
-            from . import security_image_authority as authority
-            live = authority._LIVE
-            if live is None or live["images"].get(image.reference) is not image:
-                raise cli_modules.CliCoverageRefusal("docker-cli-module-scan-needs-owned-image")
-            modules, proof = cli_modules.scan(image, live["root"], trivy, tools)
-            index[("gobinary", dind.CLI["executable"])] = [(name, version, "") for name, version in modules]
-            receipt["vendored_docker_cli"] = proof
-            live["dind_cli_module_scan"] = proof
-        return index, receipt
+    oci.scanner_identity(report, image)
+    index = package_index(report, image)
+    receipt = dict(scanner="trivy", version=TRIVY_VERSION, manifest=image.manifest_digest,
+                   config=image.config_digest, report_sha256=hashlib.sha256(oci.canonical(report)).hexdigest())
+    receipt["unmatched_package_targets"] = [
+        dict(target=r["Target"], type=r["Type"], packages=[
+            {key: row[key] for key in ("Name", "Version", "Arch", "Relationship") if key in row}
+            for row in r.get("Packages", [])
+            if (r["Type"] == "debian" and row["Name"].startswith("postgresql"))
+            or (r["Type"] == "gobinary" and row.get("Relationship") == "root")
+        ][:32])
+        for r in report["Results"] if r.get("Type") == "debian" or (
+            r.get("Type") == "gobinary" and ("gobinary", r["Target"].lstrip("/")) not in index)
+    ][:64]
+    if (image.manifest_digest == dind.MANIFEST and image.config_digest == dind.CLI["config"]
+            and image.reference == dind.REFERENCE and image.platform == dind.CLI["platform"]):
+        from . import security_dind_cli_modules as cli_modules
+        from . import security_image_authority as authority
+        live = authority._LIVE
+        if live is None or live["images"].get(image.reference) is not image:
+            raise cli_modules.CliCoverageRefusal("docker-cli-module-scan-needs-owned-image")
+        modules, proof = cli_modules.scan(image, live["root"], trivy, tools)
+        index[("gobinary", dind.CLI["executable"])] = [(name, version, "") for name, version in modules]
+        receipt["vendored_docker_cli"] = proof
+        live["dind_cli_module_scan"] = proof
+    return index, receipt
 
 
 def apk_inventory(payload):

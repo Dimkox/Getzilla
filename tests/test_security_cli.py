@@ -97,7 +97,7 @@ class SecurityCliTests(unittest.TestCase):
             'family': CHECK_FAMILIES.get(name,name), 'inventory_sha256':'e'*64, 'policy_sha256':'f'*64,
             'assurance':'local-input-integrity-only', 'findings':[], 'gaps':[], 'data_sources': []}]} for name in REQUIRED_CHECKS]
         required={'known-vulnerabilities':'osv:PyPI','security-kev':'kev','security-epss':'epss',
-                  'security-malicious-packages':'osv:PyPI','security-licenses':'artifact-license-catalog',
+                  'security-malicious-packages':'osv:PyPI',
                   'security-container-images':'trivy-db'}
         for check in checks:
             detail=check['details'][0]
@@ -131,44 +131,20 @@ class SecurityCliTests(unittest.TestCase):
         by_name['secret-scan']['findings'][0]['disposition']=None
         self.assertEqual(finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)['status'],'fail')
 
-    def test_license_integrity_records_remain_informational_when_they_pass(self):
-        source,checks=self.report()
-        detail=next(c['details'][0] for c in checks if c['name']=='security-licenses')
-        detail['findings']=[{'ecosystem':'PyPI','package':'example','version':'1.0.0','manifest':'requirements.txt',
-            'status':'pass','expression':'MIT','selected_expression':'MIT','distribution':'internal',
-            'artifact_sha256':'a'*64,'origin':{},'license_files':[{'path':'LICENSE','sha256':'b'*64}],
-            'notice_files':[],'obligations':'internal use; license evidence retained'}]
-        self.assertEqual(finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)['status'],'pass')
-        detail['findings'][0]['status']='fail'
-        self.assertEqual(finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)['status'],'fail')
+    def test_owner_decision_removes_only_the_license_result(self):
+        source, checks = self.report()
+        result = finalize_report(source, source, checks, 'e'*64, 'f'*64, now=NOW)
+        self.assertEqual(result['license_evaluation'], 'license evaluation: disabled by owner decision 2026-11-25')
+        self.assertNotIn('security-licenses', REQUIRED_CHECKS)
+        for check in checks:
+            remaining = [item for item in checks if item is not check]
+            with self.subTest(missing=check['name']):
+                self.assertEqual(finalize_report(source, source, remaining, 'e'*64, 'f'*64, now=NOW)['status'], 'fail')
 
     def accepted(self, deadline, identifier='OSV-accepted'):
         return {'ecosystem':'PyPI','package':'example','version':'1.0.0','manifest':'requirements.txt',
                 'id':identifier,'aliases':[],'summary':'accepted fixture','severity':'MODERATE',
                 'fixed':[],'accepted_until':deadline}
-
-    def test_selected_license_must_match_an_approved_original_branch(self):
-        cases=[('MIT OR Apache-2.0','Apache-2.0','pass'),
-               ('GPL-3.0-only OR MIT','MIT','pass'),
-               ('(MIT OR Apache-2.0) AND BSD-2-Clause','Apache-2.0 AND BSD-2-Clause','pass'),
-               ('MIT AND Apache-2.0','Apache-2.0 AND MIT','pass'),
-               ('GPL-3.0-only','MIT','fail'), ('MIT AND Apache-2.0','MIT','fail'),
-               ('MIT OR Apache-2.0','BSD-2-Clause','fail'),
-               ('MIT OR Apache-2.0','MIT AND Apache-2.0','fail'),
-               ('MIT','MIT OR Apache-2.0','fail'), ('MIT AND GPL-3.0-only','MIT','fail'),
-               ('MIT OR (Apache-2.0 AND BSD-2-Clause)','Apache-2.0','fail'),
-               ('LicenseRef-custom OR MIT','MIT','fail')]
-        for expression,selected,want in cases:
-            with self.subTest(expression=expression,selected=selected):
-                source,checks=self.report()
-                detail=next(c['details'][0] for c in checks if c['name']=='security-licenses')
-                detail['findings']=[{'ecosystem':'PyPI','package':'example','version':'1.0.0',
-                    'manifest':'requirements.txt','status':'pass','expression':expression,
-                    'selected_expression':selected,'distribution':'internal','artifact_sha256':'a'*64,
-                    'origin':{},'license_files':[{'path':'LICENSE','sha256':'b'*64}],
-                    'notice_files':[],'obligations':'internal use; license evidence retained'}]
-                result=finalize_report(source,source,checks,'e'*64,'f'*64,now=NOW)
-                self.assertEqual(result['status'],want,result['qualification_gaps'])
 
     def test_not_applicable_accepted_requires_an_empty_list_or_absence(self):
         for accepted in (False, True, None, 0, '', 'accepted', {}, {'id': 'OSV-example'},
@@ -188,34 +164,6 @@ class SecurityCliTests(unittest.TestCase):
                     self.assertTrue(result['qualification_gaps'])
         detail.pop('accepted')
         self.assertEqual(finalize_report(source, source, checks, 'e'*64, 'f'*64, now=NOW)['status'], 'pass')
-
-    def test_selected_license_can_prove_overlapping_original_alternatives(self):
-        cases = [
-            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'MIT AND BSD-2-Clause', 'pass'),
-            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'Apache-2.0 AND MIT', 'pass'),
-            ('(MIT OR BSD-2-Clause) AND (MIT OR Apache-2.0)', 'BSD-2-Clause AND MIT', 'pass'),
-            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'MIT', 'pass'),
-            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'Apache-2.0 AND BSD-2-Clause', 'pass'),
-            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'MIT AND Apache-2.0 AND BSD-2-Clause', 'fail'),
-            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'Apache-2.0', 'fail'),
-            ('(MIT OR Apache-2.0) AND (MIT OR BSD-2-Clause)', 'MIT AND ISC', 'fail'),
-            ('(MIT OR Apache-2.0) AND (GPL-3.0-only OR BSD-2-Clause)', 'MIT AND BSD-2-Clause', 'pass'),
-            ('(MIT OR Apache-2.0) AND GPL-3.0-only', 'MIT', 'fail'),
-            ('(MIT OR Apache-2.0) AND (MIT OR LicenseRef-custom)', 'MIT', 'fail'),
-            ('(MIT OR Apache-2.0) AND (MIT OR unknown-license)', 'MIT', 'fail'),
-            ('(MIT OR Apache-2.0) AND (MIT OR Apache-2.0 WITH LLVM-exception)', 'MIT', 'fail'),
-        ]
-        for expression, selected, expected in cases:
-            with self.subTest(expression=expression, selected=selected):
-                source, checks = self.report()
-                detail = next(c['details'][0] for c in checks if c['name'] == 'security-licenses')
-                detail['findings'] = [{'ecosystem': 'PyPI', 'package': 'example', 'version': '1.0.0',
-                    'manifest': 'requirements.txt', 'status': 'pass', 'expression': expression,
-                    'selected_expression': selected, 'distribution': 'internal', 'artifact_sha256': 'a'*64,
-                    'origin': {}, 'license_files': [{'path': 'LICENSE', 'sha256': 'b'*64}],
-                    'notice_files': [], 'obligations': 'internal use; license evidence retained'}]
-                result = finalize_report(source, source, checks, 'e'*64, 'f'*64, now=NOW)
-                self.assertEqual(result['status'], expected, result['qualification_gaps'])
 
     def test_exact_license_proof_remains_bounded_by_policy_and_parser_limits(self):
         group = '(' + ' OR '.join(ALLOWED) + ')'

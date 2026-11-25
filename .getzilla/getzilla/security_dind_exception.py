@@ -108,7 +108,7 @@ def partition(findings, image, inventory, now):
 
 def removed_build_input_cli(row, base):
     from . import security_oci as oci
-    from .security_image_licenses import _Files, _retain
+    from .security_image_components import _Files, _retain
 
     live = authority._LIVE
     if (row.get('path') != CLI['executable'] or row.get('layer') != CLI['layer']

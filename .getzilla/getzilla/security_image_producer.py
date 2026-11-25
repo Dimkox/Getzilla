@@ -197,6 +197,15 @@ def registry_inputs(inventory):
             yield use
 
 
+PG = "e80acae3f1109e8e4533618b594918936f2858c63afc7204c4773148a673add8"
+
+
+def require_factory_pin(rows, pins):
+    uses = [row["source_reference"] for row in rows if row["manifest"] == "factory/compose.yaml"]
+    if uses != ["postgres:17-alpine@sha256:" + PG] or pins["postgres"]["reference"] != "postgres@sha256:" + PG:
+        raise ValueError("Factory and the reviewed PostgreSQL server must use the same immutable image")
+
+
 @contextmanager
 def produce(root, source, run, volume, builder):
     """Acquire actual source graphs and build five recipes covering six uses."""
@@ -213,7 +222,6 @@ def produce(root, source, run, volume, builder):
     ci = document(read_file(root, '.getzilla/config/ci-images.json', 65536))
     if ci.get('schema_version') != 1 or ci.get('platform') != 'linux/amd64':
         raise BackendUnavailable('current source CI base image declaration is unsupported')
-    from .security_referenced_image import require_factory_pin
     require_factory_pin(raw_inventory['images'], ci)
     choices = {'TRUST_CI_POSTGRES_IMAGE': ci['postgres']['reference'], '${PYTHON_BASE_IMAGE}': ci['python']['reference']}
     bindings, roots, resolved = [], {}, {}
@@ -417,38 +425,8 @@ def _pipeline(request, volume, builder):
                            package_target=package_target)
             _event('declare')
             profile = cli.prepare_inputs(root, database, artifacts, tools, write_profile=True, **options)
-            from .security_license_scope import activate
-            with cli._preparation_step('license-run-scope'):
-                license_inputs=activate(root,profile,_entry=_LICENSE_ENTRY)
-            from .security_image_delivery_build import build as build_deliveries
-            from zipfile import BadZipFile
-            from tarfile import TarError
-            from lzma import LZMAError
-            from zlib import error as ZlibError
-            pins = document(read_file(root, '.getzilla/config/ci-images.json', 65536))
-            try:
-                with cli._preparation_step('delivery-scope'):
-                    facts = build_deliveries(root, cli.TRUSTED_ROOT, volume, profile, pins)
-            except (OSError, ValueError, KeyError, TypeError, EOFError, RuntimeError, BadZipFile, TarError, LZMAError, ZlibError) as error:
-                # Without complete output evidence Factory remains strictly redistributed.
-                authority._LIVE['delivery_members'] = None
-                delivery_result = dict(status="redistributed", reason=type(error).__name__)
-            else:
-                authority._LIVE['delivery_members'] = facts
-                from .security_internal_image_scope import image_scopes
-                state = authority._LIVE
-                subjects = state["declared_inventory"]["images"]
-                _, referenced = image_scopes(subjects, state["images"], facts)
-                factory, = (row for row in subjects if row["manifest"] == "factory/compose.yaml")
-                image = state["images"][factory["reference"]]
-                hashes = image.layer_binary_hashes()
-                delivery_result = dict(status="examined", archive_sha256=facts[1], unique_members=len(facts[0]),
-                    postgresql_manifest=image.manifest_digest, postgresql_config=image.config_digest,
-                    layer_identities=len(image.layer_identities), binary_sha256_count=None if hashes is None else len(hashes),
-                    distribution="referenced" if image.reference in referenced else "redistributed")
-            cli._atomic(Path(request["report"]).parent / "security-delivery-scope.json", canonical(delivery_result))
-            license_inputs.update(selection=selection,catalog=catalog)
-            cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))
+            cli._atomic(Path(request['report']).parent / 'security-run-inputs.json',
+                        canonical(dict(selection=selection, catalog=catalog)))
             cli._atomic(Path(request['profile']), canonical(profile))
             _event('prepare')
             from .security_oci import ImageSecurityRefusal
@@ -478,7 +456,7 @@ def _pipeline(request, volume, builder):
                 _event('evaluate')
                 # A known image CVE or an unproved PostgreSQL assessment is a hard
                 # refusal, including while the #456 infrastructure waiver exists.
-                report = dict(error.report, qualification="UNVERIFIED", source=source, run=request['run'])
+                report = dict(error.report, license_evaluation=cli.LICENSE_EVALUATION, qualification="UNVERIFIED", source=source, run=request['run'])
                 cli._atomic(Path(request['report']), canonical(report))
                 return report
             finally:
@@ -491,10 +469,11 @@ def _pipeline(request, volume, builder):
                     raise BackendUnavailable('input preparation did not meet existing obligations')
             _event('evaluate')
             report = cli.evaluate(root, database, artifacts, tools, profile=profile, **options)
-            observations = authority._LIVE.get("image_component_observations", {}).values()
-            servers = [entry for observation in observations if (entry := observation.document().get("postgresql_server"))]
+            servers = list(state.get("postgresql_servers", {}).values())
             if state.get("dind_cli_removal"):
                 report["dind_cli_removal"] = state["dind_cli_removal"]
+                cli._atomic(Path(request['report']).parent / 'security-dind-cli.json',
+                            canonical(dict(state['dind_cli_removal'], module_scan=state.get('dind_cli_module_scan'))))
             if servers:
                 report["postgresql_servers"] = servers
             cli._atomic(Path(request['report']), canonical(report))
@@ -666,7 +645,7 @@ def _offline_tool_control(request, volume):
                 raise BackendUnavailable('scratch COPY control did not retain owned marker bytes')
         if tool == 'trivy':
             output = volume / 'trivy-consumer.json'
-            command = [str(volume / 'pinned-trivy'), 'image', '--scanners', 'license', '--offline-scan',
+            command = [str(volume / 'pinned-trivy'), 'image', '--scanners', 'secret', '--offline-scan',
                 '--skip-db-update', '--skip-java-db-update', '--skip-version-check', '--format', 'json',
                 '--input', str(image.layout) + '@' + image.manifest_digest, '--output', str(output)]
             code, _, stderr = _run_capped(command, cwd=volume, env={'PATH': os.defpath, 'HOME': str(volume),
@@ -675,7 +654,7 @@ def _offline_tool_control(request, volume):
             if code:
                 from .security_image_backend import _diagnostic
                 raise BackendUnavailable('pinned offline Trivy consumer refused', detail=dict(
-                    phase='trivy-consumer', command_id='trivy-license-only', exit_code=code, errno=None,
+                    phase='trivy-consumer', command_id='trivy-offline-control', exit_code=code, errno=None,
                     stderr=_diagnostic(stderr)))
             report = document(read_file(volume, output.name, 16 * 1024 * 1024))
             from .security_oci import scanner_identity

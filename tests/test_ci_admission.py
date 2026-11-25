@@ -13,7 +13,7 @@ HEAD, TREE, CHECKER = "a" * 40, "b" * 40, "c" * 40
 INVENTORY, POLICY = "d" * 64, "e" * 64
 NOW = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
 NAMES = ("security-inventory", "known-vulnerabilities", "security-kev", "security-epss",
-         "security-malicious-packages", "security-licenses", "security-container-images", "opengrep",
+         "security-malicious-packages", "security-container-images", "opengrep",
          "secret-scan", "bandit", "trivy-config")
 
 

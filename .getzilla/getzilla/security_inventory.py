@@ -381,8 +381,6 @@ def declared_inventory(root: Path, selection: dict | None) -> dict[str, Any]:
     if selection is not None:
         result.pop('digest')
         result['image_selection_sha256'] = canonical_digest(selection)
-        from .security_internal_image_scope import declare_internal_uses
-        declare_internal_uses(result)
         for image in result['images']:
             image['selection_assurance'] = 'declaration-only-unverified'
         result['digest'] = canonical_digest(result)

@@ -59,7 +59,7 @@ class ExpandedSecurityTests(unittest.TestCase):
         (self.root / 'readme.md').write_text('fixture')
         checks = {item['name']: item for item in run_checks(self.root, now=NOW)}
         self.assertEqual(checks['security-inventory']['status'], 'pass')
-        self.assertEqual(checks['security-licenses']['details'][0]['outcome'], 'not_applicable')
+        self.assertNotIn('security-licenses', checks)
         (self.root / 'requirements.txt').write_text('unresolved>=1\n')
         obligations = security_obligations(self.root, now=NOW)
         self.assertTrue(all(item['applicability'] == 'required' for item in obligations))

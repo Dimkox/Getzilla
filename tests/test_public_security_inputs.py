@@ -127,7 +127,7 @@ class NewOciPreparationConsumerTests(unittest.TestCase):
         from getzilla import security_cli
         selected = {'kind': 'oci-image-acquisition', 'status': 'pass', 'qualification': 'UNVERIFIED',
                     'manifest_sha256': 'a' * 64, 'records': [{'subject': {'reference': 'owned'}}]}
-        result = security_cli.preparation_result({'observed_counts': {}}, {}, {}, [], [selected], {'status': 'skip'})
+        result = security_cli.preparation_result({'observed_counts': {}}, {}, {}, [], [selected])
         self.assertEqual(result.get('retained_image_layouts'), [selected])
         self.assertEqual(result['qualification'], 'UNVERIFIED')
         self.assertEqual(result['scan_outcomes'], [])
@@ -386,17 +386,17 @@ class PublicInputProfileTests(unittest.TestCase):
         source, inventory, roots, run, policy = self.values()
         profile = security_cli.input_profile(source, inventory, roots, run, policy, now=NOW)
         names = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
-                 'security-malicious-packages', 'security-licenses', 'security-container-images')
+                 'security-malicious-packages', 'security-container-images')
         plan = [{'check_id': name, 'applicability': 'required' if name == 'security-inventory' else 'not_applicable',
                  'evidence': {'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'complete': True},
                  'data_sources': []} for name in names]
-        result = security_cli.preparation_result(profile, source, source, plan, [], {'status': 'skip'}, now=NOW)
+        result = security_cli.preparation_result(profile, source, source, plan, [], now=NOW)
         self.assertEqual(result['status'], 'prepared')
         self.assertEqual(result['qualification'], 'UNVERIFIED')
         self.assertEqual(result['scan_outcomes'], [])
         inventory['dependencies'] = [{'ecosystem': 'PyPI'}]
         profile = security_cli.input_profile(source, inventory, roots, run, policy, now=NOW)
-        result = security_cli.preparation_result(profile, source, source, plan, [], {'status': 'pass'}, now=NOW)
+        result = security_cli.preparation_result(profile, source, source, plan, [], now=NOW)
         self.assertEqual(result['status'], 'unavailable')
         self.assertIn('required-source-set-mismatch', result['gaps'])
 

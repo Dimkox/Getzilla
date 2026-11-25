@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from getzilla import expanded_security, security_licenses as licenses
+from getzilla import security_licenses as licenses
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,20 +101,3 @@ class FactoryLicenseScopeTests(unittest.TestCase):
                 self.assertEqual(check['details'][0]['findings'],findings)
                 self.assertEqual(check['details'][0]['factory_offline_use']['assurance'],'declared-output-scope-only')
                 self.assertEqual(check['details'][0]['factory_offline_use']['final_archive_evidence'],'not_evaluated')
-
-    def test_actual_incomplete_gate_reports_profile_gap_and_remains_blocked(self):
-        self.synthetic_profile()
-        lock = self.root / PATHS[0]
-        lock.write_bytes(lock.read_bytes() + b' ')
-        inv = {'complete': False, 'digest':'a'*64,'gaps':[{'code':'unresolved-image'}],
-               'dependencies':[], 'images':[], 'tools':[], 'files':[], 'manifests':[], 'excluded_fixture_paths':[]}
-        result = expanded_security.run_checks(self.root, inventory=inv)
-        check = next(x for x in result if x['name']=='security-licenses')
-        self.assertEqual(check['status'], 'fail')
-        self.assertEqual(check['details'][0]['outcome'], 'blocked')
-        gaps = check['details'][0]['gaps']
-        self.assertIn({'code':'unresolved-image'}, gaps)
-        output = check['details'][0]['factory_offline_use']
-        self.assertEqual(output['code'],'license-factory-profile-changed')
-        self.assertEqual(output['assurance'],'declared-output-scope-only')
-        self.assertEqual(output['components'], [])

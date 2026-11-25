@@ -327,7 +327,7 @@ class LocalCliOwnedTests(unittest.TestCase):
                 self.assertEqual([inventory[k] for k in ('dependencies', 'images', 'tools')], [[], [], []])
                 policy = core.security._policy_digest(core.policy_root)
                 names = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
-                         'security-malicious-packages', 'security-licenses', 'security-container-images',
+                         'security-malicious-packages', 'security-container-images',
                          'opengrep', 'secret-scan', 'bandit', 'trivy-config')
                 records, normalized = [], []
                 for name in names:

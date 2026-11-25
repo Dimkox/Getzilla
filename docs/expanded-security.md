@@ -41,7 +41,7 @@ checks required and blocked; they cannot justify `not_applicable`.
 
 ## One required result set
 
-The isolated public Getzilla job requires these eleven results:
+The isolated public Getzilla job requires these ten results:
 
 | Result | Required evidence |
 | --- | --- |
@@ -50,7 +50,6 @@ The isolated public Getzilla job requires these eleven results:
 | `security-kev` | Current CISA catalog plus the OSV/image sources that supplied CVE identities |
 | `security-epss` | Current EPSS acquisition and forecast date, plus the source CVE identities |
 | `security-malicious-packages` | Active MAL records from complete OSV ecosystem snapshots |
-| `security-licenses` | Actual artifact/index/license bytes, project policy, distribution scope and obligations |
 | `security-container-images` | Immutable image digest/ID, actual package inventory and current Trivy DB |
 | `opengrep` | Pinned executable, checker-owned rules and observed target coverage |
 | `secret-scan` | Bounded text-pattern scan with redacted observations and disclosed binary inputs |
@@ -89,68 +88,11 @@ threshold clears a vulnerability. Generic OSV exceptions do not clear new KEV
 or malicious-package matches.
 
 The required plan retains exact source hashes, acquisition metadata and coverage.
-Its final consumer reads those sources again. The artifact catalog binding also
-rechecks raw manifest, index, archive and delivered bytes, policy and inventory.
-Its `coverage.complete` describes referenced catalog records, not a claim that
-the catalog covers every required package, tool or image.
+The final consumer reads those sources again.
 
-## Licenses and project scope
+## License evaluation
 
-Automatic decisions are limited to MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause,
-ISC and 0BSD, with exact artifact evidence and fulfilled applicable obligations.
-`AND` requires every part; `OR` records a chosen permitted branch. Unknown SPDX
-identifiers, custom exceptions, incomplete text and conflicting metadata require
-human review. This is a limited parser and text recognizer, not an assertion that
-all SPDX expressions or license variants have been supported.
-
-`.getzilla/config/license-policy.json` is bound to the project's repository
-identity. Copying Getzilla's configuration into another project does not approve
-that project's policy. `usage_distribution` must explicitly select internal use
-or redistribution for each applicable usage group; an empty mapping blocks an
-automatic decision. Redistributed artifacts require evidence of retained terms
-and notices. Dev tools with other licenses are reviewed, not categorically banned.
-
-Artifact acquisition and receipt consumption preserve multiple targets for the
-same package version. An artifact identity binds ecosystem, name, version,
-filename (including platform and ABI), SHA-256, saved registry URLs/index digest,
-and its exact `context`. Acquisition copies `manifest`, `usage`, `distribution`,
-`delivery_context` and `delivery_kind` from the observed dependency into that
-context. Optional `artifact_filename`, `artifact_sha256` and `artifact_source`
-(the registry artifact URL) select one exact source. Ambiguous targets fail.
-Transitive coverage stays within the same named `delivery_context`.
-
-Use separate context names for the standalone Factory wheel, its offline
-archive and each Trust CI target. `delivery_kind=installed-package` describes
-internal installation. `unchanged-artifact` can qualify a named redistributed
-wheel only when its `redistributed_path` retains the exact original bytes.
-`factory-offline-archive` requires actual final output evidence; retaining an
-input wheel cannot qualify this output. Legacy unnamed wheel evidence remains
-limited to its original unchanged-artifact claim.
-
-The artifact manifest's optional `deliveries` list supplies offline evidence.
-Each record contains `context`, `kind=factory-offline-archive`,
-`profile=ubuntu-24.04-x86_64-cpython312`, archive `path` and `sha256`,
-`manifest_path` and `manifest_sha256`, `sidecar_path`, and `components`.
-Each component names the exact source `artifact_id` returned by
-`security_artifacts.artifact_identity(record)` and `prefix=site-packages/`.
-The verifier reads the actual ZIP, detached Factory member manifest and the
-builder's two-line checksum file. It compares every extracted wheel member
-against its source bytes, including all license and notice files. Missing,
-changed, extra, colliding or unlisted components fail even when an output's
-checksums were renewed. Native source wheels must use CPython 3.12 and the
-current profile's manylinux2014/manylinux_2_17 x86_64 tags; universal wheels
-remain supported. Final receipt consumption rechecks these output bytes.
-
-This adapter establishes local artifact integrity for the named archive only.
-It does not approve another installed package, tool, Action, image, production
-delivery or an unsupported license. Those classes retain their explicit gaps.
-It does not change the six-license policy or renew the catalog's 72-hour age.
-
-PyPI acquisition stores the registry JSON and selected exact archive without
-installing or executing it. Direct pins do not prove transitive completeness.
-Unknown conditional dependency markers and uncovered tools/images remain gaps.
-Root repository license labels and an incomplete SBOM do not license a bundled
-executable's complete contents.
+The owner disabled license evaluation for every input and output on 2026-11-25. The checker records `license evaluation: disabled by owner decision 2026-11-25` and acquires no license evidence or corresponding source. Factory continues to ship its existing legal files. Component ownership, ecosystem coverage, vulnerabilities, secrets and image integrity remain required.
 
 ## Separate checker and explicit acquisition
 
@@ -166,14 +108,13 @@ python -I trusted-checker/scripts/getzilla_security.py \
   --json-out /isolated/security-expanded.json
 ```
 
-Only explicit `--refresh` acquires feeds, package artifacts and immutable images.
+Only explicit `--refresh` acquires feeds and immutable images.
 Only `--provision-tools` installs the reviewed Linux x86_64 OpenGrep/Trivy assets
 into the isolated tool directory. Scanner input is a bounded source-byte copy;
 candidate modules, ignore files and tool configuration are not loaded. Reports
 bind candidate/checker commits and trees, current inventory and policy digests.
 
-Local results have `assurance=local-input-integrity-only`. Artifact evaluation
-has `artifact-integrity-only` assurance. Hashes and JSON cannot establish their
+Local results have `assurance=local-input-integrity-only`. Hashes and JSON cannot establish their
 own publisher or execution authority. A candidate-controlled Actions workflow
 also cannot manufacture independent trust by writing these fields.
 
@@ -183,49 +124,7 @@ checker. Selecting the first trusted commit requires a concrete independent
 review and operator decision. See [isolated acceptance](isolated-ci-acceptance.md)
 for the separate live jobs and the required fail-closed aggregate.
 
-## Getzilla acceptance: artifact use and distribution
-
-The public source and installer, the Factory package and the Factory offline
-archive are redistributed outputs. The approved CI tools, GitHub Actions,
-CI images and Trust CI components used for isolated public-repository checks
-are internal verification inputs. Third-party CI tools and images are not
-published as part of this scope. A future distribution of these objects needs
-a separate decision. This decision is specific to Getzilla; an installation in
-another repository does not inherit its license policy.
-
-`usage_distribution` accepts a usage default and an exact
-`manifest:<repository-relative path>#<usage>` key. The exact decision takes
-precedence. An incompatible observed use is a gap. The pinned CI requirements
-use the `build-ci` default. `trust-ci/requirements-test.txt` supplies the
-isolated Trust CI tests. No default is inferred for `runtime-and-development`:
-Factory's lock includes both production dependencies and test-only packages.
-
-A scope decision records intended use; it does not prove artifact contents.
-The Factory offline builder installs files extracted from wheels. Validation
-must bind the completed archive and its retained license/NOTICE files to the
-actual delivered bytes and approved target profile. Cached source wheels do
-not establish that link. Redistributed outputs require exact component and license evidence. Internal CI and Trust CI images record license observations as a report only (owner decision 2026-11-25, #456). Component ownership, unsupported-ecosystem coverage, vulnerability, secret and integrity findings remain blocking for every image. The six approved licenses and per-artifact obligations are
-unchanged; uses outside those verified license alternatives and unresolved
-composition require review.
-
-For the approved Factory offline profile the project policy pins the exact lock,
-validated wheel inventory and builder bytes. Only a byte-identical input set in
-Getzilla yields its intended redistributed wheel identities. Changed inputs
-require mechanical validation with the trusted builder before publishing new
-pins. The checker reads data only; it does not import or run the candidate's
-builder. This output-level observation is separate from registry acquisition:
-the same package/version can target CPython 3.12 in Factory and a different ABI
-in Trust CI. Missing proof for the final extracted archive is a delivery gap,
-not an unanswered question about the 20 declared wheels. No cached original
-wheel can satisfy this gap. The separately installed ordinary Factory wheel
-has a distinct composition; its dependency declarations do not establish that
-it bundles these 20 wheels.
-
-This diagnostic field does not change existing license-check statuses, findings,
-gaps or flat-catalog semantics. It is not a new permanent gate, and a passing
-legacy package check is not acceptance of the extracted offline archive. A
-separate output-specific consumer remains required before such acceptance.
-
+## Image identity and PostgreSQL coverage
 
 The source-built PostgreSQL server in the OCI corpus has a separate check against the
 [official PostgreSQL 17 advisory table](https://www.postgresql.org/support/security/17/).
@@ -234,16 +133,6 @@ server executable and records its SHA-256, layer digest, feed date and matching
 core-server CVEs. It rejects unknown binaries, missing or changed reviewed advisories,
 unknown layouts and responses older than 72 hours. A PostgreSQL refusal or CVE blocks
 admission during the #456 infrastructure waiver. The other image components retain
-their existing scanner and license obligations.
+their existing scanner obligations.
 
-The source ZIP contains two standalone CI image manifests and their two configuration
-documents as offline identity proofs. The images themselves are obtained from their
-publishers. The checker binds each proof path and byte digest independently to its
-policy and to the deployed image pins. Embedded descriptor data, external URLs,
-unlisted manifests and OCI layouts prevent a referenced classification.
-
-Factory's pinned PostgreSQL reference receives report-only license observations only
-after the checker reads the source ZIP, Factory wheel and offline archive, including
-nested members. A shipped layer, uncompressed layer, or binary from any image layer
-keeps the strict redistribution check. Unreadable or incomplete output evidence
-also keeps that check. PostgreSQL advisory, component and integrity checks still run.
+The source ZIP contains standalone image manifests and configurations for offline identity verification. Factory obtains its digest-pinned PostgreSQL image from Docker Hub.

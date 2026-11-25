@@ -74,7 +74,7 @@ class PreparationFaultControls(unittest.TestCase):
         marked = self.marked(ArtifactError('PRIVATE_MARKER', 'PRIVATE_MARKER'))
         self.assertEqual(cli._preparation_fault(marked)['error_code'], 'other')
 
-    def test_actual_prepare_join_identifies_package_failure_and_stops_later_work(self):
+    def test_actual_prepare_join_identifies_feed_failure_and_stops_later_work(self):
         self.assertTrue(callable(getattr(cli, '_preparation_step', None)), 'missing closed preparation boundary')
         error = ArtifactError('artifact-origin', 'PRIVATE_MARKER')
         inventory = dict(dependencies=[dict(ecosystem='PyPI')], tools=[], images=[], digest='a'*64)
@@ -82,15 +82,15 @@ class PreparationFaultControls(unittest.TestCase):
         with ExitStack() as ports:
             for name, value in (('read_image_selection', None), ('collect_inventory', inventory),
                                 ('_policy_digest', 'a'*64), ('source_binding', source),
-                                ('validate_input_profile', {}), ('provision_tools', []), ('refresh_feeds', [])):
+                                ('validate_input_profile', {}), ('provision_tools', [])):
                 ports.enter_context(mock.patch.object(cli, name, return_value=value))
-            ports.enter_context(mock.patch.object(cli, 'acquire_pypi', side_effect=error))
+            ports.enter_context(mock.patch.object(cli, 'refresh_feeds', side_effect=error))
             later = ports.enter_context(mock.patch.object(cli, 'security_obligations'))
             with self.assertRaises(ArtifactError) as caught:
                 cli.prepare_inputs(self.root, self.root/'db', self.root/'artifacts', self.root/'tools',
                                    profile={}, refresh=True, provision=True)
         self.assertIs(caught.exception, error)
-        self.assertEqual(cli._preparation_fault(error)['stage'], 'package-artifacts')
+        self.assertEqual(cli._preparation_fault(error)['stage'], 'feeds')
         later.assert_not_called()
 
     def test_errno_and_existing_oci_bound_detail_survive_without_new_authority(self):
@@ -166,11 +166,11 @@ class PreparationFaultControls(unittest.TestCase):
                 mock.patch.object(producer, '_pipeline_tools', return_value=self.root/'tools'), \
                 mock.patch.object(cli, 'source_binding', return_value={}), \
                 mock.patch.object(cli, 'validate_selection_authority'), \
-                mock.patch('getzilla.security_license_scope.activate',return_value={}), \
+                mock.patch.object(producer.authority, '_LIVE', {'declared_inventory': {}}), mock.patch('getzilla.security_dind_exception.qualify',return_value=False), \
                 mock.patch.object(cli, 'prepare_inputs', side_effect=[{}, {'status': 'prepared'}]), \
                 mock.patch.object(cli, '_atomic', side_effect=atomic), redirect_stdout(events):
             with self.assertRaises(PermissionError) as caught:
-                producer._pipeline(request, self.root, object())
+                producer._pipeline(request, self.root, mock.Mock(deadline=1000))
         self.assertIs(caught.exception, error)
         self.assertEqual(cli._preparation_fault(error)['stage'], 'prepare-result')
         self.assertEqual([json.loads(line)['stage'] for line in events.getvalue().splitlines()], ['declare', 'prepare'])

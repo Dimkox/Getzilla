@@ -185,10 +185,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 _family_age(record, current, bundle['last_verified_sync_utc'])
                 raw_distribution = _distribution_for(subject, policy['usage_distribution'])
                 distribution=raw_distribution
-                referenced = kind == 'image' and evidence.get('held_image') and 'referenced_output_sha256' in evidence and 'referenced_image_scope' in policy
-                if referenced:
-                    raw_distribution = distribution = 'referenced'
-                elif selected_required:
+                if selected_required:
                     distribution=run_context.family_distribution(subject,kind)
                     if raw_distribution!='internal':
                         gap('license-obligation-missing','raw/future family use remains separate from the actual internal CI use',selected=False)
@@ -196,14 +193,6 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     raise ArtifactError('license-obligation-missing', 'family needs explicit internal use or a qualified final-output adapter')
                 selected, licenses, notices = [], [], []
                 for component in evidence['components']:
-                    if evidence.get("held_image") and component.get("license_status") in {"internal-report-only", "referenced-report-only"}:
-                        if ("image_license_scope" not in policy or distribution not in {"internal", "referenced"}
-                                or component["license_status"] != distribution + "-report-only"
-                                or not evidence.get("license_observations") or component["expression"] is not None):
-                            raise ArtifactError("license-obligation-missing", "internal observation outside its licensed scope")
-                        if any(not evidence['files'].get(path, b'').strip() for path in component['notice_paths']):
-                            raise ArtifactError('license-obligation-missing', 'declared component NOTICE is empty')
-                        continue
                     from .security_license_family_conditions import allowed_for
                     component_allowed = allowed_for(record, component, policy['auto_allow'],
                         selected_internal=distribution == 'internal' and (selected_required or
@@ -226,13 +215,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     'component_inventory_json': read_file(artifacts,record['components']['path'],MAX_INDEX_BYTES).decode('utf-8'),
                     'license_files': licenses, 'notice_files': notices,
                     'obligations': distribution + ' use; exact source/component/license evidence retained'}
-                if "license_observations" in evidence:
-                    if ("image_license_scope" not in policy or distribution not in {"internal", "referenced"}
-                            or evidence["license_observations"]["status"] != distribution + "-report-only"):
-                        raise ArtifactError("license-obligation-missing", "internal observation requires its scope decision")
-                    detail.update(license_observations=evidence["license_observations"],
-                                  obligations=distribution + " use; partial license evidence reported")
-                if raw_distribution in {'internal', 'referenced'}:
+                if raw_distribution == 'internal':
                     result['details'].append(detail)
                 if selected_required:
                     if kind == 'action' and distribution == 'internal':
