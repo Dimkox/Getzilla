@@ -7,6 +7,8 @@ These observations prove local integrity; the CI provider supplies authority.
 """
 from __future__ import annotations
 
+from .security_threshold import blocks_vulnerability, removed_from_finals
+
 import codecs
 from contextlib import nullcontext
 import hashlib
@@ -568,8 +570,12 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
             raise SecurityDataError('Trivy database changed during scanning')
     except (OSError, ValueError, RuntimeError) as exc:
         gaps.append({'code': 'image-scan-unavailable', 'message': str(exc)})
-    return {'outcome': 'blocked' if gaps else ('finding' if findings else 'pass'),
-            'summary': f'{len(results)} image scans; {len(findings)} findings; {len(gaps)} gaps',
+    for row in findings:
+        if blocks_vulnerability(row) and removed_from_finals(row, inventory):
+            row['base_file_absent'] = True
+    blocking_count = sum(blocks_vulnerability(f) and not f.get('base_file_absent') for f in findings)
+    return {'outcome': 'blocked' if gaps else ('finding' if blocking_count else 'pass'),
+            'summary': f'{len(results)} image scans; {blocking_count} blocking of {len(findings)} findings; {len(gaps)} gaps',
             'findings': findings, 'gaps': gaps, 'images': results,
             'data_sources': [source] if source is not None else []}
 
@@ -711,9 +717,11 @@ def _secret_input_core(root: Path, files: list[str], trusted_root: Path, *, file
                 views = [(_secret_text(relative, raw), False)]
             except (ValueError, SyntaxError, LookupError):
                 views = []
-                if _opaque_asset(Path(relative), raw):
+                from .security_benchmark_secret_evidence import reviewed_archive
+                reviewed = reviewed_archive(relative, digest, dispositions.SECRET_PATTERNS)
+                if reviewed or _opaque_asset(Path(relative), raw):
                     binary.append({'path': relative, 'sha256': digest,
-                                   'reason': 'recognized asset; visible bytes checked, opaque contents not decoded'})
+                                   'reason': reviewed or 'recognized asset; visible bytes checked, opaque contents not decoded'})
                     if native:
                         findings.append({'severity': 'info', 'effective_severity': 'info',
                                          'code': 'secret-binary-input', 'path': relative,

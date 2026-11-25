@@ -324,11 +324,35 @@ def _source_valid(source: dict) -> bool:
 def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
     from .security_data import osv_decision_ids, SecurityDataError
     findings, accepted = detail['findings'], detail.get('accepted', [])
+    from .security_threshold import blocks_vulnerability
+    if name == 'security-container-images':
+        fields = {'id', 'package', 'version', 'fixed', 'aliases', 'image', 'target', 'severity'}
+        from . import security_image_authority as authority
+        from .security_threshold import removed_from_finals
+
+        def report_only(f):
+            if 'base_file_absent' not in f:
+                return not blocks_vulnerability(f)
+            live = authority._LIVE
+            return (f['base_file_absent'] is True and live is not None
+                    and live['declared_inventory']['digest'] == detail['inventory_sha256']
+                    and removed_from_finals(f, live['declared_inventory']))
+
+        return all(isinstance(f, dict) and set(f) in (fields, fields | {'base_file_absent'}) and isinstance(f['fixed'], str)
+                   and isinstance(f['aliases'], list) and all(isinstance(v, str) for v in f['aliases'])
+                   and all(isinstance(f[k], str) and f[k] for k in ('image', 'target', 'version', 'package', 'id'))
+                   and report_only(f) for f in findings)
     if name == 'known-vulnerabilities':
         fields = {'ecosystem', 'package', 'version', 'manifest', 'id', 'aliases', 'summary',
                   'severity', 'fixed', 'accepted_until'}
-        if findings or not isinstance(accepted, list):
+        if not isinstance(accepted, list):
             return False
+        for f in findings:
+            if (not isinstance(f, dict) or set(f) not in (fields, fields | {'raw_aliases'})
+                    or f.get('accepted_until') is not None or blocks_vulnerability(f)
+                    or not isinstance(f['fixed'], list) or not isinstance(f['aliases'], list)
+                    or not all(isinstance(f[k], str) and f[k] for k in ('ecosystem', 'manifest', 'package', 'version', 'id'))):
+                return False
         for finding in accepted:
             if (not isinstance(finding, dict) or set(finding) not in (fields, fields | {'raw_aliases'})
                     or not all(isinstance(finding.get(k), str) and finding[k] for k in
@@ -355,7 +379,7 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
                    and type(f['column']) is int and f['column'] > 0 for f in findings)
     if name == 'security-epss':
         fields = {'ecosystem', 'package', 'version', 'manifest', 'id', 'aliases', 'summary', 'severity',
-                  'fixed', 'accepted_until', 'image', 'target', 'intelligence', 'enrichment_reason', 'raw_aliases'}
+                  'fixed', 'accepted_until', 'image', 'target', 'intelligence', 'enrichment_reason', 'raw_aliases', 'base_file_absent'}
         try:
             for finding in findings:
                 identifiers = set(osv_decision_ids(finding))

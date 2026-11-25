@@ -66,6 +66,60 @@ jobs:
           test "$(git -C trusted-checker rev-parse HEAD)" = "$CHECKER_REF"
           test -f trusted-checker/scripts/getzilla_security.py || { echo 'BLOCKED: reviewed checker bootstrap is incomplete'; exit 1; }
           taskset -c "$SECURITY_CPUS" python -I -m pip install --disable-pip-version-check -r trusted-checker/.getzilla/config/python-quality-requirements.txt
+      - name: Set up the fixed Linux Node dependency
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.2'
+          architecture: x64
+          package-manager-cache: false
+      - name: Admit physical Node inside the read-only runtime root
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, shutil, stat, subprocess
+          expected = pathlib.Path(os.environ['RUNNER_TOOL_CACHE']).resolve(strict=True) / 'node' / '24.22.2' / 'x64' / 'bin' / 'node'
+          selected = pathlib.Path(shutil.which('node') or '').resolve(strict=True)
+          if selected != expected or not selected.is_file():
+              raise SystemExit('selected Node is outside its declared cache entry')
+          if subprocess.check_output([str(selected), '--version'], text=True).strip() != 'v24.22.2':
+              raise SystemExit('selected Node version differs')
+          def digest(path):
+              with path.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          selected_digest = digest(selected)
+          subprocess.run(['sudo', 'install', '-T', '-m', '0755', '--', str(selected), '/usr/bin/node'], check=True)
+          node = pathlib.Path('/usr/bin/node')
+          info = node.lstat()
+          if (node.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o755
+                  or node.resolve(strict=True) != node or digest(node) != selected_digest):
+              raise SystemExit('physical Node identity differs')
+          if subprocess.check_output(['/usr/bin/node', '--version'], text=True).strip() != 'v24.22.2':
+              raise SystemExit('physical Node version differs')
+          print(json.dumps({'node_version': '24.22.2', 'sha256': selected_digest, 'physical_runtime_admitted': True}))
+      - name: Admit protected syntax frontends
+        shell: bash
+        working-directory: trusted-checker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3.12 php8.3-cli
+          python - <<'PY'
+          import os, pathlib, subprocess, sys
+          sys.path.insert(0, '.getzilla')
+          from getzilla.security_acquisition import provision_typescript
+          parser = provision_typescript(pathlib.Path(os.environ['RUNNER_TEMP']) / 'typescript-parser')
+          subprocess.run(['sudo', 'install', '-d', '-m', '0755', '/usr/share/getzilla'], check=True)
+          subprocess.run(['sudo', 'install', '-T', '-m', '0644', str(parser), '/usr/share/getzilla/typescript-5.9.3.js'], check=True)
+          PY
+          python - <<'PY'
+          import pathlib, sys, tempfile
+          sys.path.insert(0, '.getzilla')
+          from getzilla.security_opengrep import syntax_check, syntax_frontend
+          for language in ('python', 'php', 'javascript', 'typescript'):
+              with syntax_frontend(language) as frontend:
+                  print(language, frontend.grammar, frontend.digest)
+                  if language == 'typescript':
+                      with tempfile.TemporaryDirectory() as directory:
+                          syntax_check(frontend, b'export const value: number = 1; throw new Error("must not execute");', pathlib.Path(directory))
+          PY
       - name: Run all expanded checks with trusted tools and fresh security data
         timeout-minutes: 30
         shell: bash

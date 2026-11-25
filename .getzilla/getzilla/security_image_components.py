@@ -132,6 +132,8 @@ def observe_components(image, *, source_root=None, packages=None, advisory_pages
     if rows is not None:
         image.remaining_seconds()
     files = _Files(rows if rows is not None else oci.observe_final_files(image, _retain))
+    from .security_threshold import record_filesystem
+    record_filesystem(image, files.rows, state)
     postgres_check = None
     if advisory_pages is not None:
         from .security_postgresql import check_image

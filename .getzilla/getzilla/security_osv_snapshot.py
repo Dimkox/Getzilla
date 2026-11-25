@@ -466,9 +466,24 @@ from .security_artifacts import _semver_key as _semver_key
 from .security_artifacts import _pypi_key as _pypi_key
 
 
+def _composer_key(version: str) -> tuple:
+    """Order numeric Composer release tags, including normalized four-part releases."""
+    match = re.fullmatch(
+        r'v?([0-9]+(?:\.[0-9]+){0,3})(?:[-.]?(dev|alpha|a|beta|b|rc|patch|pl|p)[.-]?([0-9]*))?'
+        r'(?:\+[0-9a-z.-]+)?', version, re.I) if isinstance(version, str) and len(version) <= 128 else None
+    if not match:
+        raise VulnerabilityError(f'unsupported Composer release version: {version!r}')
+    parts = tuple(map(int, match[1].split('.')))
+    ranks = {'dev': 0, 'alpha': 1, 'a': 1, 'beta': 2, 'b': 2, 'rc': 3,
+             '': 4, 'patch': 5, 'pl': 5, 'p': 5}
+    return (*parts, *(0,) * (4 - len(parts)), ranks[(match[2] or '').lower()], int(match[3] or 0))
+
+
 def _range_key(version: str, *, kind: str, ecosystem: str) -> tuple[Any, ...]:
     if kind == 'SEMVER':
         return _semver_key(version)
+    if kind == 'ECOSYSTEM' and ecosystem == 'Packagist':
+        return _composer_key(version)
     if kind == 'ECOSYSTEM' and ecosystem == 'PyPI':
         return _pypi_key(version)
     raise VulnerabilityError(f'unsupported OSV range semantics: {kind!r} for {ecosystem or "unknown ecosystem"}')
@@ -538,6 +553,8 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
         try:
             if ecosystem == 'PyPI':
                 key = _pypi_key
+            elif ecosystem == 'Packagist':
+                key = _composer_key
             elif ranges and all(isinstance(item, dict) and item.get('type') == 'SEMVER' for item in ranges):
                 key = _semver_key
             else:

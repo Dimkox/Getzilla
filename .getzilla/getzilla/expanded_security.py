@@ -6,6 +6,8 @@ by a candidate-written ``trusted`` field. No network is performed here.
 """
 from __future__ import annotations
 
+from .security_threshold import blocks_vulnerability
+
 import hashlib
 import os
 import tempfile
@@ -50,7 +52,7 @@ def _database_name(root: Path, database: Path) -> str:
 
 
 def _policy_digest(root: Path) -> str:
-    return canonical_digest({'expanded_security_version': 2, 'checks': CHECK_FAMILIES})
+    return canonical_digest({'expanded_security_version': 3, 'checks': CHECK_FAMILIES})
 
 
 def _read_source(database: Path, source_id: str, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -273,9 +275,11 @@ def known_vulnerability_report(root: Path, *, environ: dict[str, str] | None = N
                 report['accepted'].append(finding.to_dict())
             else:
                 report['findings'].append(finding.to_dict())
-        report.update(status='fail' if report['findings'] else 'pass',
-                      reason_code='affected-finding' if report['findings'] else 'complete',
-                      summary=f'{len(report["findings"])} unresolved known vulnerabilities; {len(report["accepted"])} time-limited exceptions')
+        blocking = sum(map(blocks_vulnerability, report['findings']))
+        report.update(status='fail' if blocking else 'pass',
+                      reason_code='affected-finding' if blocking else 'complete',
+                      summary=f'{blocking} blocking of {len(report["findings"])} known vulnerabilities; '
+                              f'{len(report["accepted"])} time-limited exceptions')
     except (VulnerabilityError, SecurityDataError, OSError, ValueError) as exc:
         report.update(summary=str(exc), reason_code='data-unavailable')
     return report
