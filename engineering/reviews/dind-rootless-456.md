@@ -153,7 +153,15 @@ The checker verifies the tested deployment controls, the sole use of that upstre
 manifest as the base of the Trust CI daemon, and the official catalog and current
 amd64 digest during acquisition. A catalog change, a new digest, an unavailable
 upstream check or expiry at 00:00 UTC on 25 December ends eligibility. A change
-to the catalog can therefore end eligibility before a fix is confirmed. Other
-binaries, including `usr/local/bin/docker` in the original base, and independently
-built manifests retain their blocking findings. KEV and EPSS evaluations receive
-the original vulnerability evidence.
+to the catalog can therefore end eligibility before a fix is confirmed. KEV and EPSS evaluations receive the original vulnerability evidence.
+
+The owner separately approved the Docker CLI finding in that same build input,
+subject to independent review and the same expiry and upstream checks. The checker
+compares its executable hash, layer, path and config with the recorded finding.
+It examines every other imported image in the complete inventory. For images
+whose layers contained that executable, it checks all final file hashes after
+whiteouts and hardlink resolution. For the built daemon it also verifies removal
+of the original path. Missing evidence or a surviving copy blocks admission.
+The diagnostic artifact `security-dind-cli.json` records each image identity and
+the evidence used for removal. All other vulnerability findings retain their
+ordinary disposition.

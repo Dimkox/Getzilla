@@ -137,7 +137,12 @@ class ImageComponentObservation:
 def observe_components(image, *, source_root=None, packages=None, advisory_pages=None):
     """Build a component SBOM observation, never trust caller JSON as custody."""
     index, scan_receipt = packages if packages is not None else ({}, None)
-    files = _Files(oci.observe_final_files(image, _retain))
+    from . import security_image_authority as authority
+    state = authority._LIVE
+    rows = state.get("dind_cli_component_rows", {}).pop(image, None) if state else None
+    if rows is not None:
+        image.remaining_seconds()
+    files = _Files(rows if rows is not None else oci.observe_final_files(image, _retain))
     postgres_check = None
     if advisory_pages is not None:
         from .security_postgresql import check_image

@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import tempfile
 
+from . import security_dind_exception as dind
 from . import security_oci as oci
 from . import security_tools as tools_api
 
@@ -15,7 +16,13 @@ def check_known_binary(row, image):
     # The exact official docker-29.10.1.tgz binary contains the affected
     # registry/client.(*manifests).Get symbol from this vendored module.
     # Go's GOPATH build omits the module version table parsed by Trivy.
-    if row.get("sha256") == "f71558dcbb6c2e028fc5c7cf67270ef6fafd9cc865570b73700d405b2c2ebc02":
+    if row.get("sha256") == dind.CLI["executable_sha256"]:
+        try:
+            if dind.removed_build_input_cli(row, image):
+                return
+        except (OSError, ValueError, KeyError, TypeError):
+            # Incomplete removal evidence leaves the original vulnerability blocking.
+            pass
         raise VulnerableImageBinary("confirmed-vendored-go-vulnerability", manifest=image.manifest_digest,
             config=image.config_digest, path=row["path"], layer=row["layer"], executable_sha256=row["sha256"],
             component="github.com/docker/distribution", version="v2.8.3+incompatible",

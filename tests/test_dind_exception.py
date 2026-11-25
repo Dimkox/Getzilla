@@ -28,10 +28,11 @@ class DindExceptionTests(unittest.TestCase):
         policy.validate(configured)
         for change in ({'expires': '2026-12-26'}, {'extra': True}, {'cve': 'CVE-2026-41567'},
                        {'manifest': 'sha256:' + '0' * 64}):
-            invalid = copy.deepcopy(configured)
-            invalid['exceptions'][0].update(change)
-            with self.assertRaises(ValueError):
-                policy.validate(invalid)
+            for index in (0, 1):
+                invalid = copy.deepcopy(configured)
+                invalid['exceptions'][index].update(change)
+                with self.assertRaises(ValueError):
+                    policy.validate(invalid)
 
     def test_upstream_change_or_wrong_catalog_disables_acceptance(self):
         self.assertFalse(policy.same_upstream(b'bad catalog', {}))
@@ -71,3 +72,52 @@ class DindExceptionTests(unittest.TestCase):
             self.assertEqual(policy.partition([finding], None, {}, now), ([finding], []))
             image.manifest_digest = 'sha256:' + '0' * 64
             self.assertEqual(policy.partition([finding], image, {}, now), ([finding], []))
+
+    def test_cli_requires_removal_from_every_final_image(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from getzilla import security_oci as oci
+        from getzilla.security_image_package_coverage import check_known_binary, VulnerableImageBinary
+        cli = policy.CLI
+        row = dict(path=cli['executable'], layer=cli['layer'], sha256=cli['executable_sha256'])
+        base = SimpleNamespace(reference=policy.REFERENCE, platform='linux/amd64',
+                               manifest_digest=policy.MANIFEST, config_digest=cli['config'])
+        engine, runner = Mock(), Mock()
+        for image, ref in ((engine, 'engine'), (runner, 'runner')):
+            image.reference = ref
+            image.platform = 'linux/amd64'
+            image.manifest_digest = ref
+            image.layer_binary_hashes.return_value = {row['sha256']}
+        images = {i.reference: i for i in (base, engine, runner)}
+        inventory = dict(complete=True, digest='d' * 64, images=[dict(reference=r) for r in images],
+                         builds=[dict(dockerfile='trust-ci/dind/Dockerfile', service='docker-engine',
+                                      build_sha256='build')])
+        guard = object()
+        state = dict(declared_inventory=inventory, images=images, builds={'build': 'engine'},
+                     native_guard=guard, run={'repository': 'Dimkox/Getzilla'}, dind_exception=True)
+        rows = {'engine': {}, 'runner': {}}
+        with patch.object(policy.authority, '_LIVE', state), patch.object(policy.authority, '_GUARD', guard), \
+                patch.object(policy, 'active', return_value=True), \
+                patch.object(oci, 'observe_final_files', side_effect=lambda image, _: rows[image.reference]):
+            check_known_binary(row, base)
+            self.assertEqual(len(state['dind_cli_removal']['images']), 2)
+            rows['runner']['another/name'] = dict(row, kind='file')
+            with self.assertRaises(VulnerableImageBinary):
+                check_known_binary(row, base)
+            rows['runner'].clear()
+            rows['engine'][cli['executable']] = dict(kind='symlink', target='missing')
+            with self.assertRaises(VulnerableImageBinary):
+                check_known_binary(row, base)
+            rows['engine'].clear()
+            with patch.object(policy, 'active', return_value=False), self.assertRaises(VulnerableImageBinary):
+                check_known_binary(row, base)
+            with self.assertRaises(VulnerableImageBinary):
+                check_known_binary(dict(row, path='bin/docker'), base)
+            with self.assertRaises(VulnerableImageBinary):
+                check_known_binary(dict(row, layer='wrong'), base)
+            runner.layer_binary_hashes.return_value = None
+            with self.assertRaises(VulnerableImageBinary):
+                check_known_binary(row, base)
+            del images['runner']
+            with self.assertRaises(VulnerableImageBinary):
+                check_known_binary(row, base)

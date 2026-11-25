@@ -15,7 +15,12 @@ CATALOG_SHA = 'c9253aa7e20afe9db2e6604049c8bbe4b6e6c2144ee3baac763283eb9d9e2d42'
 DECISION = dict(cve=CVE, manifest=MANIFEST, platform='linux/amd64', executable='usr/local/bin/dockerd',
                 issue=456, expires='2026-12-25T00:00:00Z',
                 reason='pull path unused (offline load) and engine has no egress; see engineering/reviews/dind-rootless-456.md')
-EXPECTED = dict(schema_version=1, exceptions=[DECISION])
+CLI = dict(DECISION, executable='usr/local/bin/docker',
+           executable_sha256='f71558dcbb6c2e028fc5c7cf67270ef6fafd9cc865570b73700d405b2c2ebc02',
+           config='sha256:dd51adffd0d565cc8000986ae91e31a3bd476b852ad8b92a1f9c8ea4509a438f',
+           layer='sha256:c270e2480dbc55f98c9730dd65b6df575be7d51a35a4057e9588f0dff7dd1bd3',
+           reason='exact upstream build-input client absent from every final image; see engineering/reviews/dind-rootless-456.md')
+EXPECTED = dict(schema_version=1, exceptions=[DECISION, CLI])
 # A reviewed change to the deployed isolation, loader or job command requires requalification.
 CONTROLS = '19881cc67303babc2a6a1fa3f85f34386261a0b4c02fdf6713d5f0e4c7fe4e23'
 
@@ -99,3 +104,51 @@ def partition(findings, image, inventory, now):
         else:
             blocking.append(finding)
     return blocking, accepted
+
+
+def removed_build_input_cli(row, base):
+    from . import security_oci as oci
+    from .security_image_licenses import _Files, _retain
+
+    live = authority._LIVE
+    if (row.get('path') != CLI['executable'] or row.get('layer') != CLI['layer']
+            or row.get('sha256') != CLI['executable_sha256'] or base.manifest_digest != MANIFEST
+            or base.config_digest != CLI['config'] or base.reference != REFERENCE or base.platform != CLI['platform']
+            or live is None or not active(datetime.now(timezone.utc))):
+        return False
+    inventory = live['declared_inventory']
+    images = live['images']
+    if (not authorized(inventory) or inventory.get('complete') is not True or images.get(REFERENCE) is not base
+            or set(images) != {use['reference'] for use in inventory['images']}):
+        return False
+    builds = live['builds']
+    engines = [builds.get(build['build_sha256']) for build in inventory['builds']
+               if build['service'] == 'docker-engine' and build['dockerfile'] == 'trust-ci/dind/Dockerfile']
+    if (len(engines) != 1 or engines[0] not in images or REFERENCE in builds.values()
+            or set(builds) != {build['build_sha256'] for build in inventory['builds']}
+            or not set(builds.values()) <= images.keys()):
+        return False
+
+    evidence, observed = [], {}
+    for reference, image in sorted(images.items()):
+        if reference == REFERENCE:
+            continue
+        if image.reference != reference or image.manifest_digest == MANIFEST:
+            return False
+        history = image.layer_binary_hashes()
+        if history is None:
+            return False
+        method = 'absent-from-all-layer-binary-hashes'
+        if CLI['executable_sha256'] in history or reference == engines[0]:
+            files = oci.observe_final_files(image, _retain)
+            if any(member.get('sha256') == CLI['executable_sha256'] for member in files.values()):
+                return False
+            if reference == engines[0] and (CLI['executable'] in files or _Files(files).resolve(CLI['executable'])[1]):
+                return False
+            observed[image] = files
+            method = 'verified-final-filesystem'
+        evidence.append(dict(reference=reference, manifest=image.manifest_digest, config=image.config_digest,
+                             method=method))
+    live['dind_cli_component_rows'] = observed
+    live['dind_cli_removal'] = dict(exception=CLI, inventory_sha256=inventory['digest'], images=evidence)
+    return True

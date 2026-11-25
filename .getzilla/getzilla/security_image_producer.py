@@ -466,6 +466,10 @@ def _pipeline(request, volume, builder):
                 report = dict(error.report, qualification="UNVERIFIED", source=source, run=request['run'])
                 cli._atomic(Path(request['report']), canonical(report))
                 return report
+            finally:
+                if state.get('dind_cli_removal'):
+                    cli._atomic(Path(request['report']).parent / 'security-dind-cli.json',
+                                canonical(state['dind_cli_removal']))
             with cli._preparation_step('prepare-result'):
                 cli._atomic(Path(request['preparation']), canonical(preparation))
                 if preparation.get('status') != 'prepared':
@@ -474,6 +478,8 @@ def _pipeline(request, volume, builder):
             report = cli.evaluate(root, database, artifacts, tools, profile=profile, **options)
             observations = authority._LIVE.get("image_component_observations", {}).values()
             servers = [entry for observation in observations if (entry := observation.document().get("postgresql_server"))]
+            if state.get("dind_cli_removal"):
+                report["dind_cli_removal"] = state["dind_cli_removal"]
             if servers:
                 report["postgresql_servers"] = servers
             cli._atomic(Path(request['report']), canonical(report))

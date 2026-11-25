@@ -85,6 +85,9 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/replay-result"
           echo UNVERIFIED > "$RUNNER_TEMP/replay-result/QUALIFICATION"
+          if test -f "$RUNNER_TEMP/security-dind-cli.json"; then
+            cp "$RUNNER_TEMP/security-dind-cli.json" "$RUNNER_TEMP/replay-result/"
+          fi
           if test -f "$RUNNER_TEMP/security-delivery-scope.json"; then
             cp "$RUNNER_TEMP/security-delivery-scope.json" "$RUNNER_TEMP/replay-result/"
           fi
