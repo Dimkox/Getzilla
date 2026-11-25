@@ -428,12 +428,19 @@ def observe_components(image, *, source_root=None, packages=None):
         source = path.endswith((".py", ".pyc", ".js", ".mjs", ".cjs", ".sh", ".rb", ".pl", ".jar", ".wasm"))
         if (row.get("elf") or row.get("executable") or source) and not generated:
             unknown.append(_evidence(row))
-    from .security_image_file_origins import archive_origins, project_origins
+    from .security_image_file_origins import archive_origins, project_origins, upstream_origin
     for name, origin, paths in archive_origins(unknown):
         component = add("runner-download:" + name, "pinned-runner-artifact")
         component["source_origin"] = origin
         own(component, paths)
         terms(component, [files.data("opt/node/LICENSE")] if name.startswith("node-") else [])
+    for row in unknown:
+        origin = upstream_origin(row)
+        if origin is not None:
+            c = add("upstream-file:" + row["path"], "upstream-image-file")
+            c["source_origin"] = origin
+            own(c, [row["path"]])
+            terms(c, [])
     if source_root is not None:
         matched = project_origins(unknown, source_root)
         if matched:
@@ -575,6 +582,9 @@ def _family_projection(observation, license_rows=()):
         raise oci.OCIError("Unbound internal license observation")
     for component in document["components"]:
         c = {key: copy.deepcopy(component[key]) for key in ("id", "expression", "requires")}
+        for field in ("source_origin", "source_files", "modules"):
+            if field in component:
+                c[field] = copy.deepcopy(component[field])
         c["files"] = [{k: row[k] for k in ("path", "sha256", "bytes")} for row in component["files"]]
         c["license_paths"], c["notice_paths"] = [], []
         if component["id"] in affected and component["expression"] is None:
@@ -611,6 +621,8 @@ def _family_projection(observation, license_rows=()):
     # The final installed graph keeps physical software ownership. Term paths
     # form a separate reusable namespace; no exclusive archive partition exists.
     projected = dict(components=components, term_sources=derivations)
+    if "trivy_package_evidence" in document:
+        projected["trivy_package_evidence"] = document["trivy_package_evidence"]
     if license_rows:
         projected["license_observations"] = dict(status="internal-report-only",
             counts=dict(Counter(row["code"] for row in license_rows)))
@@ -637,7 +649,9 @@ def prepare_families(root, inventory, source, run, *, now=None, policy=None, pac
     trivy = None
     if package_tools is not None and state.get("builds"):
         from .security_tools import pinned_tool
-        trivy = pinned_tool("trivy", package_tools)
+        from .public_security_context import _preparation_step
+        with _preparation_step("image-package-tool"):
+            trivy = pinned_tool("trivy", package_tools)
     failures = []
     license_counts = Counter()
     from .security_internal_image_scope import internal_images, partition

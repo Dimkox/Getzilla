@@ -49,14 +49,21 @@ def scan(image, tools, trivy):
         scratch = Path(temp)
         output = scratch / "sbom.json"
         target = str(image.layout) + "@" + image.manifest_digest
+        config = scratch / "trivy.yaml"
+        ignore = scratch / "empty.trivyignore"
+        config.write_bytes(b"{}\n")
+        ignore.write_bytes(b"")
         command = [str(trivy), "image", "--input", target, "--scanners", "license", "--list-all-pkgs",
                    "--offline-scan", "--skip-db-update", "--skip-java-db-update", "--skip-check-update",
-                   "--skip-version-check", "--config", "", "--ignorefile", "", "--parallel", "1",
+                   "--skip-version-check", "--config", str(config), "--ignorefile", str(ignore), "--parallel", "1",
                    "--max-image-size", "2GB", "--format", "json", "--output", str(output)]
-        result = tools_api._process(command, scratch, scratch, timeout=image.remaining_seconds())
-        report = tools_api._process_report(output, result)
-        oci.scanner_identity(report, image)
-        index = package_index(report, image)
+        from .public_security_context import _preparation_step
+        with _preparation_step("image-package-scan"):
+            result = tools_api._process(command, scratch, scratch, timeout=image.remaining_seconds())
+            report = tools_api._process_report(output, result)
+        with _preparation_step("image-package-identity"):
+            oci.scanner_identity(report, image)
+            index = package_index(report, image)
         import hashlib
         receipt = dict(scanner="trivy", version=TRIVY_VERSION, manifest=image.manifest_digest,
                        config=image.config_digest, report_sha256=hashlib.sha256(oci.canonical(report)).hexdigest())

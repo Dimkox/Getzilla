@@ -240,6 +240,24 @@ class HeldFamilyTests(fixtures.ImageComponentTests):
         self.assertEqual(internal_images([a, b], images), {"build"})
         self.assertEqual(internal_images([a, b, dict(b, reference="build")], images), set())
 
+    def test_inventory_refresh_cannot_extend_delivery_decision_to_changed_publication(self):
+        from getzilla import security_corresponding_source as source
+        from getzilla.security_internal_image_scope import declare_internal_uses
+        use = {"manifest": "trust-ci/runner.Dockerfile"}
+        inv = {"corresponding_sources": [{"name": k} for k in source.CATALOG], "images": [use], "gaps": []}
+        with patch.object(source, "SURFACE_SHA256", "changed"):
+            declare_internal_uses(inv)
+        self.assertNotIn("distribution", use)
+        with patch.object(source, "SURFACE_SHA256", source.IMAGE_DELIVERY_SURFACE_SHA256):
+            declare_internal_uses(inv)
+        self.assertEqual(use["distribution"], "internal")
+        for other in ({"manifest": "factory/compose.yaml"},
+                      {"manifest": use["manifest"], "delivery_kind": "factory-offline-archive"},
+                      {"manifest": use["manifest"], "distribution": "redistributed"}):
+            inv["images"] = [other]
+            declare_internal_uses(inv)
+            self.assertNotEqual(other.get("distribution"), "internal")
+
     def test_internal_image_policy_has_closed_shape_and_categories(self):
         from getzilla.security_license_contracts import _policy, load_policy
         policy = load_policy(Path(__file__).resolve().parents[1])

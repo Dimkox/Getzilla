@@ -302,6 +302,7 @@ def _digest(value) -> bool:
 _PREPARATION_SEAL = object()
 _PREPARATION_STAGES = frozenset(('setup', 'source-binding', 'profile-declaration', 'profile-validation',
     'tool-provision', 'feeds', 'package-artifacts', 'image-artifacts', 'image-database',
+    'image-package-tool', 'image-package-scan', 'image-package-identity',
     'obligations', 'licenses', 'final-binding', 'prepare-inputs', 'prepare-result', 'package-target',
     'factory-target','factory-acquisition','factory-output','license-run-scope','action-source','release-tool-source',
     'checker-tool-source'))
