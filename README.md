@@ -11,7 +11,7 @@
 
 # Getzilla
 
-Current source: **2.3.1 source candidate** (unpublished). The `integration/all-fixes-20261117` branch combines ongoing work on all 64 originally inventoried open issues and regressions #433, #434, #435 and #436, outstanding commits and open PRs #425, #411, #393 and #318 for one delivery. Full verification, fresh independent review, required exact-head CI, merge, release checks and the requested Claw production acceptance remain pending. Source implementation and retained evidence do not establish those results. Latest published: [v2.3.0](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0), source `2bb417431f1e4b9494e4af71ebf27adb1d04d898`, with [ZIP](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip) and [checksum](https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256) assets. The install commands below remain pinned to that release; source-only features are not promises about its contents. Use the [v2.3.0 quickstart](https://github.com/Dimkox/Getzilla/blob/v2.3.0/QUICKSTART.md) for that release. Publication does not prove production readiness. Continue source development through [START_HERE.md](START_HERE.md).
+Latest published: [v2.3.1](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.1) from main commit `bf82ca5c7c26331baa7e86d947057d56179cc753`. The installation commands below use this tag. Production acceptance on Claw is pending. [Release and checksums](https://github.com/Dimkox/Getzilla/releases/tag/v2.3.1) · [Post-release handoff](START_HERE.md)
 
 Getzilla lets an AI write code for your project and checks that code before it is allowed to stay.
 
@@ -87,25 +87,25 @@ Windows (PowerShell):
 
 ```powershell
 $f = Join-Path $env:TEMP 'getzilla-install.ps1'
-Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.0/scripts/install.ps1 -OutFile $f
-if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '4D89D8C77617FF3B262BBF8866F05E1A14D9FB45C6BA2C3C39E298AF9A499B76') { $env:GETZILLA_REF = 'v2.3.0'; Invoke-Expression (Get-Content -Raw $f) } else { throw 'install.ps1 SHA-256 mismatch: do not run it' }
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.1/scripts/install.ps1 -OutFile $f
+if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '2D61A5EFA2267E07BE4F61016ACC99D29D3FFAFF0588D4D4B2EA171DD14FF5CF') { $env:GETZILLA_REF = 'v2.3.1'; Invoke-Expression (Get-Content -Raw $f) } else { throw 'install.ps1 SHA-256 mismatch: do not run it' }
 ```
 
 Linux:
 
 ```bash
-curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.0/scripts/install.sh
-echo "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807  getzilla-install.sh" | sha256sum -c - && GETZILLA_REF=v2.3.0 bash getzilla-install.sh
+curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.1/scripts/install.sh
+echo "8ce2a62a057a75f4c38017bf58d11be293d65e46815d5b6c1cea604c69b86b62  getzilla-install.sh" | sha256sum -c - && GETZILLA_REF=v2.3.1 bash getzilla-install.sh
 ```
 
 macOS:
 
 ```bash
-curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.0/scripts/install.sh
-echo "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807  getzilla-install.sh" | shasum -a 256 -c - && GETZILLA_REF=v2.3.0 bash getzilla-install.sh
+curl -fsSLo getzilla-install.sh https://raw.githubusercontent.com/Dimkox/Getzilla/v2.3.1/scripts/install.sh
+echo "8ce2a62a057a75f4c38017bf58d11be293d65e46815d5b6c1cea604c69b86b62  getzilla-install.sh" | shasum -a 256 -c - && GETZILLA_REF=v2.3.1 bash getzilla-install.sh
 ```
 
-The installer is verified before it runs: the commands download it from the `v2.3.0` release tag, compare its SHA-256 with the digest published here (the test suite binds this digest to the installer bytes at the published tag), run it only when the digest matches (the check and the run are one command, so a failed check stops it), and install Getzilla from the same tag. Never pipe the installer straight into `bash` or `iex`. If the check fails, do not run the file: re-download it and report the mismatch.
+The installer is verified before it runs: the commands download it from the `v2.3.1` release tag, compare its SHA-256 with the digest published here (the test suite binds this digest to the installer bytes at the published tag), run it only when the digest matches (the check and the run are one command, so a failed check stops it), and install Getzilla from the same tag. Never pipe the installer straight into `bash` or `iex`. If the check fails, do not run the file: re-download it and report the mismatch.
 
 To choose without being asked, set `GETZILLA_AGENT` (`qwen`, `codex`, `claude`, `gemini`, `copilot`, `grok`), `GETZILLA_PROVIDER` (`openrouter`, `native`) and `OPENROUTER_API_KEY` first. To configure another agent later, run `getzilla setup-agent --agent codex` (or `python3 scripts/getzilla_setup_agent.py --agent codex` from the Getzilla folder). In current source, running this inside an installed project or its subdirectory adds the adapter to that project's selection before configuring the user-level agent. Existing selections remain; `--forget-key` changes only user-level configuration. See [managed adapter selection](docs/REFERENCE.md#managed-adapter-selection) for legacy projects.
 

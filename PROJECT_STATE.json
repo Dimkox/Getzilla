@@ -2,13 +2,13 @@
   "schema_version": 2,
   "repository": "Dimkox/Getzilla",
   "default_branch": "main",
-  "observed_at": "2026-11-19T17:35:33+00:00",
-  "observed_main_sha": "e99548d7cefca730cfad63c2f8cea1afe67bacd8",
+  "observed_at": "2026-11-26T00:36:00+03:00",
+  "observed_main_sha": "bf82ca5c7c26331baa7e86d947057d56179cc753",
   "product_version": "2.3.1",
-  "latest_published_release": "v2.3.0",
+  "latest_published_release": "v2.3.1",
   "source_installers": {
-    "record_scope": "Installer bytes of the source candidate; README and QUICKSTART run the published installers in published_release until a release publishes these.",
-    "status": "source_candidate",
+    "record_scope": "Installer bytes in the published v2.3.1 tag.",
+    "status": "published",
     "version": "2.3.1",
     "installers": {
       "scripts/install.sh": {
@@ -23,7 +23,7 @@
   "engineering_contract": "AGENTS.md",
   "roadmap": "DARK_FACTORY_ROADMAP.md",
   "current_continuation": {
-    "record_scope": "Current owner-directed combined delivery; source work in progress, not delivery or qualification evidence.",
+    "record_scope": "Post-release handoff for Getzilla v2.3.1.",
     "issue": null,
     "issues": [
       138,
@@ -97,27 +97,24 @@
     ],
     "issue_inventory_count": 68,
     "issue_inventory_observed_at": "2026-11-20",
-    "branch": "integration/all-fixes-20261117",
+    "branch": "main",
     "open_pull_requests_to_reconcile": [
-      425,
-      411,
-      393,
-      318
+      411
     ],
     "target_version": "2.3.1",
     "source_base": "e99548d7cefca730cfad63c2f8cea1afe67bacd8",
-    "status": "all_issues_integration_in_progress_full_qualification_merge_release_and_claw_acceptance_pending",
-    "owner_scope": "Resolve all 64 originally inventoried open issues and integration regressions #433, #434, #435 and #436, outstanding commits and open PRs through one combined PR, full verification, merge and release; production target is Claw.",
+    "status": "published_pending_pr411_reconciliation_and_claw_acceptance",
+    "owner_scope": "The v2.3.1 goal of resolving all 64 original issues and four integration regressions was not achieved. Release reconciliation closed 17 of 68 issues and left 51 open.",
     "production_target": {
       "name": "Claw",
       "authority_basis": "Explicit owner target selection in the current delivery session; exact operation/resource grants and technical prerequisites still apply.",
       "acceptance_status": "not_verified"
     },
-    "delivered_since_published_release": "Later merged changes remain recorded in delivered history. Integrated branches and source fixes are candidates until exact-head delivery gates pass; no all-issue closure is inferred.",
-    "next_action": "Finish remaining source and evidence joins for all inventoried issues and outstanding commits; reconcile open PRs #425, #411, #393 and #318 into one combined delivery. Commit the final candidate, reconcile its source-bound route and obtain fresh selected independent reviews. Run one final PR verifier at full scope, then require current public Actions linux/windows from App 15368 on the exact head and all applicable independent security gates, with resolved review threads. Record exact merge/tag/release grants only when their prerequisites hold. Publish 2.3.1 only after release verification and actual artifact checks. Keep v2.3.0 immutable. Native harness executes the local work. Claw is the exact owner target; perform only scoped authorized installation/operations and independently verify the requested result. Finish available preparation before presenting any genuinely missing legal wording, human security approval, credential or production-operation scope; reuse authority already granted.",
-    "checked_head": null,
-    "merge_commit": null,
-    "release_published": false,
+    "delivered_since_published_release": "Release PR #425 is published. The remaining 51 issues are prioritized backlog.",
+    "next_action": "Compare PR #411 with main. Prepare the Claw acceptance and rollback plan for the exact owner target. Obtain owner permission for each production action. Schedule the remaining 51 issues by backlog priority.",
+    "checked_head": "c20dbf39779212eb995b7389079769d1644157e7",
+    "merge_commit": "bf82ca5c7c26331baa7e86d947057d56179cc753",
+    "release_published": true,
     "operational_acceptance": false,
     "initial_issue_inventory_count": 64,
     "discovered_regressions": [
@@ -125,7 +122,17 @@
       434,
       435,
       436
-    ]
+    ],
+    "merged_pull_requests": [
+      425,
+      393,
+      318
+    ],
+    "issue_reconciliation": {
+      "closed": 17,
+      "open": 51,
+      "evidence": "https://github.com/Dimkox/Getzilla/pull/475#issuecomment-7175448144"
+    }
   },
   "historical_pr79_continuation": {
     "issue": 72,
@@ -245,45 +252,45 @@
   ],
   "published_release": {
     "repository": "Dimkox/Getzilla",
-    "tag": "v2.3.0",
-    "published_at": "2026-10-21T11:01:37Z",
-    "tag_object": "815aeabc5d215d65e72651692a6457920de9fa71",
+    "tag": "v2.3.1",
+    "published_at": "2026-11-24T21:54:59Z",
+    "tag_object": "a5ec4d0380ace424e02784386a11c021e475ed6a",
     "tag_kind": "annotated",
-    "merge_commit": "2bb417431f1e4b9494e4af71ebf27adb1d04d898",
-    "tree": "81076df2cd7db8713f7178ead66ebaa2728f861e",
-    "url": "https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0",
+    "merge_commit": "bf82ca5c7c26331baa7e86d947057d56179cc753",
+    "tree": "630c703be6d5f5251ea115da2b313adb28bc5dda",
+    "url": "https://github.com/Dimkox/Getzilla/releases/tag/v2.3.1",
     "assets": [
       {
-        "name": "getzilla-2.3.0.zip",
-        "size": 21371145,
-        "sha256": "782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11",
-        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip"
+        "name": "getzilla-2.3.1.zip",
+        "size": 33510091,
+        "sha256": "24401bc11eefdb2c6e1b394f2b3bd6a610b468c420a80f5a9865a72a8d47e344",
+        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.1/getzilla-2.3.1.zip"
       },
       {
-        "name": "getzilla-2.3.0.zip.sha256",
+        "name": "getzilla-2.3.1.zip.sha256",
         "size": 85,
-        "sha256": "e895af0a8b2a52eb1a977943570265cdd5446cf106ad4bd25f7ff9253aed23db",
-        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256"
+        "sha256": "3934f3a92d7c0e4dc5c774c594c8ec8cd5420433a21ac995552b183c7353143a",
+        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.1/getzilla-2.3.1.zip.sha256"
       }
     ],
     "artifact": {
-      "path": "packages/getzilla-2.3.0.zip",
-      "sha256": "782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11",
-      "sidecar_path": "packages/getzilla-2.3.0.zip.sha256",
-      "sidecar_sha256": "e895af0a8b2a52eb1a977943570265cdd5446cf106ad4bd25f7ff9253aed23db",
+      "path": "packages/getzilla-2.3.1.zip",
+      "sha256": "24401bc11eefdb2c6e1b394f2b3bd6a610b468c420a80f5a9865a72a8d47e344",
+      "sidecar_path": "packages/getzilla-2.3.1.zip.sha256",
+      "sidecar_sha256": "3934f3a92d7c0e4dc5c774c594c8ec8cd5420433a21ac995552b183c7353143a",
       "binding": "immutable_release_tag",
       "storage": "github_release_asset",
-      "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip",
-      "sidecar_url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256"
+      "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.1/getzilla-2.3.1.zip",
+      "sidecar_url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.1/getzilla-2.3.1.zip.sha256"
     },
     "operational_activation": false,
     "qualification_status": "publication_only_not_production_acceptance",
     "installers": {
       "scripts/install.sh": {
-        "sha256": "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807"
+        "sha256": "8ce2a62a057a75f4c38017bf58d11be293d65e46815d5b6c1cea604c69b86b62"
       },
       "scripts/install.ps1": {
-        "sha256": "4d89d8c77617ff3b262bbf8866f05e1a14d9fb45c6ba2c3c39e298af9a499b76"
+        "sha256": "2d61a5efa2267e07be4f61016acc99d29d3ffaff0588d4d4b2ea171dd14ff5cf"
       }
     }
   },
@@ -3119,5 +3126,49 @@
     "source_pull_request": 189,
     "source_role": "actual fetched main at the v2.0.19 release-sync merge through PR #189; the artifact-child candidate remains separate",
     "record_scope": "Historical source observation preserved unchanged except this scope label."
+  },
+  "historical_getzilla_v2_3_0_published_release": {
+    "repository": "Dimkox/Getzilla",
+    "tag": "v2.3.0",
+    "published_at": "2026-10-21T11:01:37Z",
+    "tag_object": "815aeabc5d215d65e72651692a6457920de9fa71",
+    "tag_kind": "annotated",
+    "merge_commit": "2bb417431f1e4b9494e4af71ebf27adb1d04d898",
+    "tree": "81076df2cd7db8713f7178ead66ebaa2728f861e",
+    "url": "https://github.com/Dimkox/Getzilla/releases/tag/v2.3.0",
+    "assets": [
+      {
+        "name": "getzilla-2.3.0.zip",
+        "size": 21371145,
+        "sha256": "782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11",
+        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip"
+      },
+      {
+        "name": "getzilla-2.3.0.zip.sha256",
+        "size": 85,
+        "sha256": "e895af0a8b2a52eb1a977943570265cdd5446cf106ad4bd25f7ff9253aed23db",
+        "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256"
+      }
+    ],
+    "artifact": {
+      "path": "packages/getzilla-2.3.0.zip",
+      "sha256": "782219f8f74525a882f14ff2f457ee553ee725a6ba9ae434296c39be77946c11",
+      "sidecar_path": "packages/getzilla-2.3.0.zip.sha256",
+      "sidecar_sha256": "e895af0a8b2a52eb1a977943570265cdd5446cf106ad4bd25f7ff9253aed23db",
+      "binding": "immutable_release_tag",
+      "storage": "github_release_asset",
+      "url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip",
+      "sidecar_url": "https://github.com/Dimkox/Getzilla/releases/download/v2.3.0/getzilla-2.3.0.zip.sha256"
+    },
+    "operational_activation": false,
+    "qualification_status": "publication_only_not_production_acceptance",
+    "installers": {
+      "scripts/install.sh": {
+        "sha256": "aa10c167d02aa8633f0d0d4478b9c0ad0fac3122ef293f633f1075f218889807"
+      },
+      "scripts/install.ps1": {
+        "sha256": "4d89d8c77617ff3b262bbf8866f05e1a14d9fb45c6ba2c3c39e298af9a499b76"
+      }
+    }
   }
 }
