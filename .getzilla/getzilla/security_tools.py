@@ -689,8 +689,8 @@ def _secret_input_core(root: Path, files: list[str], trusted_root: Path, *, file
                 for label, pattern in dispositions.SECRET_PATTERNS.items():
                     for match in pattern.finditer(text):
                         line, column = dispositions.location(text, match.start())
-                        entry = (policy.secret(relative, digest, text, match)
-                                 if policy and label == 'generic-secret' and not byte_view else None)
+                        entry = (policy.secret(relative, digest, text, match, label)
+                                 if policy and not byte_view else None)
                         if native:
                             finding = {'severity': 'error', 'effective_severity': 'error', 'observation': True,
                                        'code': label, 'path': relative, 'line': line, 'column': column,

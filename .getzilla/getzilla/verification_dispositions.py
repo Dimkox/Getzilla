@@ -23,6 +23,106 @@ SECRET_PATTERNS = {
     'aws-access-key': re.compile(r'AKIA[0-9A-Z]{16}'),
     'generic-secret': re.compile(r'(?i)(?:api[_-]?key|secret|password|token)\s*[:=]\s*["\'][^"\']{12,}["\']'),
 }
+# Reviewed test inputs for #461. The file digest also binds multiline PEM context.
+_REVIEWED_SECRET_INPUTS = {
+    ('factory/tests/test_retrieval_access.py',
+     'b93d7b3bc60976803f1751a6934f372c5a8f8c4d1646e12a651c5689073de66c'): {
+        (100, 19, 'generic-secret'): (
+            'fe7e066ecc72e9e9b970e6980b1039358e34128dcc9a2c3d80c559258a807cf4',
+            'test-fixture', 'Test input for redaction before retrieval ranking.'),
+    },
+    ('tests/test_entire_adapter.py',
+     'f7a7ba907d94dc6102a662c67f62ed6b835a235c13f9af6df8b44c175fe77671'): {
+        (146, 47, 'generic-secret'): (
+            '89c4b8b02d73827c6b2b9959c07bc9b107e66b01363ba275c21c315dc459b2b6',
+            'test-fixture', 'Mock child environment used to test token filtering.'),
+        (146, 74, 'generic-secret'): (
+            '89c4b8b02d73827c6b2b9959c07bc9b107e66b01363ba275c21c315dc459b2b6',
+            'test-fixture', 'Second mock token in the same environment filtering test.'),
+    },
+    ('tests/test_execution_public_certificate.py',
+     '758d15a9446c3e0c57cd2d46daf1db3eace994d07e8aaf66689ab2da7991eaad'): {
+        (63, 20, 'private-key'): (
+            'd66506534fe62e42a0b1667376590e9ea6e2765eac2d85b632f03084b4e1de5e',
+            'test-fixture', 'PEM header alone exercises public certificate rejection.'),
+    },
+    ('tests/test_native_context.py',
+     '062ee8fd871b879371f8399f61a8081da8850c2504c6137aa94143a62b221129'): {
+        (96, 64, 'generic-secret'): (
+            'ac5fac16cd75f6df62320b5bf185acd1c46dbf0983ec244d203b8abeb59ad929',
+            'test-fixture', 'Synthetic secret for a denied native context read.'),
+    },
+    ('tests/test_reverse_engineering.py',
+     '9ee0499514a7b698103c7ca765b0b5d4b304cf6f2156b0367c6bd1b7e2856583'): {
+        (180, 27, 'private-key'): (
+            '34adba61dcbb56a3363035880c881fc679b1680fcb427d19c104facdd0e0dc69',
+            'test-fixture', 'PEM header sentinel in the native addon refusal test.'),
+    },
+    ('tests/test_security_oci_budget_faults.py',
+     'e4a6b307f584fa2b2af5565bf3736e1633ad54a69e69c5d454ea05d392e1e91d'): {
+        (170, 18, 'generic-secret'): (
+            '112c4c1f9a175a87dc00f83fc1f038f4e1c79cac168d44ecb80aaf0be1b50fc0',
+            'test-fixture', 'Marker in an intentionally invalid budget fault.'),
+    },
+    ('tests/test_security_oci_transport.py',
+     '9bfc695559c0e6793f11f7b5990da9d2ab659926811e0186a6d49a52ca24d312'): {
+        (353, 9, 'generic-secret'): (
+            'c5797b9774f92f1d977a338c63c5fb8b3c25ebf26562bece2f78425feb7a2d12',
+            'test-fixture', 'Transport canary for the token persistence assertion.'),
+    },
+    ('tests/test_security_preparation_faults.py',
+     'a46e625bcbda155640169d19f0d52375ae9eddfbc96cccc92aa6da848c975d56'): {
+        (69, 30, 'generic-secret'): (
+            '4d40d6c119f445ce57e9ae2ff40678c33fc011855e5a3faccf9233d90e266ac8',
+            'test-fixture', 'Marker in a malformed preparation fault.'),
+        (116, 49, 'generic-secret'): (
+            'd02b2d2c5a6b78118d1177a667848d9c2d560cb4e42e43a2aec7ebed298375c7',
+            'test-fixture', 'Marker in the preparation error redaction test.'),
+    },
+    ('tests/test_security_tools.py',
+     '83c2975cf347f697917cc898496f1fe506732d5a7c8fcdb5ad02752fea929766'): {
+        (452, 23, 'generic-secret'): (
+            '4249a1e9d3f0ebf349246ba02be849c75f9d48fc212a29b414d50ad85010acae',
+            'false-positive', 'Pattern spans Python concatenation in the encoding test.'),
+        (483, 24, 'generic-secret'): (
+            '36acc2a1da13a9369b7874e218b5f827759a1865d91ddfcd4ee73dd074892c0b',
+            'test-fixture', 'Byte-view fixture exercises scanning of binary input.'),
+    },
+    ('tests/test_source_admission.py',
+     '45eef56e5d14f1a0024615efb2464b9764ec59fabc39c508cc2c6a440b9eefae'): {
+        (63, 64, 'generic-secret'): (
+            '0302fe7324916fc678d57a5ea05ba6663810999a8a2e3ff7188aff80b6b5d44e',
+            'test-fixture', 'Constructed fake token for an admission redaction test.'),
+        (140, 64, 'generic-secret'): (
+            '0302fe7324916fc678d57a5ea05ba6663810999a8a2e3ff7188aff80b6b5d44e',
+            'test-fixture', 'Constructed fake token for the no-spool assertion.'),
+        (149, 70, 'generic-secret'): (
+            '4e3dbfeb2641907066d10e70e7d542b550ea62c2e610cc285283b1e66e662b65',
+            'test-fixture', 'Fixed synthetic password for the narrow exception test.'),
+        (156, 51, 'generic-secret'): (
+            '0fe6b946ee9d9bb46d2ea4e2f5506e74e0ed054bb4d337b659318081dc82a133',
+            'test-fixture', 'Modified synthetic password tests rejection of a stale exception.'),
+    },
+    ('tests/test_trust_ci_setup.py',
+     'd1b304a95307e9fba4f2f1521ee5e9ae1da61ad9589ab8ac5c415a76b35e2d91'): {
+        (29, 13, 'private-key'): (
+            'f83bc3864721adcaa3c7e1dc108de2953868a872793c341cd4d9213cb2d2d450',
+            'test-fixture', 'Short dummy PEM fixture without a usable key payload.'),
+        (156, 31, 'private-key'): (
+            '5eb951515bb61e5e52ddd682ef4cdcc8c414d0a1fbe414de777e044278ea6dd2',
+            'test-fixture', 'Fake host writes a synthetic PEM marker.'),
+        (668, 29, 'private-key'): (
+            '0c53e47a1c3089ca397425095defdced26ac0904a2df919cd9976347540a0fc3',
+            'test-fixture', 'Damaged PEM input exercises private-key rejection.'),
+    },
+    ('tests/test_verification_dispositions.py',
+     'e2b80e1a35b705a11e5592fb0f22e3a28ad9bf99ea84f0208e85ef12fb873bc9'): {
+        (93, 23, 'generic-secret'): (
+            '4249a1e9d3f0ebf349246ba02be849c75f9d48fc212a29b414d50ad85010acae',
+            'false-positive', 'Pattern spans Python concatenation in the file encoding test.'),
+    },
+}
+
 _PUBLIC_TOKEN = re.compile(r'token\s*[:=]\s*(["\'])0x[0-9a-fA-F]{40}\1')
 _HASH = re.compile(r'[0-9a-f]{64}')
 _COMMON_FIELDS = {'id', 'check', 'kind', 'rule', 'path', 'sha256', 'line', 'reason', 'evidence'}
@@ -369,8 +469,20 @@ class Dispositions:
                 MAX_CONFIG_BYTES if relative == CONFIG_PATH else MAX_FILE_BYTES)
             self._read(relative, limit=limit)
 
-    def secret(self, path: str, file_hash: str, text: str, match: re.Match) -> dict | None:
+    def secret(self, path: str, file_hash: str, text: str, match: re.Match, rule: str = 'generic-secret') -> dict | None:
         line, column = location(text, match.start())
+        reviewed = _REVIEWED_SECRET_INPUTS.get((path, file_hash), {}).get((line, column, rule))
+        if reviewed:
+            line_hash, kind, reason = reviewed
+            start = match.start() - column + 1
+            end = text.find('\n', match.start())
+            raw_line = text[start:end if end >= 0 else len(text)].removesuffix('\r')
+            if sha256(raw_line.encode('utf-8')) == line_hash:
+                identity = sha256(f'{path}:{line}:{column}'.encode())[:20]
+                return {'id': f'reviewed-461-{identity}', 'kind': kind, 'reason': reason,
+                        'sha256': file_hash, 'line_sha256': line_hash}
+        if rule != 'generic-secret':
+            return None
         return next((entry for entry in self.entries if entry['check'] == 'secret-scan'
                      and (entry['path'], entry['sha256'], entry['line'], entry['column'], entry['match_sha256'])
                      == (path, file_hash, line, column, sha256(match.group().encode()))
@@ -438,6 +550,10 @@ class Dispositions:
         finding['effective_severity'] = finding['severity']
         if entry is not None:
             finding['effective_severity'] = 'info'
+            if 'line_sha256' in entry:
+                finding['disposition'] = {'id': entry['id'], 'kind': entry['kind'], 'reason': entry['reason'],
+                                          'line_sha256': entry['line_sha256'], 'file_sha256': entry['sha256']}
+                return
             finding['disposition'] = {
                 'id': entry['id'], 'kind': entry['kind'], 'reason': entry['reason'],
                 'evidence': entry['evidence'], 'config_path': CONFIG_PATH,
