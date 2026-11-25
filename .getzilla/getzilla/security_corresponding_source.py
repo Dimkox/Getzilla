@@ -21,10 +21,10 @@ from time import monotonic
 ADAPTER = '.getzilla/getzilla/security_corresponding_source.py'
 LEGAL = '.getzilla/config/license-exception-inputs/factory-source-delivery-v1/'
 # Reviewed engine constants, never loaded from candidate policy or environment.
-SURFACE_SHA256 = '277c76ae3291cd2cab9067545b9e8f6e1e0e598f9f004f211693b18b648cb122'
+SURFACE_SHA256 = '6361ae4f31e563f61607f5933936cee3080576d996e52bc6abb5461e7060c647'
 # Separate owner decision on the complete delivery surface. A source inventory
 # refresh alone must never extend this license decision to a new output.
-IMAGE_DELIVERY_SURFACE_SHA256 = '277c76ae3291cd2cab9067545b9e8f6e1e0e598f9f004f211693b18b648cb122'
+IMAGE_DELIVERY_SURFACE_SHA256 = '6361ae4f31e563f61607f5933936cee3080576d996e52bc6abb5461e7060c647'
 CATALOG = {
     'certifi': ('2026.10.19', '55233d49508cbaedddaab023a20f446ec60616cf2b2923a17c75eb9fef44752d',
                 '64baf557a90ab3f2061ecf1f002dd65df65d86ea93e4eaa6d7c603ec650f14e2',

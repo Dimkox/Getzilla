@@ -19,7 +19,7 @@ import tarfile
 import tempfile
 import time
 
-from .security_artifacts import read_file
+from .security_artifacts import ArtifactError, read_file
 from . import security_image_authority as authority
 from .security_image_authority import (  # noqa: F401 compatibility function/seal aliases
     _LICENSE_ENTRY,
@@ -459,6 +459,19 @@ def _pipeline(request, volume, builder):
                 with cli._preparation_step('prepare-inputs'):
                     preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
                                                      refresh=True, provision=True, **options)
+            except ArtifactError as error:
+                # Identify the checker source statements without exposing inputs, exception
+                # messages, URLs, local variables or host filesystem paths in diagnostics.
+                frames = []
+                frame = error.__traceback__
+                while frame is not None and len(frames) < 32:
+                    filename = Path(frame.tb_frame.f_code.co_filename)
+                    if filename.parent == Path(__file__).parent and re.fullmatch(r'security_[a-z_]+\.py', filename.name):
+                        frames.append([filename.name, frame.tb_lineno])
+                    frame = frame.tb_next
+                cli._atomic(Path(request['report']).parent / 'package-refusal.json',
+                            canonical(dict(checker_frames=frames)))
+                raise
             except ImageSecurityRefusal as error:
                 _event('evaluate')
                 # A known image CVE or an unproved PostgreSQL assessment is a hard
