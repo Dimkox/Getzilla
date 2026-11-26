@@ -125,6 +125,21 @@ class PublicationTests(unittest.TestCase):
                 self.publish(root,intent)
             self.assertEqual(state.require_route_owner(root),before)
 
+    def test_native_orphan_and_unresolved_constraint_deny_admission(self):
+        with project_copy() as root:
+            _, intent = self.fixture(root)
+            data = intent['snapshot']
+            data['requirements'].append(dict(data['requirements'][0], id='REQ-002', criterion_ids=[], action_key='second'))
+            data['spec']['invariants'] = [{'id': 'INV-001', 'statement': 'UNKNOWN', 'evidence': []}]
+            published = self.publish(root, intent)
+            observed = read_intake_cut(root)
+            self.assertEqual(observed['cut'], published['cut'])
+            assessment = observed['assessment']
+            self.assertEqual({row['field'] for row in assessment['missing']},
+                             {'requirements.REQ-002.criterion_ids', 'invariants.INV-001.statement', 'invariants.INV-001.evidence'})
+            with self.assertRaisesRegex(IntakeError, 'intake_not_ready'):
+                require_intake_ready(root)
+
     def test_native_mixed_scalar_bound_and_alias_versions_cannot_admit(self):
         for case in ('mixed','alias'):
             with self.subTest(case=case),project_copy() as root:

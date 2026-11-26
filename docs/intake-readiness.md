@@ -15,6 +15,14 @@ requires a substantive decision stays `needs_decision/unsupported_decision_ingre
 until an explicitly delegated current native owner action is recorded below. Imported
 `yes`, a principal label and the scope ACK never invoke that action.
 
+Each substantive requirement needs a current acceptance criterion, and each
+criterion needs a mapped requirement. An unmapped requirement produces a question
+with its ID and source line range. Supporting source locators alone create no
+requirement. Objective fields and declared AC, INV and FORBID statements must
+contain text. Whitespace and the whole values `UNKNOWN`, `TBD`, `TODO`,
+`NEEDS CLARIFICATION` and `...` are unresolved (case-insensitive). Each declared
+AC, INV and FORBID also needs an evidence reference.
+
 The immutable substantive digest D excludes decisions, status, questions,
 timestamps and spec/context/state backreferences. The native spec references D.
 Actual scope ACK establishes C. Mutable events produce M; the existing canonical
