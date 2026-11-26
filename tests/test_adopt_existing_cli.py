@@ -221,17 +221,63 @@ class CliTests(_Case):
         self.assertEqual(record['details']['project_health_status'], 'not_run')
         self.assertTrue((self.target / '.git').is_dir())
 
-    @unittest.skipUnless(os.name == 'posix', 'POSIX group permission bits')
-    def test_apply_refuses_group_writable_installer_resource(self) -> None:
+    @unittest.skipUnless(os.name == 'posix', 'POSIX checkout permissions')
+    def test_umask_002_checkout_adopts_without_changing_original_files(self):
+        home = self.base / 'checkout'
+        home.mkdir()
+        subprocess.run(['git', '-C', str(ROOT), 'checkout-index', '--all', f'--prefix={home}/'],
+                       check=True, umask=0o002)
+        resource = next((home / '.getzilla/templates/baseline/blobs').glob('*.txt'))
+        relative = resource.relative_to(home)
+        self.assertEqual(resource.stat().st_mode & 0o777, 0o664)
+        app = self.source / 'app/main.py'
+        app.chmod(0o664)
+        code, plan = self.plan()
+        assert_no_adoption_refusal(self, code, plan)
+        previous_umask = os.umask(0o077)
+        try:
+            code, record = self.apply(plan['details']['plan_id'], '--writers-stopped', home=home)
+        finally:
+            os.umask(previous_umask)
+        assert_no_adoption_refusal(self, code, record)
+        self.assertEqual(record['details']['integrity_status'], 'verified')
+        self.assertEqual((self.target / relative).read_bytes(), resource.read_bytes())
+        self.assertEqual((self.target / relative).stat().st_mode & 0o777, 0o644)
+        self.assertEqual(resource.stat().st_mode & 0o777, 0o664)
+        self.assertEqual(app.stat().st_mode & 0o777, 0o664)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX ownership and directory modes')
+    def test_adoption_resource_refusals_identify_the_file(self):
+        from getzilla import source_managed_layer
         home = self.base / 'getzilla-home'
         copy_public_source(ROOT, home)
         resource = next((home / '.getzilla/templates/baseline/blobs').glob('*.txt'))
-        resource.chmod(0o664)
+        relative = resource.relative_to(home).as_posix()
         code, plan = self.plan()
         assert_no_adoption_refusal(self, code, plan)
+        resource.chmod(0o666)
         code, record = self.apply(plan['details']['plan_id'], '--writers-stopped', home=home)
         self.assertEqual((code, record['reason_code']), (8, 'TOOL_ERROR'))
+        self.assertIn(relative, record['details'])
+        self.assertIn('0666', record['details'])
+        self.assertIn('0644', record['details'])
         self.assertFalse(self.target.exists())
+        installer = source_managed_layer.load_installer()
+        resource.chmod(0o664)
+        with installer._SourceTree(home, adoption_copy=True) as tree:
+            with mock.patch.object(os, 'geteuid', return_value=os.geteuid() + 1):
+                with self.assertRaisesRegex(installer.UnsafeInstallTarget, 'owner') as error:
+                    tree.read(relative, 65536)
+            self.assertIn(relative, str(error.exception))
+            resource.parent.chmod(0o777)
+            try:
+                with self.assertRaisesRegex(installer.UnsafeInstallTarget, '0777'):
+                    tree.read(relative, 65536)
+            finally:
+                resource.parent.chmod(0o755)
+            resource.write_bytes(b'altered')
+            with self.assertRaisesRegex(installer.UnsafeInstallTarget, 'digest'):
+                tree.read(relative, 65536)
 
 
 class AdversarialTests(_Case):
