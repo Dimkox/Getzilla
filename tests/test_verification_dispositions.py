@@ -503,5 +503,35 @@ class DispositionTests(unittest.TestCase):
             self.assertEqual(_secret_scan(self.root, ['protocol.ts']).status, 'fail')
 
 
+
+
+class ReviewedSecretFixtureTests(unittest.TestCase):
+    def test_exact_test_marker_is_reported_and_edits_restore_blocking(self):
+        from getzilla.security_tools import native_secret_observations, scan_secrets
+
+        relative = 'tests/test_execution_public_certificate.py'
+        original = (ROOT / relative).read_bytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / relative
+            path.parent.mkdir()
+            path.write_bytes(original)
+            native = native_secret_observations(root, [relative])
+            self.assertEqual(native['outcome'], 'pass')
+            observed = [row for row in native['details'] if row.get('observation')]
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(observed[0]['disposition']['kind'], 'test-fixture')
+            self.assertEqual(scan_secrets(root, [relative], trusted_root=root)['outcome'], 'pass')
+            lines = original.splitlines(keepends=True)
+            line = observed[0]['line'] - 1
+            lines[line] = lines[line].rstrip(b'\n') + b'  # modified\n'
+            path.write_bytes(b''.join(lines))
+            self.assertEqual(native_secret_observations(root, [relative])['outcome'], 'finding')
+            self.assertEqual(scan_secrets(root, [relative], trusted_root=root)['outcome'], 'finding')
+            other = path.with_name('moved.py')
+            other.write_bytes(original)
+            self.assertEqual(native_secret_observations(root, ['tests/moved.py'])['outcome'], 'finding')
+
+
 if __name__ == '__main__':
     unittest.main()
