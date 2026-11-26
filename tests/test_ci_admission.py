@@ -1,8 +1,14 @@
 """Fail-closed required Linux aggregation across jobs and source identities."""
+from contextlib import redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import importlib
 import importlib.util
+import io
+import json
+import subprocess
+import tempfile
+from unittest.mock import patch
 from pathlib import Path
 import sys
 import unittest
@@ -156,9 +162,64 @@ class CiAdmissionTests(unittest.TestCase):
         del records["security-expanded"]
         for state in ("failure", "success", "skipped", "cancelled"):
             result = self.module().admission_result(dict(needs, **{"security-expanded": state}), records,
-                head=HEAD, tree=TREE, run_id="123", attempt="2")
+                head=HEAD, tree=TREE, run_id="123", attempt="2", secret_scan_passed=True)
             self.assertEqual(result["status"], "pass")
             self.assertEqual(result["security-expanded"], "informational")
+
+    def test_changed_file_secrets_gate(self):
+        module = self.module()
+        fixture = Path("tests/test_execution_public_certificate.py")
+        needs = dict.fromkeys(("linux-core", "linux-core-tests", "live-acceptance"), "success")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def git(*args):
+                return subprocess.check_output(["git", "-c", "user.name=test", "-c",
+                    "user.email=test@example.invalid", *args], cwd=root).decode().strip()
+
+            def admitted(event, base):
+                head = git("rev-parse", "HEAD")
+                source = {"head": head, "tree": git("rev-parse", "HEAD^{tree}")}
+                records = self.records()
+                for record in records.values():
+                    record["source"] = source
+                env = {"GITHUB_EVENT_NAME": event, "GETZILLA_BASE_SHA": base, "GETZILLA_EXPECTED_HEAD": head,
+                       "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2",
+                       "GETZILLA_NEEDS": json.dumps({name: {"result": result} for name, result in needs.items()})}
+                output = io.StringIO()
+                with patch.dict(module.os.environ, env), patch.object(module, "load_records", return_value=records):
+                    with redirect_stdout(output):
+                        rc = module.main(["--root", str(root), "--artifacts", str(root)])
+                result = json.loads(output.getvalue())
+                self.assertEqual(rc, int(result["status"] == "fail"))
+                self.assertEqual(result["status"] == "pass", result["secret-scan"] == "pass")
+                return result["secret-scan"]
+
+            git("init", "-q")
+            git("commit", "--allow-empty", "-qm", "base")
+            base = git("rev-parse", "HEAD")
+            (root / fixture.parent).mkdir()
+            (root / fixture).write_bytes((Path(__file__).resolve().parents[1] / fixture).read_bytes())
+            git("add", "--", str(fixture))
+            git("commit", "-qm", "reviewed fixture")
+            self.assertEqual(admitted("pull_request", base), "pass")
+            self.assertEqual(admitted("push", "0" * 40), "pass")
+            reviewed = git("rev-parse", "HEAD")
+            git("mv", str(fixture), "moved fixture.py")
+            git("commit", "-qm", "rename fixture")
+            self.assertEqual(admitted("pull_request", reviewed), "fail")
+            git("rm", "moved fixture.py")
+            git("commit", "-qm", "delete")
+            self.assertEqual(admitted("push", git("rev-parse", "HEAD^")), "pass")
+            (root / "input").write_bytes(b"-----BEGIN " + b"PRIVATE KEY-----")
+            git("add", "input")
+            git("commit", "-qm", "unreviewed marker")
+            self.assertEqual(admitted("push", base), "fail")
+            (root / "input").write_bytes(b"\x00opaque")
+            git("commit", "-qam", "unscannable replacement")
+            self.assertEqual(admitted("push", git("rev-parse", "HEAD^")), "fail")
+            self.assertEqual(admitted("pull_request", "0" * 40), "unavailable")
+            self.assertEqual(admitted("push", ""), "unavailable")
 
     def test_all_required_evidence_passes_on_the_exact_source(self):
         self.assertEqual(self.evaluate(), [])
