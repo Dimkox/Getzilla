@@ -59,6 +59,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'trust': ('getzilla_trust.py', 'audit existing public source trust declarations offline'),
     'deploy': ('getzilla_deploy.py', 'prepare publish commands or observe a local package with preflight'),
     'harness': ('getzilla_harness.py', 'check or regenerate the selected agent harness files'),
+    'self-uninstall': ('getzilla_self_uninstall.py', 'remove Getzilla from this machine; projects stay unchanged'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
     'install-into': ('install_into.py', 'install Getzilla into a project (--plan, --materialize-new)'),
     'components': ('getzilla_components.py', 'managed selection: status, add, remove agent:<name>, uninstall, adopt'),
@@ -183,7 +184,7 @@ def main(argv: list[str]) -> int:
         return subprocess.run([project_python(HOME), str(HOME / 'scripts/getzilla_components.py'),
                                'uninstall', *rest], check=False).returncode
     # `update` changes the project from the Getzilla installation, never from the project's own copy.
-    script = HOME / 'scripts' / COMMANDS[command][0] if command == 'update' else script_path(COMMANDS[command][0])
+    script = HOME / 'scripts' / COMMANDS[command][0] if command in ('update', 'self-uninstall') else script_path(COMMANDS[command][0])
     return subprocess.run([project_python(HOME), str(script), *rest], check=False).returncode
 
 
