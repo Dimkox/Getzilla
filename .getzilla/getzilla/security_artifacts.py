@@ -118,6 +118,28 @@ def _packagist_version(value):
     return parts + (0,) * (4 - len(parts))
 
 
+_COMPOSER_RELEASE = re.compile(
+    r'v?(?P<release>[0-9]{1,5}(?:\.[0-9]+){0,3})'
+    r'(?:[._-]?(?P<stage>dev|alpha|a|beta|b|rc|stable|patch|pl|p)'
+    r'(?P<number>(?:[.-]?[0-9]+(?:[.-][0-9]+)*)?))?(?:\+[0-9a-z.-]+)?',
+    re.IGNORECASE | re.ASCII)
+_COMPOSER_STAGE = {'dev': 0, 'alpha': 1, 'a': 1, 'beta': 2, 'b': 2, 'rc': 3,
+                   'stable': 4, 'patch': 5, 'pl': 5, 'p': 5}
+
+
+def composer_release_key(value, error):
+    """Order numeric Composer release tags. Branch aliases and unknown formats refuse."""
+    match = _COMPOSER_RELEASE.fullmatch(value) if isinstance(value, str) and len(value) <= 128 else None
+    if not match:
+        raise error('unsupported Packagist release version')
+    stage = (match['stage'] or 'stable').lower()
+    number = match['number'] or ''
+    if number and stage in {'stable', 'dev'}:
+        raise error('unsupported Packagist stability suffix')
+    return (_packagist_version(match['release']), _COMPOSER_STAGE[stage],
+            tuple(int(part) for part in re.findall(r'[0-9]+', number)))
+
+
 def _packagist_key(name, value):
     if type(name) is not str or len(name) > 200 or (not _PACKAGIST_NAME.fullmatch(name)):
         raise _packagist_error('artifact-identity', 'Packagist requires a canonical vendor/package name')
