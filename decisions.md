@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-11-26 — Keep each pull request within 200 changed lines
+
+The owner set a limit of 200 added plus deleted lines per pull request, tests included. When a change is larger, split it into self-contained pull requests of at most 200 lines each, stacked in merge order, instead of stopping; the owner gave standing consent for that split.
+
 ## 2026-11-20 — Keep larger queue analysis budgets source-bound to Getzilla
 
 The owner approved 600,000 aggregate AST nodes and import depth 16 for the Getzilla self profile so it can analyze the reviewed source graph; its existing 128-module and 4 MiB limits remain. Consumer defaults stay at 400,000 aggregate AST nodes, import depth 8, 64 modules and 2 MiB, and helper-return recursion stays at 8. Bind every resource field to the canonical source profile, keep cache footprints profile-specific, and report the selected limits in refusal diagnostics so copied declarations and arbitrary caller values cannot grant more capacity.
