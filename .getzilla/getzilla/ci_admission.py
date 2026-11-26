@@ -211,9 +211,37 @@ def _factory_unit_valid(unit, expected_source):
         return False
 
 
-def admission_result(needs, records, *, head, tree, run_id, attempt):
+def _changed_files_secret_scan(root: Path, head: str) -> bool:
+    from .security_tools import native_secret_observations
+
+    event = os.environ["GITHUB_EVENT_NAME"]
+    base = os.environ["GETZILLA_BASE_SHA"]
+    if event not in {"push", "pull_request"} or not HEX40.fullmatch(base) or not HEX40.fullmatch(head):
+        raise ValueError("Missing changed-file scan range")
+    if base == "0" * 40:
+        if event != "push":
+            raise ValueError("Pull request has no base commit")
+        # First push of a branch or tag has no prior tree to compare.
+        args = ["ls-tree", "-r", "--name-only", "-z", head]
+    else:
+        if event == "pull_request":
+            base = _git(root, "merge-base", "--all", base, head)
+            if not HEX40.fullmatch(base):
+                raise ValueError("Pull request has no unique merge base")
+        # A rename becomes a deletion plus an addition: scan the destination.
+        args = ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
+                "--diff-filter=AMT", base, head, "--"]
+    names = subprocess.run(["git", *args], cwd=root, capture_output=True, check=True, timeout=30).stdout
+    files = [os.fsdecode(name) for name in names.split(b"\0") if name]
+    return native_secret_observations(root, files)["outcome"] == "pass"
+
+
+def admission_result(needs, records, *, head, tree, run_id, attempt, secret_scan_passed):
     problems = evaluate(needs, records, head=head, tree=tree, run_id=run_id, attempt=attempt)
+    if secret_scan_passed is not True:
+        problems.append("Changed-file secret scan found an unresolved match or incomplete coverage")
     return {"status": "fail" if problems else "pass", "security-expanded": "informational",
+            "secret-scan": "pass" if secret_scan_passed is True else "fail",
             "problems": problems, "authority": BOUNDARY}
 
 
@@ -465,9 +493,10 @@ def main(argv=None):
         records = load_records(args.artifacts, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"],
                                root=args.root, include_security=False)
         result = admission_result(needs, records, head=head, tree=tree, run_id=os.environ["GITHUB_RUN_ID"],
-                                  attempt=os.environ["GITHUB_RUN_ATTEMPT"])
+                                  attempt=os.environ["GITHUB_RUN_ATTEMPT"],
+                                  secret_scan_passed=_changed_files_secret_scan(args.root, head))
     except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as exc:
-        result = {"status": "fail", "security-expanded": "informational", "problems": ["Required CI evidence unavailable: " + type(exc).__name__],
+        result = {"status": "fail", "security-expanded": "informational", "secret-scan": "unavailable", "problems": ["Required CI evidence unavailable: " + type(exc).__name__],
                   "authority": BOUNDARY}
     print(json.dumps(result, indent=2))
     return int(result["status"] == "fail")
