@@ -4,6 +4,8 @@ Current source is the unpublished 2.3.1 source candidate. Latest published relea
 
 Historical predecessor publication: [v2.1.1](https://github.com/Dimkox/adaptive-grok-build-pro/releases/tag/v2.1.1), published 2026-10-03T09:11:19Z, target `97a7581238022356b2de8d193a9bd8363fc92dc3`. ZIP SHA-256 `f5116c5e1303232ae883ed7a3aa804b71f0b5654d2c385924653b5ffd2d631c1`; sidecar SHA-256 `07ddeb5f9fa7c9d8135c347defc84a271c102947724744ec8288370bd5c60269`. Both assets remain hosted on that release.
 
+The [v2.1.1 retirement catalog](../.getzilla/config/retire-baseline-v2.1.1.txt) lists 193 regular vendor files in the legacy installer paths, excluding runtime state. Each row records the ZIP member’s Unix mode, SHA-256 from the verified release manifest, and project-relative path.
+
 Published ZIPs and checksum sidecars are downloadable assets on GitHub Releases. This directory retains their provenance and publication records; release binaries are absent from this source tree.
 
 The prior published release is [`v2.0.19`](https://github.com/Dimkox/adaptive-grok-build-pro/releases/tag/v2.0.19), published `2026-09-24T21:30:52Z`, targeting `cb9af4073ba6c3d515145164d771c75ebdfa3224`. Its ZIP SHA-256 is `4176a872acdca873e840855d0b2c9e379cf8f796c9de69e5560b3e2bf85634b9`; the sidecar file SHA-256 is `77057e0be72b38dd6f6946e31d151f8d80c96b5b7470b92798f7422147791cf8`. These immutable bytes are recorded in [`PROJECT_STATE.json`](../PROJECT_STATE.json) under `prior_published_releases`; the current release is recorded in `published_release`.
