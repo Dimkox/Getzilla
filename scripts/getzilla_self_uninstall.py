@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import os
 import stat
+import sys
 from pathlib import Path
+
+sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 
