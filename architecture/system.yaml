@@ -4401,6 +4401,7 @@
       "repository_paths": [
         ".getzilla/getzilla/known_vulns.py",
         ".getzilla/getzilla/osv_published_artifacts.py",
+        ".getzilla/getzilla/osv_registry_releases.py",
         "scripts/getzilla_vulns.py"
       ],
       "runtime": {

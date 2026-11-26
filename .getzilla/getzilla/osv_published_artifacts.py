@@ -66,6 +66,9 @@ def _composer_dist(index, name, version):
 
 def published_artifacts(ecosystem: str, name: str, version: str) -> tuple[str, ...]:
     """Return published distribution URLs. An unqualified response raises ArtifactError."""
+    if ecosystem in {'npm', 'crates.io'}:
+        from .osv_registry_releases import registry_artifacts
+        return registry_artifacts(ecosystem, name, version)
     if ecosystem == 'PyPI':
         url, select = pypi_index_url(name, version), _wheels
     elif ecosystem == 'Packagist':

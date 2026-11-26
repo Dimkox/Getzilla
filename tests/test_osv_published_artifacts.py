@@ -58,3 +58,50 @@ class PublishedArtifactTests(unittest.TestCase):
         row['name'] = 'other/project'
         with self.assertRaises(ArtifactError):
             self.lookup('Packagist', name, '2', data)
+
+
+class RegistryReleaseTests(unittest.TestCase):
+    def lookup(self, ecosystem, name, version, data):
+        with patch('getzilla.osv_registry_releases._metadata', return_value=json.dumps(data).encode()):
+            return lookup.published_artifacts(ecosystem, name, version)
+
+    def test_crate_version_binds_download_and_yank_status(self):
+        path = '/api/v1/crates/serde/1.0.219/download'
+        row = dict(crate='serde', num='1.0.219', yanked=False, checksum='a' * 64, dl_path=path)
+        def query(**overrides):
+            return self.lookup('crates.io', 'serde', '1.0.219', {'version': dict(row, **overrides)})
+        self.assertEqual(query(), ('https://crates.io' + path,))
+        self.assertEqual(query(yanked=True), ())
+        for override in [dict(yanked=None), dict(checksum=''), dict(num='2.0.0'), dict(dl_path='/other')]:
+            with self.subTest(override=override), self.assertRaises(ArtifactError):
+                query(**override)
+
+    def test_invalid_crate_version_is_an_input_error_before_network(self):
+        with patch('getzilla.osv_registry_releases._metadata', side_effect=AssertionError('unexpected fetch')):
+            with self.assertRaises(ArtifactError):
+                lookup.published_artifacts('crates.io', 'serde', 'latest')
+
+    def test_scoped_npm_tarball_belongs_to_requested_release(self):
+        import base64
+        name = '@example/pkg'
+        url = 'https://registry.npmjs.org/@example/pkg/-/pkg-1.2.3.tgz'
+        dist = dict(tarball=url, integrity='sha512-' + base64.b64encode(b'x'*64).decode())
+        row = dict(name=name, version='1.2.3', dist=dist)
+        self.assertEqual(self.lookup('npm', name, '1.2.3', row), (url,))
+        for override in [dict(name='pkg'), dict(dist=dict(dist, tarball=url.replace('1.2.3', '1.2.4'))),
+                         dict(dist=dict(dist, integrity=''))]:
+            with self.subTest(override=override), self.assertRaises(ArtifactError):
+                self.lookup('npm', name, '1.2.3', dict(row, **override))
+
+    def test_registry_404_is_absent_but_503_and_redirects_are_refusals(self):
+        from getzilla import osv_registry_releases as registry
+        url = 'https://crates.io/api/v1/crates/demo/1.2.3'
+        for code, target in [(404, url), (503, url), (404, url + '/changed')]:
+            error = registry.HTTPError(target, code, 'error', {}, None)
+            with patch.object(registry, 'build_opener') as opener:
+                opener.return_value.open.side_effect = error
+                if (code, target) == (404, url):
+                    self.assertEqual(lookup.published_artifacts('crates.io', 'demo', '1.2.3'), ())
+                else:
+                    with self.assertRaises(ArtifactError):
+                        lookup.published_artifacts('crates.io', 'demo', '1.2.3')
