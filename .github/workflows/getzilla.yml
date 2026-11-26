@@ -827,7 +827,7 @@ jobs:
       - name: Doctor
         run: python scripts/getzilla_doctor.py
       - name: Windows-ported tests
-        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source tests.test_neutral_hooks tests.test_windows_snapshot_store tests.test_windows_hook_launchers tests.test_installer_cache_cleanup tests.test_installer_windows_current tests.test_installer_windows_nonadmin tests.test_managed_pyyaml tests.test_local_grants tests.test_workflow_baseline_fresh_install
+        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source tests.test_neutral_hooks tests.test_windows_snapshot_store tests.test_windows_hook_launchers tests.test_installer_cache_cleanup tests.test_installer_windows_current tests.test_installer_windows_nonadmin tests.test_managed_pyyaml tests.test_local_grants tests.test_workflow_baseline_fresh_install tests.test_self_uninstall
       - name: Hooks and CLI smoke
         env:
           GETZILLA_SESSION_ID: ci
@@ -955,6 +955,86 @@ jobs:
               if path.is_file():
                   lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
                   print(f"::error title=macos-{name}::" + " | ".join(line.strip() for line in lines[-40:])[:8000])
+
+  uninstall-e2e:
+    # Informational end-to-end check on every OS: clone a small public project, install Getzilla from
+    # this commit with the real installer, run read-only operations on the project, uninstall Getzilla
+    # and verify that the machine and the project are back to their state before the install.
+    name: Uninstall end-to-end (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      GETZILLA_NONINTERACTIVE: "1"
+      GETZILLA_SKIP_AGENT: "1"
+      GETZILLA_EU_AI_ACT: "0"
+      GETZILLA_REF: ci-uninstall-e2e
+      GETZILLA_GITHUB_METADATA_TOKEN: ${{ github.token }}
+    steps:
+      - name: Keep checkout bytes and executable bits as committed
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.filemode false
+      - name: Check out the exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Clone a small public project and record the machine state
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 https://github.com/pypa/sampleproject "$RUNNER_TEMP/sample"
+          git branch -f "$GETZILLA_REF" HEAD
+          python .github/ci/uninstall_e2e.py snapshot "$RUNNER_TEMP/before.json" "$RUNNER_TEMP/sample"
+      - name: Install Getzilla from this commit (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          GETZILLA_REPO="file://$GITHUB_WORKSPACE" GETZILLA_HOME="$RUNNER_TEMP/getzilla-home" \
+            GETZILLA_PROJECT="$RUNNER_TEMP/sample" bash scripts/install.sh
+      - name: Install Getzilla from this commit (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:GETZILLA_REPO = $env:GITHUB_WORKSPACE
+          $env:GETZILLA_HOME = Join-Path $env:RUNNER_TEMP 'getzilla-home'
+          $env:GETZILLA_PROJECT = Join-Path $env:RUNNER_TEMP 'sample'
+          & ./scripts/install.ps1
+      - name: Use Getzilla on the project
+        run: |
+          set -euo pipefail
+          home="$RUNNER_TEMP/getzilla-home"
+          python="$home/.venv/bin/python"
+          [ "$RUNNER_OS" != Windows ] || python="$home/.venv/Scripts/python.exe"
+          "$python" "$home/scripts/getzilla_cli.py" help > /dev/null
+          "$python" "$home/scripts/getzilla_cli.py" install-into --plan "$RUNNER_TEMP/sample" > "$RUNNER_TEMP/plan.json"
+          "$python" "$home/scripts/getzilla_cli.py" graph build --root "$RUNNER_TEMP/sample" --cache "$RUNNER_TEMP/graph" > "$RUNNER_TEMP/graph.json"
+          grep -q getzilla-graph-cli-v1 "$RUNNER_TEMP/graph.json"
+          "$python" "$home/scripts/getzilla_cli.py" self-uninstall --dry-run
+      - name: Uninstall Getzilla (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          "$HOME/.local/bin/getzilla" self-uninstall --yes
+      - name: Uninstall Getzilla (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & (Join-Path $env:RUNNER_TEMP 'getzilla-home\scripts\uninstall.ps1') --yes
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify that the machine and the project are clean
+        run: python .github/ci/uninstall_e2e.py verify "$RUNNER_TEMP/before.json" "$RUNNER_TEMP/sample" "$RUNNER_TEMP/getzilla-home"
 
   macos-core:
     # GitHub runs at most 5 macOS jobs at once on the Free, Pro and Team plans
