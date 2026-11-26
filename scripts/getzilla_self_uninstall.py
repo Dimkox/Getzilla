@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--keep-checkout', action='store_true', help='keep the Getzilla checkout folder')
     parser.add_argument('--keep-state', action='store_true', help='keep ~/.getzilla (managed tools, agents, OSV data)')
     parser.add_argument('--keep-agent-config', action='store_true', help='keep agent OpenRouter settings and keys')
+    parser.add_argument('--deferred-file', help=argparse.SUPPRESS)  # scripts/uninstall.ps1 removes these later
     return parser
 
 
@@ -36,12 +37,13 @@ def fail(message: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if os.name == 'nt':
-        return fail('Windows is not supported yet; remove Getzilla by hand.')
     user = Path.home()
     home = Path(args.home or os.environ.get('GETZILLA_HOME') or ROOT).expanduser()
     state = Path(os.environ.get('GETZILLA_STATE_HOME') or user / '.getzilla').expanduser()
     folders = [] if args.keep_state else [state]
+    programs = Path(os.environ.get('LOCALAPPDATA') or user / 'AppData/Local') / 'Programs' / 'Getzilla'
+    if os.name == 'nt':
+        folders.append(programs)  # portable runtimes from install.ps1
     if not args.keep_checkout:
         if not mu.is_checkout(home):
             return fail(f'{home} is not a Getzilla checkout. Pass --home or --keep-checkout.')
@@ -57,7 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     folders = [folder for folder in folders if folder.exists()] + ([link] if mu.owned_link(link, home) else [])
     path_profiles = [user / name for name in mu.PROFILES if mu.strip_path_block(user / name, apply=False)]
     key_profiles = [user / name for name in mu.PROFILES if mu.has_key_block(user / name)]
+    user_path, path_kind = mu.windows_user_path() if os.name == 'nt' else ([], 0)
+    stale = [entry for entry in user_path if mu.inside(entry, [home, state, programs])]
     plan = [f'PATH line: {p}' for p in path_profiles] + [f'remove: {f}' for f in folders]
+    plan += [f'user PATH entry: {entry}' for entry in stale]
     if not args.keep_agent_config:
         plan += [f'agent settings: Getzilla entries in {user / rel}' for rel in mu.AGENT_FILES if (user / rel).is_file()]
         plan += [f'model key lines: {p}' for p in key_profiles]
@@ -87,7 +92,15 @@ def main(argv: list[str] | None = None) -> int:
     for profile in path_profiles:
         mu.strip_path_block(profile, apply=True)
         print(f'removed: PATH line in {profile}')
-    for folder in folders:
+    if stale:
+        mu.set_windows_user_path([entry for entry in user_path if entry not in stale], path_kind)
+        print('removed: Getzilla entries in the user PATH')
+    deferred = [folder for folder in folders if mu.used_by_this_python(folder)]
+    if deferred and args.deferred_file:
+        Path(args.deferred_file).write_text(''.join(f'{folder}\n' for folder in deferred), encoding='utf-8')
+    elif deferred:
+        problems.append(f'{deferred[0]} is in use by this Python; run scripts\\uninstall.ps1 instead')
+    for folder in (folder for folder in folders if folder not in deferred):
         try:
             mu.remove_tree(folder)
             print(f'removed: {folder}')
