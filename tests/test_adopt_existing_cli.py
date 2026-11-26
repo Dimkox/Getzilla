@@ -14,6 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 
+from tests._support import copy_public_source  # noqa: E402
 from tests.zero_git_support import (  # noqa: E402
     FAKE_GITHUB_TOKEN, FAKE_KEY_MARKER, FAKE_PRIVATE_KEY, clean_source, git_objects, plan_and_adopt, tree_state, write_tree,
 )
@@ -140,9 +141,10 @@ class _Case(unittest.TestCase):
         return cli('plan', '--source', str(self.source), '--target', str(self.target), '--output', str(self.plan_file),
                    '--state-root', str(self.state), *extra)
 
-    def apply(self, digest: str | None = None, *extra: str) -> tuple[int, dict]:
+    def apply(self, digest: str | None = None, *extra: str, home: Path = ROOT) -> tuple[int, dict]:
         digest = digest or json.loads(self.plan_file.read_text(encoding='utf-8'))['plan_id']
-        return cli('apply', '--plan', str(self.plan_file), '--plan-digest', digest, '--state-root', str(self.state), *extra)
+        return cli('apply', '--plan', str(self.plan_file), '--plan-digest', digest, '--state-root', str(self.state),
+                   *extra, env={'GETZILLA_HOME': str(home)})
 
 
 class CliTests(_Case):
@@ -208,12 +210,28 @@ class CliTests(_Case):
         self.assertEqual(status['reason_code'], 'TARGET_CONFLICT')
 
     def test_full_cli_round_trip(self) -> None:
-        self.plan()
-        code, record = self.apply(None, '--writers-stopped')
+        home = self.base / 'getzilla-home'
+        copy_public_source(ROOT, home)
+        code, plan = self.plan()
+        assert_no_adoption_refusal(self, code, plan)
+        code, record = self.apply(plan['details']['plan_id'], '--writers-stopped', home=home)
         assert_no_adoption_refusal(self, code, record)
-        self.assertEqual(code, 0, record)
+        self.assertEqual(record['status'], 'published')
         self.assertEqual(record['details']['integrity_status'], 'verified')
+        self.assertEqual(record['details']['project_health_status'], 'not_run')
         self.assertTrue((self.target / '.git').is_dir())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX group permission bits')
+    def test_apply_refuses_group_writable_installer_resource(self) -> None:
+        home = self.base / 'getzilla-home'
+        copy_public_source(ROOT, home)
+        resource = next((home / '.getzilla/templates/baseline/blobs').glob('*.txt'))
+        resource.chmod(0o664)
+        code, plan = self.plan()
+        assert_no_adoption_refusal(self, code, plan)
+        code, record = self.apply(plan['details']['plan_id'], '--writers-stopped', home=home)
+        self.assertEqual((code, record['reason_code']), (8, 'TOOL_ERROR'))
+        self.assertFalse(self.target.exists())
 
 
 class AdversarialTests(_Case):
