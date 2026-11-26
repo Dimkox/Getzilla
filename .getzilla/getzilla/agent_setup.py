@@ -33,6 +33,7 @@ NATIVE_LOGIN = {
 }
 PROFILE_MARKER = '# Getzilla: model keys for coding agents'
 ENV_FILE = '.getzilla/openrouter.env'
+_PROFILE_BLOCK = f'{PROFILE_MARKER}\n[ -f "$HOME/{ENV_FILE}" ] && . "$HOME/{ENV_FILE}"\n'
 CLAUDE_TOKEN_ENV = 'ANTHROPIC_AUTH_TOKEN'  # nosec B105
 NEW_TERMINAL = 'open a new terminal so the agent sees OPENROUTER_API_KEY'
 _KEY_SHAPE = re.compile(r'^[A-Za-z0-9._\-]{16,512}$')
@@ -316,7 +317,7 @@ def _ensure_profiles(home: Path) -> list[str]:
         current = profile.read_text(encoding='utf-8') if profile.exists() else ''
         if PROFILE_MARKER not in current:
             with profile.open('a', encoding='utf-8') as handle:
-                handle.write(f'\n{PROFILE_MARKER}\n[ -f "$HOME/{ENV_FILE}" ] && . "$HOME/{ENV_FILE}"\n')
+                handle.write('\n' + _PROFILE_BLOCK)
             changed.append(str(profile))
     return changed
 
@@ -326,22 +327,16 @@ def _remove_profiles(home: Path) -> list[str]:
     for profile in (home / '.bashrc', home / '.zshrc', home / '.bash_profile', home / '.profile'):
         if not profile.is_file():
             continue
-        lines = profile.read_text(encoding='utf-8').splitlines(keepends=True)
-        kept: list[str] = []
-        skip_next = False
-        for line in lines:
-            if line.strip() == PROFILE_MARKER:
-                skip_next = True
-                if kept and not kept[-1].strip():
-                    kept.pop()
-                continue
-            if skip_next and ENV_FILE in line:
-                skip_next = False
-                continue
-            skip_next = False
-            kept.append(line)
-        if kept != lines:
-            _write_private(profile, ''.join(kept))
+        with profile.open(encoding='utf-8', newline='') as handle:
+            current = handle.read()
+        # At EOF remove the installer's separator even if the original file
+        # lacked its final newline. Inside a profile preserve command boundaries.
+        kept = current
+        if not current.endswith('\r\n' + _PROFILE_BLOCK):
+            kept = current.removesuffix('\n' + _PROFILE_BLOCK)
+        kept = re.sub(r'(?m)^\n?' + re.escape(_PROFILE_BLOCK), '', kept)
+        if kept != current:
+            _write_private(profile, kept)
             changed.append(str(profile))
     return changed
 

@@ -120,6 +120,33 @@ class AgentSetupTests(unittest.TestCase):
         self.assertTrue(bashrc.startswith('alias ll="ls -l"\n'))
         self.assertEqual(config.read_text().count('[model_providers.openrouter]'), 1)
 
+    def test_forget_key_preserves_edited_profile_command(self):
+        configure('codex', 'openrouter', self.home, key=KEY)
+        profile = self.home / '.bashrc'
+        edited = (f'\n{agent_setup.PROFILE_MARKER}\n'
+                  'printf "agent config: %s\\n" "$HOME/.getzilla/openrouter.env"\n')
+        profile.write_bytes(edited.encode())
+        agent_setup.forget_key(self.home)
+        self.assertEqual(profile.read_bytes(), edited.encode())
+
+    def test_forget_key_removes_only_generated_block_and_keeps_other_line_endings(self):
+        profile = self.home / '.bashrc'
+        before = b'# user settings\r\n'
+        after = b'alias gs="git status"\r\n'
+        profile.write_bytes(before)
+        configure('codex', 'openrouter', self.home, key=KEY)
+        with profile.open('ab') as handle:
+            handle.write(after)
+        agent_setup.forget_key(self.home)
+        self.assertEqual(profile.read_bytes(), before + after)
+
+    def test_forget_key_restores_profile_without_final_newline(self):
+        profile = self.home / '.bashrc'
+        profile.write_bytes(b'# user settings')
+        configure('codex', 'openrouter', self.home, key=KEY)
+        agent_setup.forget_key(self.home)
+        self.assertEqual(profile.read_bytes(), b'# user settings')
+
     def test_codex_respects_an_existing_provider_choice(self) -> None:
         config = self.home / '.codex/config.toml'
         config.parent.mkdir()
