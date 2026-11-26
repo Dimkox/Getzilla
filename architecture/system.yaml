@@ -4357,6 +4357,7 @@
         ".getzilla/getzilla/updater.py",
         "scripts/getzilla_baseline.py",
         "scripts/getzilla_install_managed.py",
+        "scripts/getzilla_self_uninstall.py",
         "scripts/getzilla_update.py",
         "scripts/install.ps1",
         "scripts/install.sh"

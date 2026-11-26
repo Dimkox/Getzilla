@@ -59,6 +59,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'trust': ('getzilla_trust.py', 'audit existing public source trust declarations offline'),
     'deploy': ('getzilla_deploy.py', 'prepare publish commands or observe a local package with preflight'),
     'harness': ('getzilla_harness.py', 'check or regenerate the selected agent harness files'),
+    'self-uninstall': ('getzilla_self_uninstall.py', 'preview machine installation paths with --dry-run'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
     'install-into': ('install_into.py', 'install Getzilla into a project (--plan, --materialize-new)'),
     'components': ('getzilla_components.py', 'managed selection: status, add, remove agent:<name>, uninstall, adopt'),
@@ -179,6 +180,9 @@ def main(argv: list[str]) -> int:
     if command not in COMMANDS:
         print(f"getzilla: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
+    if command == 'self-uninstall':
+        return subprocess.run([sys.executable, '-I', '-B', str(HOME / 'scripts/getzilla_self_uninstall.py'),
+                               *rest], check=False).returncode
     if command == 'uninstall':
         return subprocess.run([project_python(HOME), str(HOME / 'scripts/getzilla_components.py'),
                                'uninstall', *rest], check=False).returncode
