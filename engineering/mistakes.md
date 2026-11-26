@@ -48,3 +48,5 @@ without inventing a receipt. See the [Windows batch incident](incidents/20261118
 Do not place no-Git execution fixtures under an existing checkout. Use the
 admitted private OS-temp exception and check AF_UNIX path bytes; keep source
 and evidence canonical, preserve exact-root guards, and retain failed runs.
+
+Keep production inventory in the owner-approved channel and obtain a separate grant before each action on system paths.

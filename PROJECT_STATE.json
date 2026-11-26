@@ -98,20 +98,20 @@
     "issue_inventory_count": 68,
     "issue_inventory_observed_at": "2026-11-20",
     "branch": "main",
-    "open_pull_requests_to_reconcile": [
-      411
-    ],
+    "open_pull_requests_to_reconcile": [],
     "target_version": "2.3.1",
     "source_base": "e99548d7cefca730cfad63c2f8cea1afe67bacd8",
-    "status": "published_pending_pr411_reconciliation_and_claw_acceptance",
+    "status": "published_claw_acceptance_deferred",
     "owner_scope": "The v2.3.1 goal of resolving all 64 original issues and four integration regressions was not achieved. Release reconciliation closed 17 of 68 issues and left 51 open.",
     "production_target": {
       "name": "Claw",
       "authority_basis": "Explicit owner target selection in the current delivery session; exact operation/resource grants and technical prerequisites still apply.",
-      "acceptance_status": "not_verified"
+      "acceptance_status": "deferred_by_owner",
+      "decision_date": "2026-11-26",
+      "reason": "The L5 runtime is not installed. There is no separate server and paid provider calls are not needed."
     },
     "delivered_since_published_release": "Release PR #425 is published. The remaining 51 issues are prioritized backlog.",
-    "next_action": "Compare PR #411 with main. Prepare the Claw acceptance and rollback plan for the exact owner target. Obtain owner permission for each production action. Schedule the remaining 51 issues by backlog priority.",
+    "next_action": "Triage the 20 secret matches (#461), require changed-file secret scanning in Linux (#477), present the source-hash design for owner decision (#450), then align local PR verification with hosted CI (#478).",
     "checked_head": "c20dbf39779212eb995b7389079769d1644157e7",
     "merge_commit": "bf82ca5c7c26331baa7e86d947057d56179cc753",
     "release_published": true,

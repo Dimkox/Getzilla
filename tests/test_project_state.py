@@ -254,9 +254,9 @@ class ProjectStateTests(unittest.TestCase):
         self.assertEqual(len(continuation['issues']), 68)
         self.assertEqual(len(set(continuation['issues'])), 68)
         self.assertEqual(continuation['discovered_regressions'], [433, 434, 435, 436])
-        self.assertEqual(continuation['open_pull_requests_to_reconcile'], [411])
+        self.assertEqual(continuation['open_pull_requests_to_reconcile'], [])
         self.assertEqual(continuation['production_target']['name'], 'Claw')
-        self.assertEqual(continuation['production_target']['acceptance_status'], 'not_verified')
+        self.assertEqual(continuation['production_target']['acceptance_status'], 'deferred_by_owner')
         self.assertTrue(continuation['release_published'])
         self.assertEqual(continuation['merged_pull_requests'], [425, 393, 318])
         self.assertFalse(continuation['operational_acceptance'])
@@ -271,8 +271,8 @@ class ProjectStateTests(unittest.TestCase):
         reconciliation = continuation['issue_reconciliation']
         self.assertEqual((reconciliation['closed'], reconciliation['open']), (17, 51))
         self.assertEqual(reconciliation['closed'] + reconciliation['open'], len(continuation['issues']))
-        self.assertIn('#411', continuation['next_action'])
-        self.assertIn('Claw', continuation['next_action'])
+        for issue in ('#461', '#477', '#450', '#478'):
+            self.assertIn(issue, continuation['next_action'])
         finished = state['historical_pr79_continuation']
         self.assertEqual((finished['issue'], finished['pull_request'], finished['route_id']), (72, 79, '43786cadd549'))
         self.assertTrue((ROOT / finished['change_package'] / 'brief.md').is_file())
@@ -290,7 +290,7 @@ class ProjectStateTests(unittest.TestCase):
         self.assertIn('docs/REFERENCE.md#bounded-local-m8', roadmap)
         self.assertNotIn('source-candidate', next(line for line in reference.splitlines() if line.startswith('## Bounded local M8')))
         self.assertNotIn('pending owner steering', self.state['current_continuation']['next_action'])
-        self.assertIn('exact owner target', self.state['current_continuation']['next_action'])
+        self.assertFalse(self.state['current_continuation']['operational_acceptance'])
         observation = self.state['publication_observation_20261012']
         self.assertFalse(observation['current_verification'])
         self.assertFalse(observation['tag_signed'])
