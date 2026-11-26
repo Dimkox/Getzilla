@@ -1,11 +1,8 @@
 # Changelog
 
-## Unreleased
-
-- `load_installer` now always uses the executing engine's installer. `GETZILLA_HOME` supplies data only.
-
 ## 2.3.1 — 2026-10-21 (source candidate)
 
+- **Unreleased change after v2.3.1.** `load_installer` now always uses the executing engine's installer. `GETZILLA_HOME` supplies data only.
 - Security is **UNVERIFIED** for a release admitted with the temporary security-expanded waiver (#456, expires 2026-12-08 00:00 UTC). Deferred coverage includes OSV, licenses, OCI and Python artifacts.
 - Record the v2.3.0 publication; README and QUICKSTART install from the v2.3.0 tag with its installer digests.
 - EU AI Act gate:
