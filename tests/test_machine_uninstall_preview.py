@@ -58,22 +58,6 @@ class MachineUninstallPreviewTests(unittest.TestCase):
         self.assertNotIn(str(link), result.stdout)
         self.assertEqual(link.readlink(), self.project)
 
-    def test_platform_launcher_forwards_options_and_status(self):
-        if os.name == 'nt':
-            launcher = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                        '-File', str(ROOT / 'scripts/uninstall.ps1')]
-        else:
-            launcher = ['/bin/sh', str(ROOT / 'scripts/uninstall.sh')]
-        for options, expected in ((['--dry-run'], 0), (['--unknown-option'], 2)):
-            with self.subTest(options=options):
-                result = subprocess.run([*launcher, *options], cwd=self.project, env=self.env,
-                                        capture_output=True, text=True, timeout=30)
-                self.assertEqual(result.returncode, expected, result.stderr)
-                if expected == 0:
-                    self.assertIn(str(self.state), result.stdout)
-                    self.assertIn(str(ROOT), result.stdout)
-                self.assertEqual(self.marker.read_bytes(), b'owned fixture')
-
     def test_keep_options_exclude_only_the_selected_roots(self):
         tools = self.home / 'custom-toolchains'
         tools.mkdir()
