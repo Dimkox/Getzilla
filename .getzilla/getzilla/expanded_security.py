@@ -252,7 +252,8 @@ def lockfile_check(root: Path) -> dict[str, Any]:
         return {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': str(exc),
                 'details': [{'findings': []}]}
     inventory = report['inventory']
-    outcome = {'pass': 'pass', 'fail': 'finding', 'skip': 'not_applicable'}[report['status']]
+    outcome = ('not_applicable' if report['status'] == 'skip' else 'finding' if report['findings']
+               else 'pass' if report['status'] == 'pass' else 'blocked')
     sources = [{'database': _database_name(root, database), **{k: row[k] for k in _SOURCE_FIELDS}}
                for row in report['source_evidence']]
     result = _result('known-vulnerabilities', outcome, report['summary'],
