@@ -243,17 +243,17 @@ def lockfile_obligation(root: Path) -> dict[str, Any]:
 
 
 def lockfile_check(root: Path) -> dict[str, Any]:
-    from .known_vulns import VulnerabilityError, scan
+    from .known_vulns import VulnerabilityError, lockfile_gate, scan
 
     database = _database(root, None)
     try:
-        report = scan(root, environ={**os.environ, 'GETZILLA_OSV_DB': str(database)})
+        report = lockfile_gate(scan(root, environ={**os.environ, 'GETZILLA_OSV_DB': str(database)}))
     except (OSError, ValueError, VulnerabilityError) as exc:
         return {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': str(exc),
                 'details': [{'findings': []}]}
     inventory = report['inventory']
-    outcome = ('not_applicable' if report['status'] == 'skip' else 'finding' if report['findings']
-               else 'pass' if report['status'] == 'pass' else 'blocked')
+    outcome = ('not_applicable' if report['status'] == 'skip' else 'pass' if report['status'] == 'pass'
+               else 'finding' if report['findings'] else 'blocked')
     sources = [{'database': _database_name(root, database), **{k: row[k] for k in _SOURCE_FIELDS}}
                for row in report['source_evidence']]
     result = _result('known-vulnerabilities', outcome, report['summary'],

@@ -772,7 +772,7 @@ The verification report keeps schema version 1 with additive detail fields. Orig
 
 ## Known vulnerabilities
 
-`getzilla_verify.py` runs a `known-vulnerabilities` check next to Ruff, Bandit, Semgrep and Trivy. It reads exact pins from `requirements*.txt`, `pyproject.toml`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `go.mod`, `Cargo.lock`, `composer.lock` and `Gemfile.lock` (tracked files; `tests/**`, `**/fixtures/**`, `node_modules` and `vendor` are excluded by default) and looks every version up in [OSV](https://osv.dev), which merges the GitHub Advisory Database, PyPA, RustSec, the Go vulnerability database, npm and NVD-derived records. A finding fails the check with its OSV/GHSA/CVE ids, severity and fixed versions.
+`getzilla_verify.py` runs a `known-vulnerabilities` check next to Ruff, Bandit, Semgrep and Trivy. It reads exact pins from `requirements*.txt`, `pyproject.toml`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `go.mod`, `Cargo.lock`, `composer.lock` and `Gemfile.lock` (tracked files; `tests/**`, `**/fixtures/**`, `node_modules` and `vendor` are excluded by default) and looks every version up in [OSV](https://osv.dev), which merges the GitHub Advisory Database, PyPA, RustSec, the Go vulnerability database, npm and NVD-derived records. An unaccepted finding fails the lockfile check when OSV lists a fixed package version, regardless of severity. Findings without a fixed version remain in the report.
 
 It never touches the network unless asked: `GETZILLA_OSV_ONLINE=1` (or `--online`) queries `api.osv.dev`; `GETZILLA_OSV_DB=<dir>` (or `--db`) reads an offline mirror made with `python3 scripts/getzilla_vulns.py --download-db <dir>`. With neither, the check is skipped and says how many dependencies went unchecked; `--mode pr`/`release` refuse that skip (only a repository without pinned dependencies may skip), so set one of them for those modes. The generated workflow keeps its existing `GETZILLA_OSV_ONLINE=1` legacy selector. The new public-input runtime capability is unactivated: later structured-security CI integration needs separately qualified offline inputs and any missing family adapters. The online flag supplies no structured feed or license evidence. See [public input preparation](security-checker-bootstrap.md#explicit-public-input-preparation). Missing, stale, unsupported or unqualified inputs refuse; a profile or `prepared` report is not a scan PASS, receipt or external attestation. Trust CI mounts its host mirror read-only at `/vulndb` when the sandbox policy sets `vulnerability_db_host_path`.
 
@@ -785,7 +785,7 @@ A finding can be accepted for a limited time in `.getzilla/config/known-vulnerab
 }
 ```
 
-`id` matches the OSV id or any alias; an expired entry fails the check again. Offline range matching uses the advisory's enumerated versions first and a generic version order otherwise, so the online API is the reference when they disagree.
+`id` matches the OSV id or any alias; after expiry the usual fixed-version rule applies again. Offline range matching uses the advisory's enumerated versions first and a generic version order otherwise, so the online API is the reference when they disagree.
 
 ## Local browser demo
 

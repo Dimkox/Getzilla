@@ -79,7 +79,9 @@ class ExpandedSecurityTests(unittest.TestCase):
         with mock.patch(__name__ + '.NOW', datetime.now(timezone.utc)):
             self.osv()
         result = lockfile_check(self.root)
-        self.assertEqual(result['details'][0]['outcome'], 'finding')
+        self.assertEqual(result['status'], 'pass')
+        self.assertEqual(result['details'][0]['outcome'], 'pass')
+        self.assertEqual([hit['id'] for hit in result['details'][0]['findings']], ['GHSA-fixture'])
         req.write_text('sample==2.0.0\n')
         plan = lockfile_obligation(self.root)
         result = lockfile_check(self.root)
