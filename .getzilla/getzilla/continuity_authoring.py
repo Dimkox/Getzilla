@@ -5,6 +5,7 @@ This module does not supply another store or change scope, epoch, grant or recei
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +140,9 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
             raise ValueError('task authority unavailable; use explicit --continue ROUTE_ID or --new-task')
         if continuity._passive(text):
             return route
+        if (not new_task and route is not None and route.get('status') in continuity.TERMINAL
+                and re.match(r'\s*(?:continue|resume|продолжай(?:те)?|продолжи(?:те)?)\s+', text, re.IGNORECASE)):
+            raise ValueError('the selected task is closed; use --new-task with the full scope')
         continuity._ensure_idle(root)
         binding = continuity.state.open_change_binding(root)
         if binding:
