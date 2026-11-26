@@ -35,6 +35,7 @@ adaptive_trust_ci = ["resources/*.sql"]
 [dependency-groups]
 build = ["setuptools==84.1.0"]
 runner = [
+  "cvss==3.6",
   "pytest==9.1.1",
   "pytest-xdist==3.8.0",
   "pytest-cov==7.1.0",
@@ -69,6 +70,7 @@ runner = [
 default-groups = []
 required-version = "==0.11.12"
 constraint-dependencies = [
+  "cvss==3.6",
   "annotated-doc==0.0.5",
   "annotated-types==0.8.0",
   "anyio==4.15.1",
