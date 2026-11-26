@@ -4400,6 +4400,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/getzilla/known_vulns.py",
+        ".getzilla/getzilla/osv_published_artifacts.py",
         "scripts/getzilla_vulns.py"
       ],
       "runtime": {
