@@ -1019,6 +1019,9 @@ def _pypi_key(version: str) -> tuple[Any, ...]:
 
 
 def _range_key(version: str, *, kind: str, ecosystem: str) -> tuple[Any, ...]:
+    if kind == 'ECOSYSTEM' and ecosystem == 'Packagist':
+        from .security_artifacts import composer_release_key
+        return composer_release_key(version, VulnerabilityError)
     if kind == 'SEMVER':
         return _semver_key(version)
     if kind == 'ECOSYSTEM' and ecosystem == 'PyPI':
@@ -1089,6 +1092,10 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
     # Validate ALL coverage before matching: a positive or accepted finding
     # must not erase an unsupported range in the same affected entry.
     matches = [_range_contains(version, item, ecosystem=ecosystem) for item in ranges]
+    if versions and ecosystem == 'Packagist':
+        target = _range_key(version, kind='ECOSYSTEM', ecosystem=ecosystem)
+        matches.extend(target == _range_key(value, kind='ECOSYSTEM', ecosystem=ecosystem) for value in versions)
+        return any(matches)
     if version in versions:
         return True
     if versions:
