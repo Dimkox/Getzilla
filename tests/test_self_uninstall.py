@@ -89,5 +89,28 @@ class SelfUninstallTest(unittest.TestCase):
         self.assertTrue(self.home.exists() and self.project.exists())
 
 
+    def test_keep_options(self) -> None:
+        result = self.run_core('--yes', '--keep-checkout', '--keep-agent-config')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.home.exists())
+        self.assertIn('openrouter', (self.user / '.qwen/settings.json').read_text(encoding='utf-8'))
+        self.assertFalse((self.user / '.getzilla').exists())
+
+    def test_shell_wrapper_passes_options(self) -> None:
+        shutil.copy(ROOT / 'scripts/uninstall.sh', self.home / 'scripts/uninstall.sh')
+        shutil.copy(CORE, self.home / 'scripts/getzilla_self_uninstall.py')
+        shutil.copytree(ROOT / '.getzilla/getzilla', self.home / '.getzilla/getzilla', dirs_exist_ok=True)
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GETZILLA_')}
+        env.update(HOME=str(self.user), GETZILLA_HOME=str(self.home))
+        result = subprocess.run(['bash', str(self.home / 'scripts/uninstall.sh'), '--dry-run'],
+                                capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Dry run', result.stdout)
+
+    def test_readme_names_the_uninstaller(self) -> None:
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        self.assertIn('getzilla self-uninstall', readme)
+        self.assertIn('scripts/uninstall.sh', readme)
+
 if __name__ == '__main__':
     unittest.main()
