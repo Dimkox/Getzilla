@@ -1118,7 +1118,7 @@ class CoverageLayout(unittest.TestCase):
         if sys.platform != 'linux':
             self.skipTest('descendant verification reads /proc on Linux or process handles on Windows')
         status = Path('/proc') / pid_file.read_text() / 'status'
-        for _ in range(100):
+        for attempt in range(101):
             try:
                 if 'Z (zombie)' in status.read_text():
                     diagnostics.ownership_mark('descendant-check', status='returned', descendant='zombie')
@@ -1126,9 +1126,36 @@ class CoverageLayout(unittest.TestCase):
             except FileNotFoundError:
                 diagnostics.ownership_mark('descendant-check', status='returned', descendant='absent')
                 return
-            time.sleep(0.01)
+            if attempt < 100:
+                time.sleep(0.01)
         diagnostics.ownership_mark('descendant-check', status='failed', descendant='nonzombie')
         self.fail('owned descendant continued after process cleanup')
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux procfs descendant observation')
+    def test_descendant_wait_observes_its_last_interval(self):
+        for final_state in ('absent', 'zombie', 'running'):
+            with self.subTest(final_state=final_state), tempfile.TemporaryDirectory() as directory:
+                marker = Path(directory) / 'grandchild.pid'
+                marker.write_text('42')
+                original_read = Path.read_text
+                sleeps = []
+                def read(path, *args, **kwargs):
+                    if path == marker:
+                        return original_read(path, *args, **kwargs)
+                    self.assertEqual(path, Path('/proc/42/status'))
+                    if len(sleeps) == 100:
+                        if final_state == 'absent':
+                            raise FileNotFoundError
+                        if final_state == 'zombie':
+                            return 'State:\tZ (zombie)\n'
+                    return 'State:\tS (sleeping)\n'
+                with patch.object(Path, 'read_text', read), patch.object(time, 'sleep', sleeps.append):
+                    if final_state == 'running':
+                        with self.assertRaisesRegex(AssertionError, 'owned descendant continued'):
+                            self.assert_descendant_stopped(marker)
+                    else:
+                        self.assert_descendant_stopped(marker)
+                self.assertEqual(sleeps, [0.01] * 100)
 
     def test_trust_cli_uses_own_imports_and_keeps_each_file_on_one_worker(self) -> None:
         for workers in (2, 0):
