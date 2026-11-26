@@ -19,6 +19,7 @@ class MachineUninstallPreviewTests(unittest.TestCase):
         self.project = self.home / 'project'
         scripts = self.project / 'scripts'
         scripts.mkdir(parents=True)
+        (self.project / '.getzilla').mkdir()
         (scripts / 'getzilla_self_uninstall.py').write_text("raise SystemExit(77)")
         self.state = self.home / 'private state'
         self.state.mkdir()
