@@ -18,6 +18,16 @@ POLICY_PATHS = frozenset({'.grok/config.toml', '.codex/config.toml', '.qwen/sett
                           '.codex/hooks.json', '.grok/codex-hooks.json'})
 
 
+def retirement_baseline(home: Path) -> dict:
+    """Regular vendor files from the checksum-verified predecessor ZIP (packages/README.md)."""
+    raw = _read_regular_bytes(home, '.getzilla/config/retire-baseline-v2.1.1.txt',
+                              label='v2.1.1 legacy retirement catalog', limit=65536)
+    if hashlib.sha256(raw).hexdigest() != '5803bce324dd8ef3602da0daae89c2ada0e28ab7c3da18f7f9ea2ba9692497d1':
+        raise ValueError('legacy retirement catalog digest mismatch')
+    return {path: (mode, digest) for mode, digest, path in
+            (line.split(' ', 2) for line in raw.decode('utf-8').splitlines())}
+
+
 def load_baseline(home: Path, release: str, *, include_runtime_anchors: bool = False) -> dict[str, dict]:
     if release != RELEASE:
         raise ValueError('unknown baseline release; only v2.3.0 is qualified')
