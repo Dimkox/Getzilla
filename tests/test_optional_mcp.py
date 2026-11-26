@@ -329,24 +329,45 @@ class NativeTests(unittest.TestCase):
         self.request=replace(self.request,scope_digest=hashlib.sha256(json.dumps(self.runtime.profile,sort_keys=True,separators=(',',':')).encode()).hexdigest())
         self.plan=plan_activation(self.root,'mcp-jira',self.request,native=self.runtime,runtime=self.runtime,authority=self.authority)
         self.activate()
-        values=[]
-        def hang(index):values.append(self.runtime.call(server_id='a',tool='fixture_read',arguments={'mode':'hang'},intent_key='branch-a-'+str(index),hard_timeout_seconds=5))
-        threads=[threading.Thread(target=hang,args=(index,)) for index in range(2)]
-        for thread in threads:
-            thread.start()
-            self.addCleanup(lambda thread=thread:thread.join(5))
-        end=time.monotonic()+2
-        while len(execution_store.load_registry(self.root)['records'])<2 and time.monotonic()<end:
-            time.sleep(.01)
-        healthy=self.runtime.call(server_id='b',tool='fixture_read',arguments={},intent_key='branch-b',hard_timeout_seconds=3)
-        self.assertEqual(healthy['reply'].status,'success')
-        local_job=supervised_execution.start(self.root,tool_id='local-true',intent_key='local-check',hard_timeout_seconds=3)
-        local_result=supervised_execution.observe(self.root,local_job['execution_id'],wait_seconds=3)
-        self.assertEqual(local_result['execution']['execution_status'],'succeeded',local_result)
-        for thread in threads:
-            thread.join(5)
-            self.assertFalse(thread.is_alive())
-        self.assertTrue(all(value['execution']['cleanup_status']=='confirmed' for value in values))
+        # Wait for both real launches. Merely counting admission records also
+        # counts workers which have not reached the sandbox yet.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            hung = [pool.submit(self.runtime.call, server_id='a', tool='fixture_read',
+                                arguments={'mode':'hang'}, intent_key=f'branch-a-{i}',
+                                hard_timeout_seconds=45) for i in range(2)]
+            owners = []
+            try:
+                end = time.monotonic() + 10
+                while time.monotonic() < end:
+                    records = execution_store.load_registry(self.root)['records']
+                    owners = [key for key,row in records.items() if row['execution_status']=='running'
+                              and (row.get('launch') or {}).get('phase')=='released']
+                    if len(owners) == 2:
+                        break
+                    for attempt in hung:
+                        if attempt.done():
+                            status = attempt.result()['execution']['execution_status']
+                            self.fail(f'server A finished before overlap: {status}')
+                    time.sleep(.02)
+                self.assertEqual(len(owners),2,'both server A launches must be active')
+                healthy = self.runtime.call(server_id='b', tool='fixture_read', arguments={},
+                                            intent_key='branch-b', hard_timeout_seconds=10)
+                self.assertEqual(healthy['reply'].status,'success')
+                local_job = supervised_execution.start(self.root,tool_id='local-true',intent_key='local-check',
+                                                       hard_timeout_seconds=10)
+                local_result = supervised_execution.observe(self.root,local_job['execution_id'],wait_seconds=10)
+                self.assertEqual(local_result['execution']['execution_status'],'succeeded',local_result)
+                records = execution_store.load_registry(self.root)['records']
+                self.assertEqual([records[key]['execution_status'] for key in owners],['running','running'])
+            finally:
+                for key in owners:
+                    supervised_execution.cancel(self.root,key)
+            for attempt in hung:
+                result = attempt.result(timeout=10)
+                self.assertTrue(result['reply'].sent, 'the tool request must have been sent to server A')
+                self.assertEqual(result['execution']['execution_status'],'cancelled')
+                self.assertEqual(result['execution']['cleanup_status'],'confirmed')
 
     @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/bwrap').exists(),'Linux namespace profile required')
     def test_T22_actual_scope_saturation_has_two_owned_attempts_and_no_wait_queue(self):
