@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 from . import agent_setup
@@ -99,3 +100,32 @@ def remove_tree(path: Path) -> None:
         path.unlink()
     elif path.is_dir():
         shutil.rmtree(path, onerror=_make_writable)
+
+
+def windows_user_path() -> tuple[list[str], int]:
+    """Entries and value type of the Windows user PATH (HKCU\\Environment)."""
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+        try:
+            value, kind = winreg.QueryValueEx(key, 'Path')
+        except FileNotFoundError:
+            return [], winreg.REG_EXPAND_SZ
+    return [part for part in str(value).split(';') if part], kind
+
+
+def set_windows_user_path(parts: list[str], kind: int) -> None:
+    """Write the user PATH and tell running programs that the environment changed."""
+    import ctypes
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, 'Path', 0, kind, ';'.join(parts))
+    result = ctypes.c_ulong()
+    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, 'Environment', 0x0002, 5000, ctypes.byref(result))
+
+
+def used_by_this_python(path: Path) -> bool:
+    """Windows cannot remove the running interpreter or its folder; scripts/uninstall.ps1 does it later."""
+    if os.name != 'nt':
+        return False
+    running = (sys.executable, getattr(sys, '_base_executable', ''), sys.prefix, sys.base_prefix)
+    return any(item and Path(item).resolve().is_relative_to(path.resolve()) for item in running)
