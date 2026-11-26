@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `load_installer` now always uses the executing engine's installer. `GETZILLA_HOME` supplies data only.
+
 ## 2.3.1 — 2026-10-21 (source candidate)
 
 - Security is **UNVERIFIED** for a release admitted with the temporary security-expanded waiver (#456, expires 2026-12-08 00:00 UTC). Deferred coverage includes OSV, licenses, OCI and Python artifacts.
