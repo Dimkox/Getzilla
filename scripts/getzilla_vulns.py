@@ -24,7 +24,19 @@ parser.add_argument('--download-db', metavar='DIR',
                     help='refresh an offline mirror in DIR and exit; run on a host with network access')
 parser.add_argument('--ecosystem', action='append', choices=ECOSYSTEMS,
                     help='with --download-db: only these ecosystems (default: all supported)')
+parser.add_argument('--published-artifacts', nargs=3, metavar=('ECOSYSTEM', 'PACKAGE', 'VERSION'),
+                    help='look up published distributions for an exact upstream release and print JSON')
 args = parser.parse_args()
+
+if args.published_artifacts:
+    if args.download_db or args.online or args.db or args.ecosystem:
+        parser.error('--published-artifacts is a standalone release lookup')
+    from getzilla.osv_published_artifacts import ArtifactError, published_artifacts
+    try:
+        print(json.dumps(published_artifacts(*args.published_artifacts)))
+    except ArtifactError as exc:
+        parser.exit(2, f'published release lookup failed: {exc}\n')
+    raise SystemExit(0)
 
 try:
     if args.download_db:
