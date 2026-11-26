@@ -532,6 +532,14 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
     return result
 
 
+def standalone_pr_security(root: Path, mode: str) -> bool:
+    """Scope #472 to Getzilla PRs descended from its adoption, including local forks."""
+    from .on_demand import is_source_checkout
+    return (mode == 'pr' and is_source_checkout(root) and
+            run(['git', '--no-replace-objects', 'merge-base', '--is-ancestor',
+                 '60439e54b2718275a204da3f1228a391a8fffb04', 'HEAD'], cwd=root).returncode == 0)
+
+
 def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=None) -> dict:
     """Read the current native source and policy; never trust the old plan to select obligations."""
     from .state import get_active_route
@@ -556,7 +564,7 @@ def _compile_required_plan(root: Path, *, mode: str, profiles, docs_scope, route
     from .review_plan import assess
     from .verification_scope import select_docs_state_scope, FOCUSED_TEST_TARGETS
     from .verification_scope import _docs_state_status_inventory
-    from .expanded_security import security_obligations
+    from .expanded_security import lockfile_obligation, security_obligations
     documents = _plan_documents(root, route)
     context = context_binding(root, route) if route and not legacy_evidence_allowed(route) else {
         'version': 1, 'variant': 'legacy' if route else 'unrouted', 'route_id': route.get('route_id'),
@@ -606,9 +614,11 @@ def _compile_required_plan(root: Path, *, mode: str, profiles, docs_scope, route
                  'light_diff': route.get('light_diff'), 'mode': mode, 'docs_scope': docs_scope}
     obligations = _native_obligations(root, mode, route, docs_scope, files=files,
                                      profiles=profiles, bases=source['base'], documents=documents)
-    security = security_obligations(root)
-    if (not isinstance(security, list) or len(security) != len(SECURITY_IDS) or
-            {item.get('check_id') for item in security if isinstance(item, dict)} != SECURITY_IDS or
+    standalone = standalone_pr_security(root, mode)
+    security = [lockfile_obligation(root)] if standalone else security_obligations(root)
+    expected = {'known-vulnerabilities'} if standalone else SECURITY_IDS
+    if (not isinstance(security, list) or len(security) != len(expected) or
+            {item.get('check_id') for item in security if isinstance(item, dict)} != expected or
             any(item.get('id') != item.get('check_id') for item in security)):
         raise ValueError('expanded security plan must declare every required family exactly once')
     obligations = [item for item in obligations if item['id'] not in SECURITY_IDS]
