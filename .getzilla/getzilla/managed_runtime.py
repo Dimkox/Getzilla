@@ -174,8 +174,9 @@ def _validate(folder: Path, files, links):
         raise ValueError('unmanaged runtime files conflict')
 
 
-def install(target: Target, data: bytes, root: Path, *, executable: str, run, version_args=('--version',), launcher=()) -> Path:
-    from .toolchain import parse_tool_version
+def install(target: Target, data: bytes, root: Path, *, executable: str, run, version_args=('--version',), launcher=(),
+            observation=None) -> Path:
+    from .toolchain import verify_tool_probe
     if not re.fullmatch('[a-z][a-z0-9-]*', target.component) or not re.fullmatch(r'[A-Za-z0-9_.-]+', target.version):
         raise ValueError('unsafe runtime target identity')
     files, links = entries(target, data)
@@ -213,9 +214,7 @@ def install(target: Target, data: bytes, root: Path, *, executable: str, run, ve
                 shutil.rmtree(stage)
     path = folder/executable
     result = run([*launcher, str(path), *version_args], None)
-    actual = parse_tool_version('python3' if target.component == 'python' else target.component,
-                                (result.stdout or '')+'\n'+(result.stderr or ''))
-    if result.returncode or actual != target.version:
-        raise ValueError(f'{target.component} target={target.version} path={path}: probe actual={actual} exit={result.returncode}')
+    verify_tool_probe('python3' if target.component == 'python' else target.component,
+                      result, target.version, path, observation)
     _validate(folder, files, links)
     return path

@@ -21,6 +21,17 @@ _BANNERS = {
 }
 
 
+# Match entire installed-version records. Capture the whole token first so
+# prerelease/build suffixes cannot qualify as the corresponding stable version.
+_AGENT_RECORDS = {
+    'claude': r'(?:(\S+) \(Claude Code\)|Claude Code (\S+))',
+    'codex': r'codex-cli (\S+)',
+    'copilot': r'GitHub Copilot CLI (\S+?)\.?',
+    'gemini': r'([0-9]\S*)',
+    'qwen': r'([0-9]\S*)',
+}
+
+
 @dataclass(frozen=True)
 class CommandProbe:
     command: str
@@ -53,13 +64,34 @@ def parse_version(text: str) -> str | None:
 def parse_tool_version(tool_id: str, text: str) -> str | None:
     if len(text) > 65536:
         return None
+    if tool_id in _AGENT_RECORDS:
+        lines = text.strip().splitlines()
+        record = _AGENT_RECORDS[tool_id]
+        if tool_id in {'gemini', 'qwen'} and (not lines or not re.fullmatch(record, lines[0])):
+            return None
+        versions = set()
+        for line in lines:
+            match = re.fullmatch(record, line)
+            if match:
+                versions.add(match[match.lastindex])
+        if len(versions) == 1:
+            version = versions.pop()
+            if re.fullmatch(r'[0-9]{1,10}(?:\.[0-9]{1,10}){2}', version):
+                return version
+        return None
     pattern = _BANNERS.get(tool_id)
     match = re.search(pattern + _NUMBER, text, re.M) if pattern else None
-    if tool_id == 'claude':
-        match = re.search(r'^(\d+\.\d+\.\d+) \(Claude Code\)$', text, re.M) or re.search(r'^Claude Code '+_NUMBER, text, re.M)
     if tool_id == 'git':
         match = re.search(r'^git version (\d+(?:\.\d+){1,3}(?:\.windows\.\d+)?)(?![\w.-])', text, re.M)
     return match[1] if match else None
+
+
+def verify_tool_probe(tool_id, result, expected, path, observation=None):
+    actual = parse_tool_version(tool_id, (result.stdout or '')+'\n'+(result.stderr or ''))
+    if observation is not None:
+        observation.update(actual=actual, path=str(path))
+    if result.returncode or actual != expected:
+        raise ValueError(f'{tool_id} target={expected} path={path}: probe actual={actual} exit={result.returncode}')
 
 
 def version_tuple(value: str) -> tuple[int, ...]:

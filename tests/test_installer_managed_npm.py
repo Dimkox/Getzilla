@@ -66,6 +66,7 @@ class ManagedNpmTests(unittest.TestCase):
         integrity = 'sha512-'+base64.b64encode(hashlib.sha512(data).digest()).decode()
         url = 'https://registry.npmjs.org/@qwen-code/qwen-code/-/qwen-code-9.0.0.tgz'
         target = latest_releases.Target(name, version, url, integrity=integrity, filename='qwen-code-9.0.0.tgz')
+        output = version
         calls = []
         def run(command, cwd=None, **kwargs):
             calls.append(command)
@@ -78,7 +79,7 @@ class ManagedNpmTests(unittest.TestCase):
                 directory.mkdir(parents=True)
                 (directory/'package.json').write_text(json.dumps({'name': name, 'version': version, 'bin': {'qwen': 'cli.js'}}))
                 (directory/'cli.js').write_bytes(b'inert owned CLI')
-            return subprocess.CompletedProcess(command, 0, 'qwen 9.0.0', '')
+            return subprocess.CompletedProcess(command, 0, output, '')
         def fetch(request):
             if request == url:
                 return data
@@ -89,3 +90,10 @@ class ManagedNpmTests(unittest.TestCase):
         self.assertTrue(any('signatures' in c for c in calls))
         self.assertTrue(any('ci' in c and '--offline' in c and '--ignore-scripts' in c for c in calls))
         self.assertFalse(any('rebuild' in c for c in calls))
+
+        previous = result.read_bytes()
+        output = '8.0.0\nUpdate available: 9.0.0'
+        with self.assertRaisesRegex(ValueError, 'actual=8.0.0'):
+            managed_npm.install_agent(target, self.root, self.root/'node', self.root/'npm',
+                                      command='qwen', fetch=fetch, run=run)
+        self.assertEqual(result.read_bytes(), previous)

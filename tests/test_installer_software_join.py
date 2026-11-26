@@ -52,3 +52,23 @@ class SoftwareJoinTests(unittest.TestCase):
                     which=lambda _: '/old/node', run=lambda *args, **kwargs: self.fail('shadowed program must not run'))
             self.assertEqual(result['status'], 'incomplete')
             self.assertIn('PATH shadowing', result['components'][0]['error'])
+
+    def test_update_notice_does_not_satisfy_installed_agent_version(self):
+        target = Target('claude', '2.9.0', 'https://unused.invalid/claude', sha256='a'*64)
+        cases = [
+            ('2.8.0 (Claude Code)\nUpdate available: 2.9.0', 0, '2.8.0', 'incomplete'),
+            ('2.9.0 (Claude Code)', 0, '2.9.0', 'complete'),
+            ('2.9.0 (Claude Code)', 1, '2.9.0', 'incomplete'),
+            ('dependency 2.9.0', 0, None, 'incomplete'),
+            ('Claude Code 2.8.0\nClaude Code 2.9.0', 0, None, 'incomplete'),
+        ]
+        for output, code, actual, status in cases:
+            with self.subTest(output=output, code=code), tempfile.TemporaryDirectory() as owned, \
+                    patch.object(managed_software, 'plan', return_value=({'agent:claude': target}, [])), \
+                    patch.object(managed_software, 'verify_environment', return_value={'status': 'complete'}):
+                root = Path(owned)
+                result = managed_software.install_software(root, root, agent='claude', verify_only=True,
+                    system='linux', which=lambda _: str(root/'bin/claude'),
+                    run=lambda *args: subprocess.CompletedProcess(args, code, output, ''))
+                self.assertEqual(result['status'], status)
+                self.assertEqual(result['components'][0]['actual'], actual)
