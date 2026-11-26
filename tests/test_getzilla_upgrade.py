@@ -1057,6 +1057,10 @@ class ProjectSyncTests(unittest.TestCase):
         for rel in ('.grok-stack/adaptive_grok/verification.py', 'scripts/grok_route.py'):
             (self.project / rel).parent.mkdir(parents=True, exist_ok=True)
             (self.project / rel).write_text('old = 1\n', encoding='utf-8')
+        # Only the two stock fixture files carry historical ownership. The sync record belongs to the user.
+        stock = ('100644', hashlib.sha256(b'old = 1\n').hexdigest())
+        self.enterContext(mock.patch.object(upgrade, 'retirement_baseline', return_value={
+            '.grok-stack/adaptive_grok/verification.py': stock, 'scripts/grok_route.py': stock}))
         digest = hashlib.sha256(b'line-length = 80\n').hexdigest()
         record = {'schema_version': 1, 'kept_local': ['ruff.toml'], 'kept_local_sha256': {'ruff.toml': digest}}
         (self.project / '.grok-stack/AGBP_SYNC.json').write_text(json.dumps(record), encoding='utf-8')
@@ -1071,11 +1075,46 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertIn('--retire-legacy', result)
         self.assertTrue((self.project / 'scripts/grok_route.py').is_file())
 
+    def test_retire_legacy_preserves_committed_user_script_at_known_path(self) -> None:
+        self._pre_rename()
+        path = self.project / 'scripts/grok_route.py'
+        custom = b'# project-specific route setup\n'
+        path.write_bytes(custom)
+        self.commit('customize an old managed script')
+        upgrade.sync_project(self.source_home, self.project, retire=True)
+        self.assertTrue(path.is_file(), 'legacy retirement removed a customized script')
+        self.assertEqual(path.read_bytes(), custom)
+
+    def test_unreadable_kept_paths_block_retirement(self):
+        self._pre_rename()
+        (self.project / '.grok-stack/AGBP_SYNC.json').write_text('{"kept_local":"scripts/grok_route.py"}')
+        self.commit('invalid old keep list')
+        with self.assertRaises(upgrade.UpdateError):
+            upgrade.sync_project(self.source_home, self.project, retire=True)
+
+    def test_legacy_file_changed_before_publication_survives_and_can_retry(self) -> None:
+        self._pre_rename()
+        path = self.project / 'scripts/grok_route.py'
+        before = git(self.project, 'rev-parse', 'HEAD')
+        publish = upgrade._publish_changes
+
+        def concurrent_edit(*args, **kwargs):
+            path.write_bytes(b'# concurrent edit\n')
+            return publish(*args, **kwargs)
+
+        with mock.patch.object(upgrade, '_publish_changes', side_effect=concurrent_edit), self.assertRaises(upgrade.UpdateError):
+            upgrade.sync_project(self.source_home, self.project, retire=True)
+        self.assertEqual(path.read_bytes(), b'# concurrent edit\n')
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+        git(self.project, 'restore', 'scripts/grok_route.py')
+        upgrade.sync_project(self.source_home, self.project, retire=True)
+        self.assertFalse(path.exists())
+
     def test_retire_legacy_removes_the_old_files_in_the_same_commit(self) -> None:
         self._pre_rename()
         result = upgrade.sync_project(self.source_home, self.project, retire=True)
         self.assertIn('removed', result)
-        self.assertFalse((self.project / '.grok-stack').exists())
+        self.assertTrue((self.project / '.grok-stack/AGBP_SYNC.json').is_file())
         self.assertFalse((self.project / 'scripts/grok_route.py').exists())
         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
         self.assertEqual(git(self.project, 'rev-list', '--count', 'HEAD'), '3')
@@ -1090,7 +1129,7 @@ class ProjectSyncTests(unittest.TestCase):
         result = upgrade.sync_project(self.source_home, self.project, retire=True)
         self.assertTrue((self.project / 'factory/src/adaptive_factory/cli.py').is_file())
         self.assertIn('no Getzilla replacement', result)
-        self.assertFalse((self.project / '.grok-stack').exists())
+        self.assertTrue((self.project / '.grok-stack/AGBP_SYNC.json').is_file())
         self.assertEqual((self.project / '.getzilla/AGBP_SYNC.log.jsonl').read_text(encoding='utf-8'), '{"sync": 1}\n')
 
     def test_retirement_relies_on_the_engine_archive_and_a_log_already_moved(self) -> None:
@@ -1103,10 +1142,10 @@ class ProjectSyncTests(unittest.TestCase):
         upgrade.sync_project(self.source_home, self.project, retire=True)
         self.assertTrue((self.project / '.getzilla/getzilla.zip').is_file())
         self.assertFalse((self.project / '.getzilla/getzilla/verification.py').exists())
-        self.assertFalse((self.project / '.grok-stack').exists())
+        self.assertTrue((self.project / '.grok-stack/AGBP_SYNC.json').is_file())
         self.assertEqual((self.project / '.getzilla/AGBP_SYNC.log.jsonl').read_text(encoding='utf-8'), '{"new": 1}\n')
 
-    def test_accept_local_with_retire_legacy_removes_the_old_record(self) -> None:
+    def test_accept_local_with_retire_legacy_preserves_the_old_record(self) -> None:
         self._pre_rename()
         upgrade.sync_project(self.source_home, self.project)
         git(self.project, 'switch', '--quiet', 'main')
@@ -1116,7 +1155,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.commit('change a kept file')
         result = upgrade.sync_project(self.source_home, self.project, accept=True, retire=True)
         self.assertIn('kept your current ruff.toml', result)
-        self.assertFalse((self.project / '.grok-stack').exists())
+        self.assertTrue((self.project / '.grok-stack/AGBP_SYNC.json').is_file())
 
     def test_a_missing_record_alone_does_not_make_an_update_branch(self) -> None:
         upgrade.sync_project(self.source_home, self.project)

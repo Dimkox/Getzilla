@@ -22,6 +22,42 @@ import install_into
 
 
 class NeutralHooksTests(unittest.TestCase):
+    def test_v211_release_preview_apply_rollback(self):
+        import hashlib
+        from unittest.mock import patch
+        import getzilla_upgrade as upgrade
+        from tests._support import public_source_copy
+        from tests.test_getzilla_upgrade import GIT_ENV, git
+
+        self.enterContext(patch.dict(os.environ, GIT_ENV))
+        home = self.enterContext(public_source_copy(ROOT))
+        project = Path(self.enterContext(tempfile.TemporaryDirectory())) / 'consumer'
+        install_into.materialize_new(home, project, selection=install_into.PayloadSelection(('claude',), engine_archive=True))
+        git(project, 'init', '--quiet', '--initial-branch=main')
+        git(project, 'config', 'core.autocrlf', 'false')
+        old = project / '.grok-stack/adaptive_grok/__init__.py'  # predecessor-record
+        old.parent.mkdir(parents=True)
+        stock = b'"""Adaptive Grok Build Pro runtime."""\n\n__version__ = "2.1.1"\n'  # predecessor-record
+        old.write_bytes(stock)
+        git(project, 'add', '-A')
+        git(project, 'commit', '--quiet', '-m', 'predecessor 2.1.1 runtime')
+        before = git(project, 'rev-parse', 'HEAD')
+        report = upgrade.sync_project(home, project, preview=True)
+        self.assertIn('RETIRE .grok-stack/adaptive_grok/__init__.py', report)  # predecessor-record
+        self.assertIn(hashlib.sha256(stock).hexdigest(), report)
+        self.assertEqual(git(project, 'rev-parse', 'HEAD'), before)
+        upgrade.sync_project(home, project, retire=True)
+        self.assertFalse(old.exists())
+        self.assertIn('up to date', upgrade.sync_project(home, project, retire=True))
+        event = {'cwd': str(project), 'session_id': 'retire-legacy-fixture',
+                 'tool_name': 'Bash', 'tool_input': {'command': 'cat .env'}}
+        hook = subprocess.run([sys.executable, str(project / '.getzilla/hooks/pre_tool_use.py')],
+                              input=json.dumps(event), cwd=project, text=True, capture_output=True, timeout=30)
+        self.assertEqual(hook.returncode, 0, hook.stderr)
+        self.assertIn('deny', json.dumps(json.loads(hook.stdout)).lower())
+        git(project, 'switch', '--quiet', 'main')
+        self.assertEqual(old.read_bytes(), stock)
+
     def test_archived_neutral_install_keeps_actual_counted_runner(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'consumer'
