@@ -40,6 +40,16 @@ class NativeGitInputTests(fixtures._GuardFixture):
         self.root.chmod(0o755)
         os.chdir(self.root)
 
+    def linked_checkout(self, name):
+        # The native guard verifies external Git directory ancestors up to /.
+        # Put the real shared Git directory inside the fixture's held worktree
+        # so concurrent scratch entries cannot invalidate this positive test.
+        root, _, common, head = self.repository(linked='source-linked',name=name)
+        main = root/'fixture-main'
+        common.parent.rename(main)
+        self.git(main,'worktree','repair',str(root))
+        return root, head
+
     def test_actual_git_reads_keep_guard_and_owned_fd_cwd(self):
         actual = diff._run_capped
         calls = []
@@ -64,7 +74,7 @@ class NativeGitInputTests(fixtures._GuardFixture):
         before = os.umask(0o022)
         try:
             foreign,_,_,_ = self.repository(name='source-foreign')
-            linked,_,_,linked_head = self.repository(linked='source-linked',name='source-linked-root')
+            linked,linked_head = self.linked_checkout('source-linked-root')
         finally:
             os.umask(before)
         self.git(foreign,'-c','user.name=Public','-c','user.email=public@example.invalid',
@@ -76,6 +86,9 @@ class NativeGitInputTests(fixtures._GuardFixture):
                 os.chdir(root)
                 self.assertNotEqual(head,foreign_head)
                 def switched(command,**kwargs):
+                    # Model a sibling fixture appearing during a child launch.
+                    # Only touch this test's private parent.
+                    (self.parent/(root.name+'-sibling')).mkdir(exist_ok=True)
                     os.chdir(foreign)
                     try:
                         return real_popen(command,**kwargs)
@@ -88,6 +101,23 @@ class NativeGitInputTests(fixtures._GuardFixture):
                     with patch.object(diff.subprocess,'Popen',side_effect=switched):
                         self.assertEqual(anchor.git_source(),original)
                         self.assertEqual(spec_fingerprint(root,root/'change-spec.yaml',{},anchor=anchor),expected)
+
+    def test_linked_source_refuses_changed_external_parent(self):
+        before = os.umask(0o022)
+        try:
+            linked,_,_,_ = self.repository(linked='external',name='external-main')
+        finally:
+            os.umask(before)
+        os.chdir(linked)
+        real_run = diff._run_capped
+        def changed(command,**kwargs):
+            (self.parent/'sibling').mkdir(exist_ok=True)
+            return real_run(command,**kwargs)
+        with native_root(linked) as anchor,patch.object(diff,'_run_capped',side_effect=changed):
+            with self.assertRaisesRegex(ValueError,'native_trace_source_unavailable') as refused:
+                anchor.git_source()
+        self.assertTrue((self.parent/'sibling').is_dir())
+        self.assertIn('binding changed',str(refused.exception.__context__))
 
     def test_native_source_uses_original_git_graph_admission(self):
         config = self.common/'config'
@@ -156,7 +186,7 @@ class NativeGitInputTests(fixtures._GuardFixture):
         before = os.umask(0o022)
         try:
             foreign,_,_,_ = self.repository(name='foreign')
-            linked,_,_,linked_head = self.repository(linked='attached',name='linked-cwd')
+            linked,linked_head = self.linked_checkout('linked-cwd')
         finally:
             os.umask(before)
         foreign_bytes = (foreign/'value.txt').read_bytes()
