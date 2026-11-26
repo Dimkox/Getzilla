@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .security_osv_snapshot import Dependency, VulnerabilityError, load_config, query_offline
-from .security_data import CVE_ID, SecurityDataError, osv_decision_ids, read_snapshot
+from .security_data import CVE_ID, OSV_QUERY_SOURCE, SecurityDataError, osv_decision_ids, read_snapshot
 from .security_intelligence import IntelligenceError, enrich_findings, validate_epss, validate_kev
 from .security_inventory import canonical_digest, collect_inventory, read_image_selection, declared_inventory
 
@@ -75,13 +75,14 @@ def _policy_digest(root: Path) -> str:
 
 def _read_source(database: Path, source_id: str, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
     scopes = {source_id.removeprefix('osv:')} if source_id.startswith('osv:') else {'CVE'}
-    payload, evidence = read_snapshot(database, source_id, now=now, required_scope=scopes)
+    payload, evidence = read_snapshot(database, source_id, now=now,
+                                      required_scope=None if source_id == OSV_QUERY_SOURCE else scopes)
     try:
         if source_id == 'kev':
             parsed = validate_kev(payload, now=now)
         elif source_id == 'epss':
             parsed = validate_epss(payload, now=now)
-        elif source_id.startswith('osv:'):
+        elif source_id.startswith('osv:') or source_id == OSV_QUERY_SOURCE:
             parsed = {'coverage': evidence['coverage']}
         else:
             raise SecurityDataError('source has no qualified body evaluator')
@@ -223,6 +224,42 @@ def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime |
     if actual != {field: binding[field] for field in _SOURCE_FIELDS}:
         raise SecurityDataError('security source changed since the required plan was recorded')
     return True
+
+
+def lockfile_obligation(root: Path) -> dict[str, Any]:
+    from .known_vulns import dependency_inventory, load_config
+    from .verification_plan import obligation
+
+    dependencies, _, inventory = dependency_inventory(root, load_config(root))
+    sources = sorted({f'osv:{item.ecosystem}' for item in dependencies})
+    if sources and os.environ.get('GETZILLA_OSV_ONLINE') == '1':
+        sources = [OSV_QUERY_SOURCE]
+    database = _database(root, None)
+    row = obligation('known-vulnerabilities', required=bool(dependencies), reason='standalone lockfile OSV',
+                     evidence={'inventory_sha256': canonical_digest(inventory),
+                               'policy_sha256': inventory['policy_sha256']})
+    row['data_sources'] = [_source_descriptor(root, database, name, _clock(None)) for name in sources]
+    return row
+
+
+def lockfile_check(root: Path) -> dict[str, Any]:
+    from .known_vulns import VulnerabilityError, scan
+
+    database = _database(root, None)
+    try:
+        report = scan(root, environ={**os.environ, 'GETZILLA_OSV_DB': str(database)})
+    except (OSError, ValueError, VulnerabilityError) as exc:
+        return {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': str(exc),
+                'details': [{'findings': []}]}
+    inventory = report['inventory']
+    outcome = {'pass': 'pass', 'fail': 'finding', 'skip': 'not_applicable'}[report['status']]
+    sources = [{'database': _database_name(root, database), **{k: row[k] for k in _SOURCE_FIELDS}}
+               for row in report['source_evidence']]
+    result = _result('known-vulnerabilities', outcome, report['summary'],
+                     {'digest': canonical_digest(inventory), 'complete': inventory['complete']},
+                     inventory['policy_sha256'], sources=sources, findings=report['findings'])
+    result['details'][0]['accepted'] = report['accepted']
+    return result
 
 
 def security_obligations(root: Path, inventory: dict[str, Any] | None = None, *,

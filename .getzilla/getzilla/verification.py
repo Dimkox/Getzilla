@@ -1250,8 +1250,9 @@ def _trivy_config(root: Path) -> CheckResult | None:
 
 
 @diagnostics.observed('known-vulnerabilities')
-def _known_vulnerabilities(root: Path) -> CheckResult:
-    result = known_vulnerability_check(root)
+def _known_vulnerabilities(root: Path, *, lockfiles_only: bool = False) -> CheckResult:
+    from .expanded_security import lockfile_check
+    result = lockfile_check(root) if lockfiles_only else known_vulnerability_check(root)
     # The full structured evidence is authoritative. Only its text projection
     # is bounded for display; no finding, exception or source proof is dropped.
     findings = result['details'][0]['findings']
@@ -2373,11 +2374,15 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         dispatch.run('trivy-config', lambda: _trivy_config(root))
     state.stage = 'known-vulnerabilities'
     cancellation.check()
-    dispatch.run('known-vulnerabilities', lambda: _known_vulnerabilities(root))
-    state.stage = 'expanded-security'
-    from .verification_plan import SECURITY_FAMILIES
-    dispatch.batch([name for name in SECURITY_FAMILIES if name != 'known-vulnerabilities'],
-                   lambda: [CheckResult(**item) for item in expanded_security_checks(root)])
+    from .verification_plan import SECURITY_FAMILIES, standalone_pr_security
+    standalone = standalone_pr_security(root, mode)
+    dispatch.run('known-vulnerabilities', lambda: _known_vulnerabilities(root, lockfiles_only=standalone))
+    if standalone:
+        report.setdefault('advisory', {})['security-expanded'] = {'status': 'informational', 'executed': False}
+    else:
+        state.stage = 'expanded-security'
+        dispatch.batch([name for name in SECURITY_FAMILIES if name != 'known-vulnerabilities'],
+                       lambda: [CheckResult(**item) for item in expanded_security_checks(root)])
     state.stage = 'opengrep'
     cancellation.check()
     dispatch.run('opengrep', lambda: _opengrep(root))
