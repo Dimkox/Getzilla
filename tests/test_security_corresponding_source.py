@@ -2,16 +2,25 @@
 from pathlib import Path
 import os
 import unittest
+from unittest.mock import patch
 
 from getzilla.security_inventory import collect_inventory
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def reviewed_fixture_surface(root):
+    """Pin the test checkout before exercising the expanded check or mutating its inputs."""
+    from getzilla import security_corresponding_source as adapter
+    from getzilla.security_osv_snapshot import _tracked_files
+    return patch.object(adapter, 'SURFACE_SHA256', adapter.surface_digest(root, _tracked_files(root)))
+
+
 @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'), 'requires no-follow source custody')
 class CorrespondingSourceTests(unittest.TestCase):
     def test_real_retained_sources_are_typed_without_losing_accounting(self):
-        inventory = collect_inventory(ROOT)
+        with reviewed_fixture_surface(ROOT):
+            inventory = collect_inventory(ROOT)
         retained = inventory['corresponding_sources']
         self.assertEqual({'certifi', 'psycopg'}, {row['package'] for row in retained})
         self.assertEqual(115, sum(len(row['members']) for row in retained))
@@ -61,6 +70,15 @@ class CorrespondingSourceTamperTests(unittest.TestCase):
         subprocess.run(['git', 'init', '-q', str(cls.copy)], check=True)
         subprocess.run(['git', '-C', str(cls.copy), 'add', '-f', '.'], check=True)
         subprocess.run(['git', '-C', str(cls.copy), '-c', 'user.name=Local control', '-c', 'user.email=control@example.invalid', 'commit', '-qm', 'Exact local source control'], check=True)
+
+        cls.enterClassContext(reviewed_fixture_surface(cls.copy))
+
+    def test_expanded_inventory_refuses_a_stale_pin_on_otherwise_valid_source(self):
+        from getzilla import security_corresponding_source as adapter
+        with patch.object(adapter, 'SURFACE_SHA256', '0' * 64):
+            result = self.assert_refused()
+            self.assertTrue(any('supported source composition changed' in gap['message']
+                                for gap in result['gaps']))
 
     @classmethod
     def tearDownClass(cls):

@@ -2,6 +2,11 @@
 
 Since the owner decision of 2026-11-26, `security-expanded` publishes an informational report. The workflow waits for the job to finish, and Linux admission evaluates the core jobs and live acceptance independently of its result or artifact. Linux core runs standalone lockfile OSV and repository OpenGrep. The expanded report includes secret scanning; this workflow has no separate required Linux secret scan.
 
+Linux core records the measured source surface as `source_surface_sha256` in
+`provenance.json`. Ordinary PRs can change that digest. The informational
+expanded checker compares the measured surface with its reviewed
+`SURFACE_SHA256` before admitting the retained-source role (#450).
+
 The expanded gate evaluates applicable objects from the actual source inventory.
 An unresolved manifest, build dependency, executable tool or image is a coverage
 gap. It is not evidence that no objects exist. Runtime state, dependency caches
