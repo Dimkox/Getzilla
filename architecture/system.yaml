@@ -4360,7 +4360,9 @@
         "scripts/getzilla_self_uninstall.py",
         "scripts/getzilla_update.py",
         "scripts/install.ps1",
-        "scripts/install.sh"
+        "scripts/install.sh",
+        "scripts/uninstall.ps1",
+        "scripts/uninstall.sh"
       ],
       "runtime": {
         "evidence": "source_described",
