@@ -57,3 +57,17 @@ class InstallerProbeReadinessTests(unittest.TestCase):
                              SimpleNamespace(returncode=0, stdout='Python 4.0.0', stderr='')])
         self.assertEqual(result.found, '4.0.0')
         self.assertEqual(result.status, 'pass')
+
+    def test_agent_version_records(self):
+        # Linux --version captures for qwen, claude and codex. Gemini uses yargs
+        # version(getVersion()). Copilot stable output: github/copilot-cli#4534.
+        records = {'qwen': ('0.28.4', '0.28.4'), 'claude': ('2.1.201 (Claude Code)', '2.1.201'),
+                   'codex': ('codex-cli 0.172.0', '0.172.0'), 'gemini': ('0.38.0', '0.38.0'),
+                   'copilot': ('GitHub Copilot CLI 1.0.80.', '1.0.80')}
+        for command, (banner, expected) in records.items():
+            with self.subTest(command=command):
+                actual = toolchain.parse_tool_version(command, banner+'\r\n')
+                self.assertEqual(actual, expected)
+                self.assertIsNone(toolchain.parse_tool_version(command, 'dependency '+banner))
+                self.assertIsNone(toolchain.parse_tool_version(command, banner+'\n'+banner.replace(actual, '8.8.8')))
+                self.assertIsNone(toolchain.parse_tool_version(command, banner.replace(actual, actual+'+dev')))

@@ -13,6 +13,7 @@ from .latest_releases import Target, npm_release
 from .managed_environment import execute
 from .managed_runtime import directory as managed_directory, entries, install
 from .skill_sandbox import validate_npm_lock
+from .toolchain import verify_tool_probe
 
 
 def _node_engine(target, node, npm, node_version, run, *, environment=None):
@@ -67,7 +68,8 @@ def publish_command(root: Path, command: str, arguments: list[str]) -> Path:
     return path
 
 
-def install_agent(target: Target, root: Path, node: Path, npm: Path, *, command: str, fetch, run=execute, node_version=None) -> Path:
+def install_agent(target: Target, root: Path, node: Path, npm: Path, *, command: str, fetch, run=execute,
+                  node_version=None, observation=None) -> Path:
     """Lock without scripts, verify every official tarball, audit, then scoped activation."""
     stage_parent = root/'agents'/command
     managed_directory(stage_parent)
@@ -140,6 +142,5 @@ def install_agent(target: Target, root: Path, node: Path, npm: Path, *, command:
     if executable.is_symlink() or not executable.is_file():
         raise ValueError('agent executable is missing/linked')
     result = run([str(node), str(executable), '--version'], stage, env=env)
-    if result.returncode or not re.search(r'(?<![\w.])'+re.escape(target.version)+r'(?![\w.])', result.stdout or ''):
-        raise ValueError(f'{command} target={target.version}: actual software version probe failed')
+    verify_tool_probe(command, result, target.version, executable, observation)
     return publish_command(root, command, [str(node), str(executable)])

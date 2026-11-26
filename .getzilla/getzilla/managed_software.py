@@ -5,7 +5,6 @@ import importlib.metadata
 import json
 import os
 import platform
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -15,7 +14,7 @@ from .managed_environment import PROJECTS, execute
 from .managed_npm import install_npm, install_agent, publish_command
 from .managed_runtime import install as install_runtime
 from .managed_source_build import install_source, probe_git_https
-from .toolchain import parse_tool_version
+from .toolchain import parse_tool_version, verify_tool_probe
 
 AGENT_PACKAGES = {'qwen': '@qwen-code/qwen-code', 'codex': '@openai/codex',
                   'gemini': '@google/gemini-cli', 'copilot': '@github/copilot'}
@@ -135,6 +134,7 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
         if component not in targets:
             continue
         target = targets[component]
+        observation = {}
         command = component.removeprefix('agent:')
         try:
             prerequisites = (('node',) if component == 'npm' else
@@ -153,13 +153,7 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
                     raise ValueError(f'PATH shadowing/unverified active path: actual={path}; expected={allowed}')
                 version_args = ['-v'] if component == 'php' else ['version'] if component in {'cosign', 'syft'} else ['--version']
                 result = run([path, *version_args], None)
-                actual = parse_tool_version('python3' if command == 'python' else command,
-                                            (result.stdout or '')+'\n'+(result.stderr or ''))
-                if component.startswith('agent:'):
-                    match = re.search(r'(?<![\w.])'+re.escape(target.version)+r'(?![\w.])', result.stdout or '')
-                    actual = target.version if match else None
-                if result.returncode or actual != target.version:
-                    raise ValueError(f'active version mismatch: target={target.version}, actual={actual}, exit={result.returncode}')
+                verify_tool_probe('python3' if command == 'python' else command, result, target.version, path, observation)
                 if component == 'git':
                     probe_git_https(path, root, os.environ)
                 paths[component] = Path(path)
@@ -170,14 +164,14 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
                 publish_command(root, 'npm', [str(node), str(path)])
                 publish_command(root, 'npx', [str(node), str(path.parent/'npx-cli.js')])
             elif component == 'agent:claude':
-                path = install_runtime(target, fetch(target.url), root, executable=target.filename, run=run)
+                path = install_runtime(target, fetch(target.url), root, executable=target.filename, run=run, observation=observation)
                 paths[component] = path
                 publish_command(root, 'claude', [str(path)])
             elif component.startswith('agent:') or component == 'jscpd':
                 if component == 'jscpd' and target.version != '4.0.5':
                     raise ValueError(f'latest jscpd {target.version}: consumer schema adapter supports4.0.5; no old-version fallback')
                 path = install_agent(target, root, paths['node'], paths['npm'], command=command, fetch=fetch, run=run,
-                                     node_version=targets['node'].version)
+                                     node_version=targets['node'].version, observation=observation)
                 paths[component] = path
             elif component == 'composer':
                 php = paths['php']
@@ -212,10 +206,10 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
                 paths[component] = path
                 if component != 'python':
                     publish_command(root, command, [str(path)])
-            records.append(dict(component=component, status='complete', target=target.version, actual=target.version,
+            records.append(dict(component=component, status='complete', target=target.version, actual=observation.get('actual', target.version),
                                 path=str(paths[component]), origin=target.metadata_url, metadata_sha256=target.metadata_sha256))
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            records.append(dict(component=component, status='incomplete', target=target.version, error=str(exc)))
+            records.append(dict(component=component, status='incomplete', target=target.version, error=str(exc), **observation))
     try:
         records.append(verify_environment(home, fetch))
     except (OSError, ValueError, importlib.metadata.PackageNotFoundError) as exc:
