@@ -17,7 +17,8 @@ until an explicitly delegated current native owner action is recorded below. Imp
 
 Each substantive requirement needs a current acceptance criterion, and each
 criterion needs a mapped requirement. An unmapped requirement produces a question
-with its ID and source line range. Supporting source locators alone create no
+with its ID and source line range. A missing criterion definition points to the
+first linked requirement’s locator when available. Supporting locators alone create no
 requirement. Objective fields and declared AC, INV and FORBID statements must
 contain text. Whitespace and the whole values `UNKNOWN`, `TBD`, `TODO`,
 `NEEDS CLARIFICATION` and `...` are unresolved (case-insensitive). Each declared

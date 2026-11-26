@@ -30,6 +30,9 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(result['status'], 'missing')
         self.assertEqual({row['field'] for row in result['missing']}, {'objective.target', 'scope', 'acceptance_criteria.AC-001.evidence'})
         self.assertEqual(len(result['questions']), 3)
+        for rows in (result['missing'], result['questions']):
+            evidence = next(row for row in rows if row['field'] == 'acceptance_criteria.AC-001.evidence')
+            self.assertEqual(evidence['locator'], data['sources'][0]['locator'])
 
     def test_whole_placeholders_and_evidence_agree_with_strict_spec(self):
         data = snapshot()

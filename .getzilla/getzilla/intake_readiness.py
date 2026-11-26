@@ -24,9 +24,12 @@ def assess_readiness(spec: dict, provenance: dict, policy: dict) -> dict:
              any(policy.get(key) != data['policy'][key] for key in data['policy']))
     missing = []
 
-    def require(ok, field, reason):
+    def require(ok, field, reason, locator=None):
         if not ok:
-            missing.append({'field': field, 'reason': reason})
+            finding = {'field': field, 'reason': reason}
+            if locator is not None:
+                finding['locator'] = locator
+            missing.append(finding)
 
     objective = spec['objective']
     for key in ('statement', 'success_metric', 'target'):
@@ -34,18 +37,20 @@ def assess_readiness(spec: dict, provenance: dict, policy: dict) -> dict:
                 f'objective.{key}', 'objective_unmeasurable')
     require(bool(data['scope']), 'scope', 'scope_unbounded')
     require(bool(spec['acceptance_criteria']), 'acceptance_criteria', 'criteria_missing')
-    mapped = {identifier for row in data['requirements'] for identifier in row['criterion_ids']}
     locators = {source['id']: source['locator'] for source in data['sources']}
+    mapped = {}
     for row in data['requirements']:
-        if not row['criterion_ids']:
-            missing.append({'field': f"requirements.{row['id']}.criterion_ids", 'reason': 'requirement_unmapped',
-                            'locator': locators[row['source_id']]})
+        locator = locators[row['source_id']]
+        require(row['criterion_ids'], f"requirements.{row['id']}.criterion_ids", 'requirement_unmapped', locator)
+        for identifier in row['criterion_ids']:
+            mapped.setdefault(identifier, locator)
     for collection, reason in (('acceptance_criteria', 'criterion_unmeasurable'), ('invariants', 'invariant_unmeasurable'),
                                ('forbidden_outcomes', 'forbidden_outcome_unmeasurable')):
         for item in spec[collection]:
             field = f"{collection}.{item['id']}"
-            require(bool(item['evidence']), field + '.evidence', reason)
-            require(definition_text_present(item['statement']), field + '.statement', reason)
+            locator = mapped.get(item['id'])
+            require(bool(item['evidence']), field + '.evidence', reason, locator)
+            require(definition_text_present(item['statement']), field + '.statement', reason, locator)
             if collection == 'acceptance_criteria':
                 require(item['id'] in mapped, field + '.source', 'criterion_unmapped')
     for dependency in data['dependencies']:

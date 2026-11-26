@@ -128,10 +128,22 @@ class PublicationTests(unittest.TestCase):
     def test_native_orphan_and_unresolved_constraint_deny_admission(self):
         with project_copy() as root:
             _, intent = self.fixture(root)
+            first = self.publish(root, intent)['cut']
+            self.assertEqual(require_intake_ready(root)['assessment']['status'], 'ready')
+            intent['event'] = {'id': 'mark-incomplete', 'kind': 'record'}
             data = intent['snapshot']
             data['requirements'].append(dict(data['requirements'][0], id='REQ-002', criterion_ids=[], action_key='second'))
             data['spec']['invariants'] = [{'id': 'INV-001', 'statement': 'UNKNOWN', 'evidence': []}]
-            published = self.publish(root, intent)
+            from getzilla import intake_publication as publisher
+            previous = cut_digest(first)
+            def interrupt(point):
+                if point == 'pending':
+                    raise RuntimeError('interrupted')
+            with patch.object(publisher, '_boundary', side_effect=interrupt), self.assertRaisesRegex(RuntimeError, 'interrupted'):
+                prepare_intake(root, intent, previous, first['M'])
+            with self.assertRaises(IntakeError):
+                require_intake_ready(root)
+            published = recover_intake(root, publisher.publication_id(root, intent, previous, first['M']))
             observed = read_intake_cut(root)
             self.assertEqual(observed['cut'], published['cut'])
             assessment = observed['assessment']
@@ -139,6 +151,18 @@ class PublicationTests(unittest.TestCase):
                              {'requirements.REQ-002.criterion_ids', 'invariants.INV-001.statement', 'invariants.INV-001.evidence'})
             with self.assertRaisesRegex(IntakeError, 'intake_not_ready'):
                 require_intake_ready(root)
+            cut = observed['cut']
+            intent['event'] = {'id': 'remap', 'kind': 'record'}
+            data['requirements'][-1]['criterion_ids'] = ['AC-001']
+            remapped = prepare_intake(root, intent, cut_digest(cut), cut['M'])['cut']
+            remaining = read_intake_cut(root)['assessment']['missing']
+            self.assertEqual({row['field'] for row in remaining}, {'invariants.INV-001.statement', 'invariants.INV-001.evidence'})
+            self.assertNotEqual(cut['D'], remapped['D'])
+            intent['event'] = {'id': 'define-invariant', 'kind': 'record'}
+            data['spec']['invariants'][0].update(statement='Retain records.', evidence=data['spec']['acceptance_criteria'][0]['evidence'])
+            fixed = prepare_intake(root, intent, cut_digest(remapped), remapped['M'])['cut']
+            self.assertEqual(require_intake_ready(root)['cut'], fixed)
+            self.assertNotEqual(fixed['D'], remapped['D'])
 
     def test_native_mixed_scalar_bound_and_alias_versions_cannot_admit(self):
         for case in ('mixed','alias'):
