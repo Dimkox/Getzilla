@@ -178,6 +178,37 @@ class CiEvidenceTests(unittest.TestCase):
             self.assertEqual(provenance['head'], git(root, 'rev-parse', 'HEAD'))
             self.assertEqual(provenance['run_id'], '123')
 
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'), 'Linux core source custody')
+    def test_linux_core_records_each_measured_tree_without_rebinding_the_checker(self):
+        from unittest.mock import patch
+        from getzilla import security_corresponding_source as adapter
+        from getzilla.ci_evidence import export_evidence
+
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root = parent / 'source'
+            root.mkdir()
+            git(root, 'init', '-q')
+            module = root / adapter.ADAPTER
+            module.parent.mkdir(parents=True)
+            module.write_bytes(Path(adapter.__file__).read_bytes())
+            module.chmod(0o644)
+            for index, content in enumerate((b'first', b'second')):
+                readme = root / 'README.md'
+                readme.write_bytes(content)
+                readme.chmod(0o644)
+                git(root, 'add', '.')
+                git(root, 'commit', '-qm', f'tree {index}')
+                head = git(root, 'rev-parse', 'HEAD')
+                output = parent / str(index)
+                with patch.dict(os.environ, {'GETZILLA_EXPECTED_HEAD': head}):
+                    export_evidence(root, output, logs=parent, job='linux-core', status='success', run_id='1')
+                rows = [['README.md', 0o644, len(content), hashlib.sha256(content).hexdigest()]]
+                expected = hashlib.sha256(json.dumps(rows, separators=(',', ':')).encode()).hexdigest()
+                report = json.loads((output / 'provenance.json').read_text())
+                self.assertEqual((report['head'], report['source_surface_sha256']), (head, expected))
+                self.assertNotEqual(expected, adapter.SURFACE_SHA256)
+
     def test_dirty_core_source_failure_names_the_changed_paths(self):
         from unittest import mock
         from getzilla.ci_evidence import export_evidence

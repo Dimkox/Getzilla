@@ -115,7 +115,9 @@ class FactorySourceDeclarationTests(unittest.TestCase):
         from getzilla.security_source_delivery import fixed_delivery
         cls.factory = factory
         cls.policy = load_policy(ROOT)
-        cls.source_inventory = collect_inventory(ROOT)
+        from tests.test_security_corresponding_source import reviewed_fixture_surface
+        with reviewed_fixture_surface(ROOT):
+            cls.source_inventory = collect_inventory(ROOT)
         wheels = json.loads((ROOT / 'factory/runtime/runtime-wheels-linux-x86_64-cpython312.json').read_text())['wheels']
         lock = tomllib.loads((ROOT / 'factory/uv.lock').read_text())
         dependencies = []

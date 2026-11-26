@@ -58,6 +58,19 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
         if head != os.environ.get('GETZILLA_EXPECTED_HEAD') or dirty:
             raise ValueError('successful core evidence requires a clean exact expected source'
                              + _source_problem(head, dirty))
+    surface = {}
+    if job == 'linux-core':
+        from time import monotonic
+        from .security_corresponding_source import MAX_SECONDS, surface_digest
+        from .security_osv_snapshot import VulnerabilityError, _tracked_files
+
+        try:
+            surface['source_surface_sha256'] = surface_digest(
+                root, _tracked_files(root), deadline=monotonic() + MAX_SECONDS)
+        except (OSError, ValueError, VulnerabilityError):
+            if status == 'success':
+                raise
+            surface['source_surface_sha256'] = None
     inventory = []
     journal_report = None
     for name in _LOGS:
@@ -105,7 +118,7 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
         'run_id': run_id, 'attempt': os.environ.get('GITHUB_RUN_ATTEMPT', ''),
         'event_sha': os.environ.get('GITHUB_SHA'), 'base_sha': os.environ.get('GETZILLA_BASE_SHA'),
         'workflow_sha': os.environ.get('GITHUB_WORKFLOW_SHA'), 'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF'),
-        'observed_at': now_utc(), 'files': inventory, 'diagnostics': journal_state})
+        'observed_at': now_utc(), 'files': inventory, 'diagnostics': journal_state, **surface})
 
 
 def export_live_evidence(source: Path, output: Path) -> None:
