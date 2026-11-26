@@ -208,10 +208,11 @@ creator and source after the operator's new revision. A local source rollback
 cannot reverse a sent provider effect or revoke a provider credential. Any real
 credential revocation remains a separate authorized operator action.
 
-Cleanup kills the owned process group while its leader remains unreaped, then
-waits for the child and observes group disappearance. The live pidfd belongs only
-to the owning process; persisted PID/start metadata is observation, never restart
-kill authority. Restore with a lost handle remains orphaned/unconfirmed and never
+On cancellation or deadline after release, the owner sends SIGTERM to the group
+and drains output for one second so handlers can finish. Cleanup then sends
+SIGKILL with the leader still unreaped, waits for it and observes group
+disappearance. The live pidfd belongs only to the owning process; persisted
+PID/start metadata is observation, never restart kill authority. Restore with a lost handle remains orphaned/unconfirmed and never
 spawns or kills by PID. An escaped POSIX session is outside this cleanup scope;
 this adapter is not an OS sandbox. Other hosts and scripts are unsupported and
 refused. Native Windows/macOS qualification remains a full-scope dependency;
