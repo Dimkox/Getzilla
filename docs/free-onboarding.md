@@ -68,6 +68,19 @@ For this profile, every existing continuation candidate must use provider `ollam
 
 These values are synthetic examples. Replace them with verified versions, model digest, tokenizer/format/quantization/license and measured host limits. Keep the existing finite attempt/request/deadline bounds. Missing versions, tools capability, model identity or resource bounds refuse. Cloud or unknown candidates and non-loopback endpoints refuse. A declaration is not OS-enforced isolation or proof that a model supports tools. Status reports it as `declared_matrix`, with `network_isolation_verified: false`.
 
+### Preview, apply and undo a local profile
+
+Start at the root of a disposable installed project with its default disabled continuation policy. Save a complete policy as `ollama-profile.json` in that directory. Set `schema_version` to 1 and `enabled` to true. Paste the local `admission` object above using the actual inventory for your model. Add one `candidates` entry with `provider: ollama`, `account_ref: local` and the exact model ID from that inventory. Supply finite `bounds`, for example `{"max_attempts":1,"max_requests":1,"deadline_seconds":60,"max_cost_usd":1}`. Local profile setup reads these declarations offline. If you lack the model digest or version information, obtain those facts before applying a profile.
+
+```sh
+getzilla setup-agent ollama preview
+getzilla setup-agent ollama apply "$TOKEN"
+getzilla status --onboarding
+getzilla setup-agent ollama rollback "$TOKEN"
+```
+
+Set `TOKEN` to the token printed by preview before applying or rolling back. Preview prints the project-relative policy path, exact diff and token. Apply saves the previous bytes under `.getzilla/runtime/ollama-setup/` and updates only the disposable project policy. A repeat with identical bytes is a no-op. An edited policy must be inspected before rollback. The result stays `NOT_TESTED` with `dispatch_permitted: false`; this command performs no probes, model downloads, Qwen settings changes or inference.
+
 Before a real run, prepare the selected artifacts separately. Check their hashes and licenses. Start only the selected local server under finite CPU/RAM/VRAM/disk/time/output limits. Use a disposable Qwen profile with the local endpoint, verified context/tool settings and a local placeholder credential only when the installed client requires one. Preserve normal user settings. Disable cloud features, updates/downloads, telemetry, web tools and external reviewers/fallback. Do not rely on an environment variable or missing API key as proof. Bind client, server and descendants to monitored network isolation allowing only the declared local connection. The guard above does not install these host controls.
 
 Predefine a small coding task, failing behavioral test and accepted result before model execution. Retain input/output snapshots, real checks, review, all attempts, denied and successful network connections, timings and resource peaks. Prove the monitoring with one intentional denied external control. Test unavailable server, unsupported tools, insufficient resources, timeout and cancellation without external fallback or leaked owned processes. Preserve partial work and user data. Report unknown costs as unknown. If no task is accepted, do not report cost per accepted task as zero.
