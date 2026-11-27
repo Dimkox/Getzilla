@@ -89,6 +89,7 @@ jobs:
       - name: Provide native Git HTTPS build prerequisites
         shell: bash
         run: |
+          for f in /etc/apt/sources.list.d/*; do if grep -q 'packages.microsoft.com' "$f"; then sudo rm -f "$f"; fi; done
           sudo apt-get update
           sudo apt-get install -y build-essential libcurl4-openssl-dev libexpat1-dev libssl-dev zlib1g-dev
       - name: Exercise the real user installer and previous-stable project upgrade
@@ -244,6 +245,7 @@ jobs:
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
         run: |
+          for f in /etc/apt/sources.list.d/*; do if grep -q 'packages.microsoft.com' "$f"; then sudo rm -f "$f"; fi; done
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap
           # Admit namespaces only for the distro-owned sandbox executable.
@@ -443,6 +445,7 @@ jobs:
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
         run: |
+          for f in /etc/apt/sources.list.d/*; do if grep -q 'packages.microsoft.com' "$f"; then sudo rm -f "$f"; fi; done
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap
           # Admit namespaces only for the distro-owned sandbox executable.
