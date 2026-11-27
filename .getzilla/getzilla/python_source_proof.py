@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import keyword
+from collections.abc import Callable
 from typing import AbstractSet, NamedTuple
 from functools import lru_cache
 from .architecture import ArchitectureError
@@ -146,6 +147,55 @@ def namespace_is_closed(tree: ast.AST, *, allow_instrumentation: bool = False,
                 node.value in reflective or node.value.startswith(('builtins.', '__builtin__.', '__builtins__.'))):
             return False
     return True
+
+
+def queue_declaration_candidates(tree: ast.Module) -> Callable[[str], tuple[ast.Module, int]] | None:
+    """Index a closed, scalar-projected module of independent declarations.
+
+    Use every syntactic name in a declaration, including names in nested scopes.
+    The resulting superset goes through the normal exact export slicer. Repeated
+    bindings retain source order. Wildcards, mutation and control flow at module
+    scope require the full projection.
+    """
+    bindings, dependencies, sizes = {}, [], []
+    for index, node in enumerate(tree.body):
+        children = tuple(ast.walk(node))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound = (node.name,)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)) and all(a.name != '*' for a in node.names):
+            bound = tuple(a.asname or a.name.split('.')[0] for a in node.names)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = set(node.targets) if isinstance(node, ast.Assign) else {node.target}
+            if not all(isinstance(target, ast.Name) for target in targets) or any(
+                    isinstance(child, (ast.Name, ast.Subscript, ast.Attribute))
+                    and isinstance(child.ctx, (ast.Store, ast.Del)) and child not in targets
+                    for child in children):
+                return None
+            bound = tuple(target.id for target in targets)
+        else:
+            return None
+        for name in bound:
+            bindings.setdefault(name, []).append(index)
+        dependencies.append({child.id for child in children if isinstance(child, ast.Name)})
+        sizes.append(len(children))
+
+    # The exact slicer can introduce this predicate when dropping a condition.
+    if '__getzilla_unknown_predicate__' in bindings:
+        return None
+
+    def candidates(name: str) -> tuple[ast.Module, int]:
+        pending, visited, selected = [name], {name}, set()
+        while pending:
+            for index in bindings.get(pending.pop(), ()):
+                if index not in selected:
+                    selected.add(index)
+                    unseen = dependencies[index] - visited
+                    visited.update(unseen)
+                    pending.extend(unseen)
+        return (ast.Module(body=[tree.body[i] for i in sorted(selected)], type_ignores=[]),
+                1 + sum(sizes[i] for i in selected))
+
+    return candidates
 
 
 def _queue_export_slice_prepared(tree: ast.Module, requested: frozenset[str], *, work_limit: int) -> ast.Module:

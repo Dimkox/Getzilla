@@ -1,8 +1,26 @@
 """Inert local transport fixtures; not native/model qualification."""
 import secrets
+import socket
+import threading
 import unittest
 from unittest.mock import patch
 from getzilla_factory.qwen_native_handoff import QwenNativeHandoff, NativeHandoffError, prepare_local_request
+
+def start_handoff_listener(thread, path):
+    ready = threading.Event()
+    listen = socket.socket.listen
+
+    def listen_and_notify(server, backlog):
+        result = listen(server, backlog)
+        if server.family == socket.AF_UNIX and server.getsockname() == str(path):
+            ready.set()
+        return result
+
+    with patch.object(socket.socket, 'listen', listen_and_notify):
+        thread.start()
+        if not ready.wait(0.5):
+            raise AssertionError('handoff listener did not become ready')
+
 
 class PayloadTests(unittest.TestCase):
     def test_fixed_no_tool_request_keeps_data_inert(self):
@@ -192,11 +210,7 @@ class InertSocketTests(CanonicalClaimTests):
             back=threading.Thread(target=backend,daemon=True)
             sink=threading.Thread(target=receiver,daemon=True)
             back.start()
-            sink.start()
-            for _ in range(100):
-                if path.exists() or errors:
-                    break
-                time.sleep(.005)
+            start_handoff_listener(sink, path)
             self.assertFalse(errors,errors)
             with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
                 client.settimeout(2)
@@ -259,11 +273,7 @@ class NegativeTransportTests(unittest.TestCase):
                 except NativeHandoffError:
                     errors.append('denied')
             thread=threading.Thread(target=receive,daemon=True)
-            thread.start()
-            for _ in range(100):
-                if path.exists():
-                    break
-                time.sleep(.005)
+            start_handoff_listener(thread, path)
             with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
                 client.settimeout(1)
                 client.connect(str(path))

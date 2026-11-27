@@ -501,7 +501,33 @@ class BudgetOperationBindingTests(BudgetFixture, unittest.TestCase):
                     future.result(timeout=4)
 
 
-class BudgetTornReadTests(unittest.TestCase):
+class BudgetTornReadTests(BudgetFixture, unittest.TestCase):
+    def test_budget_poll_retries_when_selected_route_read_changes(self):
+        from unittest.mock import patch
+        from getzilla.package_status import InspectionError
+        with project_copy(git=True) as root:
+            budget = self.setup_budget(root)
+            route = state.get_active_route(root)
+            key = 'a' * 64
+            def authority():
+                current = state.get_active_route(root)
+                return current['authority_epoch'], current['state_revision']
+            budget.reserve(root, 'op', key, {'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': 100},
+                           *authority(), task_id=route['logical_task_id'])
+            budget.claim(root, 'op', *authority(), task_id=route['logical_task_id'])
+            read = state._route_document
+            for directory in ('sessions', 'routes'):
+                with self.subTest(directory=directory):
+                    interrupted = []
+                    def change_once(root, path, **options):
+                        if path.parent.name == directory and not interrupted:
+                            interrupted.append(path)
+                            raise InspectionError('file_changed', 'selected input changed during the read')
+                        return read(root, path, **options)
+                    with patch.object(state, '_route_document', side_effect=change_once):
+                        self.assertTrue(budget._same_authority(root, route, 'op', key))
+                    self.assertEqual(len(interrupted), 1)
+
     def test_authority_poll_retries_only_a_torn_route_read(self):
         from unittest import mock
         from getzilla import task_budget as budget

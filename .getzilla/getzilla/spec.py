@@ -959,6 +959,11 @@ def spec_fingerprint(
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def definition_text_present(value: str) -> bool:
+    """A draft may contain a whole placeholder; an admitted definition cannot."""
+    return value.strip().casefold() not in {"", "unknown", "tbd", "todo", "needs clarification", "..."}
+
+
 def _semantic_errors(spec: dict[str, Any], *, gate: bool, root: Path | None = None, anchor=None) -> list[str]:
     errors: list[str] = []
     collections = (("acceptance_criteria", "acceptance criterion"), ("invariants", "invariant"), ("forbidden_outcomes", "forbidden outcome"))
@@ -973,6 +978,8 @@ def _semantic_errors(spec: dict[str, Any], *, gate: bool, root: Path | None = No
             if not isinstance(item, dict):
                 continue
             evidence = item.get("evidence") or []
+            if gate and not definition_text_present(item["statement"]):
+                errors.append(f"{label} {item.get('id')} has an unresolved statement")
             if gate and not evidence:
                 errors.append(f"{label} {item.get('id')} has no evidence")
             for ref in evidence:
@@ -1023,9 +1030,9 @@ def _semantic_errors(spec: dict[str, Any], *, gate: bool, root: Path | None = No
                 errors.append(str(exc))
     if gate:
         objective = spec.get("objective") or {}
-        for field in ("success_metric", "target"):
-            if objective.get(field) == UNKNOWN_TOKEN:
-                errors.append(f"objective.{field} cannot be UNKNOWN at gate")
+        for field in ("statement", "success_metric", "target"):
+            if not definition_text_present(objective[field]):
+                errors.append(f"objective.{field} has an unresolved definition")
         if not spec.get("acceptance_criteria"):
             errors.append("gate requires at least one acceptance criterion")
         risk = spec.get("risk") or {}

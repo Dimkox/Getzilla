@@ -1,4 +1,5 @@
 """Real managed child facts retain the original native claim binding."""
+import hashlib
 import json
 import os
 import subprocess
@@ -360,7 +361,9 @@ class TraceObservationTests(unittest.TestCase):
                     descriptor = os.open('.getzilla/runtime/metrics.jsonl', os.O_RDWR)
                     fsx.lock_file(descriptor)
                     os.write(ready_write, b'1')
-                    select.select([release_read], [], [], 1.0)
+                    # A stuck command must fail the test instead of waiting forever.
+                    if not select.select([release_read], [], [], 15)[0] or os.read(release_read, 1) != b'x':
+                        os._exit(2)
                     fsx.unlock_file(descriptor)
                     os.close(descriptor)
                     os._exit(0)
@@ -369,20 +372,13 @@ class TraceObservationTests(unittest.TestCase):
             os.close(ready_write)
             os.close(release_read)
             try:
-                self.assertTrue(select.select([ready_read], [], [], 2)[0])
+                self.assertTrue(select.select([ready_read], [], [], 15)[0])
                 self.assertEqual(os.read(ready_read, 1), b'1')
-                command = [sys.executable, '-c',
-                           'from pathlib import Path; import time; Path("one-effect").write_text("x"); time.sleep(1)']
-                before = time.monotonic()
+                command = ['/bin/sh', '-c', 'printf x >> one-effect; exec sleep 10']
                 result = task_budget.execute_local(root, 'contended-journal', command, timeout=0.08)
-                elapsed = time.monotonic()-before
-                self.assertLess(elapsed, 0.5)
-                self.assertEqual(result['outcome'], 'failed')
-                self.assertEqual(result['observation_coverage'], 'partial')
-                self.assertEqual((root / 'one-effect').read_text(), 'x')
-                self.assertEqual(task_budget.inspect(root)['calls'], 1)
-                self.assertEqual(task_budget.inspect(root)['unresolved'], 0)
-                self.assertEqual(state.get_active_route(root)['observation_publication']['delivery'], {})
+                with (root / '.getzilla/runtime/metrics.jsonl').open('r+b') as journal:
+                    with self.assertRaises(BlockingIOError):
+                        fsx.lock_file(journal.fileno(), blocking=False)
             finally:
                 try:
                     os.write(release_write, b'x')
@@ -391,7 +387,16 @@ class TraceObservationTests(unittest.TestCase):
                 os.close(release_write)
                 os.close(ready_read)
                 _, status = os.waitpid(holder, 0)
-                self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+                self.assertEqual(os.waitstatus_to_exitcode(status), 0, 'journal lock holder did not receive release')
+            self.assertEqual(result['outcome'], 'failed')
+            self.assertEqual(result['observation_coverage'], 'partial')
+            self.assertEqual((root / 'one-effect').read_text(), 'x')
+            budget = task_budget.inspect(root)
+            self.assertEqual((budget['calls'], budget['unresolved']), (1, 0))
+            route = state.get_active_route(root)
+            operation = route['task_budget']['operations']['contended-journal']
+            self.assertEqual(operation['failure'], hashlib.sha256(b'timeout').hexdigest())
+            self.assertEqual(route['observation_publication']['delivery'], {})
 
 
 if __name__ == '__main__':

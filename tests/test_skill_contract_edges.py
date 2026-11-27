@@ -116,6 +116,58 @@ class EdgeContracts(unittest.TestCase):
         self.assertCountEqual(calls, ['SKILL.md', 'getzilla-skill.json'])
         self.assertFalse((fixture.root / '.agents').exists())
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux directory identity check')
+    def test_concurrent_guard_creation_during_canonical_owner_read(self):
+        fixture = self.fixture()
+        guard_waiting = threading.Event()
+        route_opened = threading.Event()
+        guard_created = threading.Event()
+        route_name = fixture.route['route_id'] + '.json'
+        route_reads = 0
+        publications = []
+        original = fsx.open_at
+
+        def interleave(parent, name, flags, *args, **kwargs):
+            nonlocal route_reads
+            if name == '.components.guard.lock' and flags & os.O_EXCL and not guard_created.is_set():
+                guard_waiting.set()
+                self.assertTrue(route_opened.wait(5))
+                descriptor = original(parent, name, flags, *args, **kwargs)
+                guard_created.set()
+                return descriptor
+            if name == route_name and guard_waiting.is_set() and not guard_created.is_set():
+                route_reads += 1
+                # The first read resolves the session. The second checks the canonical owner.
+                if route_reads == 2:
+                    route_opened.set()
+                    self.assertTrue(guard_created.wait(5))
+            if name in ('SKILL.md', 'getzilla-skill.json') and flags & os.O_EXCL:
+                publications.append(name)
+            return original(parent, name, flags, *args, **kwargs)
+
+        with mock.patch.object(fsx, 'open_at', new=interleave), ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(fixture.install)
+            self.assertTrue(guard_waiting.wait(10))
+            second = pool.submit(fixture.install)
+            self.assertEqual(second.result()['status'], 'staged')
+            self.assertEqual(first.result()['status'], 'staged')
+        self.assertTrue(guard_created.is_set())
+        self.assertCountEqual(publications, ['SKILL.md', 'getzilla-skill.json'])
+
+    def test_owner_refuses_persistent_or_unsafe_reads_before_publication(self):
+        from getzilla import skill_onboarding
+        from getzilla.package_status import InspectionError
+
+        fixture = self.fixture()
+        for code, expected_calls in [('file_changed', 6), ('file_unsafe', 1)]:
+            with self.subTest(code=code), mock.patch.object(
+                skill_onboarding, '_read_owner', side_effect=InspectionError(code, code)
+            ) as check, self.assertRaises(InspectionError) as refused:
+                fixture.install()
+            self.assertEqual(refused.exception.code, code)
+            self.assertEqual(check.call_count, expected_calls)
+        self.assertFalse((fixture.root / '.getzilla/runtime/skill-intake').exists())
+
     def test_lost_second_publication_leaves_scoped_denial_until_inspection(self):
         fixture = self.fixture()
         original = fsx.open_at

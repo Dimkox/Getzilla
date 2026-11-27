@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
+from getzilla.spec import SpecError, validate_spec, load_schema, validate_schema
 from getzilla.intake_readiness import assess_readiness
 from getzilla.requirements_intake import project_requirements
 from tests.test_requirements_intake import snapshot
@@ -29,6 +30,55 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(result['status'], 'missing')
         self.assertEqual({row['field'] for row in result['missing']}, {'objective.target', 'scope', 'acceptance_criteria.AC-001.evidence'})
         self.assertEqual(len(result['questions']), 3)
+        for rows in (result['missing'], result['questions']):
+            evidence = next(row for row in rows if row['field'] == 'acceptance_criteria.AC-001.evidence')
+            self.assertEqual(evidence['locator'], data['sources'][0]['locator'])
+
+    def test_whole_placeholders_and_evidence_agree_with_strict_spec(self):
+        data = snapshot()
+        spec = data['spec']
+        valid = {'statement': 'Reject the UNKNOWN status', 'evidence': [{'test': 'tests/test_intake_readiness.py'}]}
+        for collection, ident in [('acceptance_criteria', 'AC-001'), ('invariants', 'INV-001'),
+                                  ('forbidden_outcomes', 'FORBID-001')]:
+            spec[collection] = [dict(valid, id=ident)]
+            item = spec[collection][0]
+            for key, value in [('statement', '  '), ('statement', ' tBd '), ('evidence', [])]:
+                with self.subTest(collection=collection, key=key, value=value):
+                    item[key] = value
+                    self.assertTrue(validate_spec(spec, gate=False)['ok'])
+                    result = self.assess(data)
+                    self.assertEqual([row['field'] for row in result['missing']], [f'{collection}.{ident}.{key}'])
+                    with self.assertRaises(SpecError):
+                        validate_spec(spec)
+                    item[key] = valid[key]
+        for field, value in zip(('statement', 'success_metric', 'target'), (' todo ', 'NEEDS CLARIFICATION', '...')):
+            with self.subTest(field=field):
+                spec['objective'][field] = value
+                self.assertEqual([row['field'] for row in self.assess(data)['missing']], [f'objective.{field}'])
+                with self.assertRaises(SpecError):
+                    validate_spec(spec)
+                spec['objective'][field] = 'Reject the UNKNOWN status'
+        self.assertTrue(validate_spec(spec)['ok'])
+        self.assertEqual(self.assess(data)['status'], 'ready')
+
+    def test_orphan_finding_names_source_and_clears_on_remap(self):
+        data = snapshot()
+        data['sources'].append(dict(data['sources'][0], id='support', uri='native:notes.md'))
+        self.assertEqual(self.assess(data)['status'], 'ready')
+        orphan = dict(data['requirements'][0], id='REQ-002', action_key='second', criterion_ids=[])
+        data['requirements'].append(orphan)
+        result = self.assess(data)
+        finding = {'field': 'requirements.REQ-002.criterion_ids', 'reason': 'requirement_unmapped',
+                   'locator': data['sources'][0]['locator']}
+        self.assertEqual(result['missing'], [finding])
+        self.assertEqual(result['questions'], [dict(finding, id=result['questions'][0]['id'])])
+        schema = load_schema(Path(__file__).resolve().parents[1] / 'schemas/intake-readiness-v1.schema.json')
+        validate_schema(result, schema, schema)
+        orphan['criterion_ids'] = ['AC-001']
+        corrected = self.assess(data)
+        self.assertEqual(corrected['status'], 'ready')
+        self.assertNotEqual(result['draft_digest'], corrected['draft_digest'])
+        validate_schema(corrected, schema, schema)
 
     def test_conflict_and_unassessed_semantics_cannot_be_ready(self):
         data = snapshot()
