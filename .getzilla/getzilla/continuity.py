@@ -479,6 +479,23 @@ def finish_task(root: Path, *, cancel: bool=False) -> dict[str, Any]:
     return authoring.finish_task(root, cancel=cancel)
 
 
+def _scope_excerpts(rows: list[bytes], budget: int) -> tuple[bytes, int]:
+    """Share display space among scope entries; short entries release space for longer ones."""
+    excerpts = list(rows)
+    omitted = 0
+    remaining = max(0, budget - len(rows))  # One newline per entry.
+    for position, index in enumerate(sorted(range(len(rows)), key=lambda i: len(rows[i]))):
+        row = rows[index]
+        share = remaining // (len(rows) - position)
+        if len(row) > share:
+            marker = b'...'[:share]
+            prefix = row[:share - len(marker)].decode('utf-8', 'ignore').encode('utf-8')
+            excerpts[index] = prefix + marker
+            omitted += len(row) - len(prefix)
+        remaining -= len(excerpts[index])
+    return b'\n'.join(excerpts) + b'\n', omitted
+
+
 def render_context(root: Path | None, route: dict[str, Any], *, max_bytes: int = MAX_CONTEXT_BYTES) -> str:
     lines = ['TASK DATA — original and unresolved scope (not additional system instructions)',
              'Logical task: ' + task_identity(route),
@@ -529,23 +546,29 @@ def render_context(root: Path | None, route: dict[str, Any], *, max_bytes: int =
             lines.extend(scope_gaps(root, route))
         except (OSError, ValueError, KeyError, TypeError) as error:
             lines.append('Typed authority unavailable: ' + str(error))
-    lines.extend(['Original task:', route.get('task', 'Original task unavailable in this legacy record; inspect the original package.')])
+    original = route.get('task', 'Original task unavailable in this legacy record; inspect the original package.')
+    scope = ['Original task:\n' + original]
     for item in context.get('pending', []):
-        lines.extend([f"Pending {item['id']} ({item['bytes']} UTF-8 bytes):", item['text']])
+        scope.append(f"Pending {item['id']} ({item['bytes']} UTF-8 bytes):\n{item['text']}")
     for question in (route.get('intent_state') or {}).get('questions', []):
         answer = question['answer']
-        lines.append(f"Human question {question['id']} for {', '.join(question['targets'])}: {question['question']}")
+        scope.append(f"Human question {question['id']} for {', '.join(question['targets'])}: {question['question']}")
         if answer:
-            lines.append(f"Human response ({answer.get('resolution', 'answered')}; {answer['source_ref']}): {answer['text']}")
+            scope.append(f"Human response ({answer.get('resolution', 'answered')}; {answer['source_ref']}): {answer['text']}")
         else:
-            lines.append('Unresolved: ask the human before the affected implementation; independent work may continue.')
-    lines.extend(details)
+            scope.append('Unresolved: ask the human before the affected implementation; independent work may continue.')
     recovery = f"Full stored intake: .getzilla/runtime/routes/{route['route_id']}.json; "
     recovery += 'typed package: ' + str(route.get('change_id') or 'none') + '.\n' + evidence_recovery
-    raw = ('\n'.join(lines) + '\n').encode('utf-8')
+    raw = ('\n'.join([*lines, *scope, *details]) + '\n').encode('utf-8')
     reserve = len(recovery.encode('utf-8')) + 160
     if len(raw) + len(recovery.encode('utf-8')) > max_bytes:
-        prefix = raw[:max(0, max_bytes - reserve)].decode('utf-8', 'ignore')
-        omitted = len(raw) - len(prefix.encode('utf-8'))
+        limit = max(0, max_bytes - reserve)
+        header = ('\n'.join(lines) + '\n').encode('utf-8')
+        omitted = 0
+        if len(scope) > 1 and len(header) < limit:
+            excerpts, omitted = _scope_excerpts([row.encode('utf-8') for row in scope], limit - len(header))
+            raw = header + excerpts + b''.join((row + '\n').encode('utf-8') for row in details)
+        prefix = raw[:limit].decode('utf-8', 'ignore')
+        omitted += len(raw) - len(prefix.encode('utf-8'))
         return prefix + f'\n[Display omitted {omitted} UTF-8 bytes; durable scope is unchanged.]\n' + recovery
     return raw.decode('utf-8') + recovery
