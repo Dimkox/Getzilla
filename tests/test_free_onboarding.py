@@ -255,5 +255,67 @@ class MalformedProfileTests(unittest.TestCase):
                     self.assertEqual(continuation.load_policy(root).state, 'invalid')
 
 
+class OllamaSetupTests(unittest.TestCase):
+    def test_preview_apply_repeat_and_rollback_with_a_changed_policy(self):
+        import os
+        import tempfile
+        from unittest import mock
+        from scripts import getzilla_setup_agent
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.getzilla/config').mkdir(parents=True)
+            (root / '.getzilla/AGBP_SYNC.json').write_text('{}')
+            target = root / continuation.POLICY_PATH
+            previous = b'{ "schema_version": 1, "enabled": false }\n'
+            target.write_bytes(previous)
+            declaration = root / 'ollama-profile.json'
+            declaration.write_text(json.dumps(local_policy()))
+            with mock.patch('pathlib.Path.cwd', return_value=root), mock.patch('socket.socket',
+                    side_effect=AssertionError('network access')), mock.patch('subprocess.Popen',
+                    side_effect=AssertionError('external command')), mock.patch.dict(os.environ, {}, clear=True):
+                def run(*args):
+                    import io
+                    stream = io.StringIO()
+                    with mock.patch('sys.stdout', stream):
+                        self.assertEqual(getzilla_setup_agent.main(['ollama', *args]), 0)
+                    return json.loads(stream.getvalue())
+
+                preview = run('preview')
+                self.assertEqual(preview['qualification'], 'NOT_TESTED')
+                self.assertFalse(preview['dispatch_permitted'])
+                self.assertIn('a' * 64, preview['diff'])
+                self.assertEqual(target.read_bytes(), previous)
+                self.assertFalse((root / '.getzilla/runtime').exists())
+                ticket = preview['token']
+                for key, value in [('endpoint', 'http://example.invalid/v1'), ('client_version', '')]:
+                    bad = local_policy()
+                    bad['admission'][key] = value
+                    declaration.write_text(json.dumps(bad))
+                    self.assertEqual(getzilla_setup_agent.main(['ollama', 'apply', ticket]), 2)
+                    self.assertEqual(target.read_bytes(), previous)
+                bad = local_policy()
+                bad['admission']['models'][0]['digest'] = 'latest'
+                declaration.write_text(json.dumps(bad))
+                self.assertEqual(getzilla_setup_agent.main(['ollama', 'preview']), 2)
+                bad = local_policy()
+                bad['candidates'].append(free_policy()['candidates'][0])
+                declaration.write_text(json.dumps(bad))
+                self.assertEqual(getzilla_setup_agent.main(['ollama', 'apply', ticket]), 2)
+                declaration.write_text(json.dumps(local_policy()) + ' ')
+                self.assertEqual(getzilla_setup_agent.main(['ollama', 'apply', ticket]), 2)
+                self.assertEqual(target.read_bytes(), previous)
+                declaration.write_text(json.dumps(local_policy()))
+                self.assertEqual(run('apply', ticket)['state'], 'applied')
+                applied = target.read_bytes()
+                self.assertEqual(run('apply', ticket)['state'], 'unchanged')
+                target.write_bytes(applied + b' ')
+                self.assertEqual(getzilla_setup_agent.main(['ollama', 'rollback', ticket]), 2)
+                self.assertEqual(target.read_bytes(), applied + b' ')
+                target.write_bytes(applied)
+                self.assertEqual(run('rollback', ticket)['state'], 'restored')
+                self.assertEqual(target.read_bytes(), previous)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -423,3 +423,71 @@ def read_key(stream=None) -> str | None:
     stream = stream or sys.stdin
     value = stream.readline().strip()
     return value or None
+
+
+def ollama_project_profile(root: Path, action: str, token: str | None) -> dict:
+    """Preview or publish an inert project declaration without inspecting user settings."""
+    import difflib
+    from .component_state import BoundRoot, component_transaction
+    from .free_onboarding import LocalAdmission
+    from .model_continuation import MAX_POLICY_BYTES, POLICY_PATH, _parse
+    from .on_demand import is_installed_project, is_source_checkout
+
+    if not is_installed_project(root) or is_source_checkout(root):
+        raise ValueError('run from the root of a disposable installed Getzilla project')
+    preview = action == 'preview'
+    if action not in {'preview', 'apply', 'rollback'} or (preview and token is not None):
+        raise ValueError('invalid local profile operation')
+    if not preview and not re.fullmatch(r'[0-9a-f]{64}:[0-9a-f]{64}', token or ''):
+        raise ValueError('use the token from the reviewed preview')
+    result = dict(path=POLICY_PATH, qualification='NOT_TESTED', dispatch_permitted=False)
+    with BoundRoot(root) if preview else component_transaction(root) as project:
+        current = project.read(POLICY_PATH, limit=MAX_POLICY_BYTES)
+        if current is None:
+            raise ValueError('installed continuation policy missing')
+        if not preview:
+            before, after = token.split(':')
+            backup_path = '.getzilla/runtime/ollama-setup/' + before + '.json'
+            backup = project.read(backup_path, limit=MAX_POLICY_BYTES)
+            if backup is not None and backup.sha256 != before:
+                raise ValueError('saved policy digest mismatch')
+        if action == 'rollback':
+            if current.sha256 != after:
+                raise ValueError('policy changed since apply')
+            if before == after:
+                return dict(result, state='unchanged')
+            if backup is None:
+                raise ValueError('saved policy missing')
+            prior = _parse(backup.content)
+            if prior.enabled or prior.candidates or not isinstance(_parse(current.content).admission, LocalAdmission):
+                raise ValueError('rollback requires an original unconfigured policy and an applied local declaration')
+            project.write(POLICY_PATH, backup.content, current.mode, expected=current)
+            return dict(result, state='restored')
+
+        proposal = project.read('ollama-profile.json', limit=MAX_POLICY_BYTES)
+        if proposal is None:
+            raise ValueError('prepare ollama-profile.json with the exact model digest and local inventory')
+        policy = _parse(proposal.content)
+        if not policy.enabled or not isinstance(policy.admission, LocalAdmission) or len(policy.candidates) != 1:
+            raise ValueError('select one local Ollama model with an exact digest')
+        model = policy.candidates[0].model.lower()
+        if model.endswith((':cloud', '-cloud')):
+            raise ValueError('cloud models are unavailable for this local profile')
+        if current.content != proposal.content:
+            previous = _parse(current.content)
+            if previous.enabled or previous.candidates:
+                raise ValueError('use a disposable project with an unconfigured continuation policy')
+        if preview:
+            diff = difflib.unified_diff(current.content.decode().splitlines(), proposal.content.decode().splitlines(),
+                                        fromfile=POLICY_PATH, tofile=POLICY_PATH, lineterm='')
+            return dict(result, state='preview', diff='\n'.join(diff), token=current.sha256 + ':' + proposal.sha256)
+        if proposal.sha256 != after or current.sha256 not in {before, after}:
+            raise ValueError('preview is stale')
+        if current.sha256 == after:
+            if before != after and backup is None:
+                raise ValueError('saved policy missing')
+            return dict(result, state='unchanged')
+        if backup is None:
+            project.write(backup_path, current.content, 0o600, expected=None)
+        project.write(POLICY_PATH, proposal.content, current.mode, expected=current)
+        return dict(result, state='applied')
