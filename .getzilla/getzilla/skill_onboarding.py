@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import time
 
 from . import fsx, state
 from .component_state import BoundRoot, component_transaction, mode_matches, path_parts
 from .continuity import has_task_context
+from .package_status import InspectionError
 from .policy import evaluate_pre_tool
 from .publication_metadata import mark_publication_unknown
 from .skill_preflight import (CATALOG_PATH, DESCRIPTOR, MAX_DESCRIPTOR_BYTES, MAX_SKILLS,
@@ -52,6 +54,18 @@ def _read(binding: BoundRoot, relative: str, limit: int) -> bytes:
 
 
 def _owner(root: Path, expected=None):
+    # An installer can create the component guard in runtime/ while another
+    # validates its canonical route. Only retry the read-only ownership check.
+    for attempt in range(6):
+        try:
+            return _read_owner(root, expected)
+        except InspectionError as error:
+            if error.code != 'file_changed' or attempt == 5:
+                raise
+            time.sleep(0.005)
+
+
+def _read_owner(root: Path, expected):
     route = state.require_route_owner(root)
     if not has_task_context(route) or route.get('workspace') != str(root.resolve()):
         raise ValueError('CANONICAL_TASK_REQUIRED')
