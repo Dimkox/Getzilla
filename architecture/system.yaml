@@ -3915,6 +3915,7 @@
       "repository_paths": [
         "factory/contracts/jsonschema/native-result-handoff.v1.schema.json",
         "factory/src/getzilla_factory/result_dispatch.py",
+        "factory/tests/test_qwen_native_handoff.py",
         "factory/src/getzilla_factory/result_dispatch_cli.py"
       ],
       "runtime": {
