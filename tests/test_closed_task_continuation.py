@@ -41,3 +41,29 @@ class ClosedTaskContinuationTests(unittest.TestCase):
             self.assertNotEqual(successor['route_id'], terminal['route_id'])
             self.assertEqual(successor['risk'], original['risk'])
             self.assertEqual(record.read_bytes(), before)
+
+    def test_closed_task_reference_and_new_requests(self):
+        cases = [('продолжай задачу', True), ('continue the task', True),
+                 ('продолжи список покупок на завтра', False), ('continue the README with a FAQ', False)]
+        for prompt, refers_to_task in cases:
+            with self.subTest(prompt=prompt), project_copy(git=True) as root:
+                def cli(*args):
+                    return subprocess.run([sys.executable, str(PROJECT / 'scripts/getzilla_route.py'),
+                                           '--session', 's1', '--json', *args], cwd=root,
+                                          text=True, capture_output=True, timeout=20)
+
+                original = cli('--new-task', 'Document the API.')
+                self.assertEqual(original.returncode, 0, original.stderr)
+                cancelled = cli('--cancel')
+                self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+                closed_id = json.loads(cancelled.stdout)['route_id']
+                result = cli(prompt)
+                if refers_to_task:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('--new-task', result.stderr)
+                    self.assertEqual(json.loads(cli('--show').stdout)['route_id'], closed_id)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    successor = json.loads(result.stdout)
+                    self.assertNotEqual(successor['route_id'], closed_id)
+                    self.assertEqual(successor['task'], prompt)
