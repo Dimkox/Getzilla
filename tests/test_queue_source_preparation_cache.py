@@ -84,3 +84,44 @@ class QueuePreparationCacheTests(unittest.TestCase):
             self.assertEqual(ordinary.state, 'resolved')
             self.assertEqual((cyclic.state, cyclic.reason), ('unsupported', 'cyclic_local_queue_adapter'))
             self.assertEqual(active, {'owned'})
+
+    def test_independent_return_queries_do_not_copy_unrelated_declarations(self) -> None:
+        ordinary = ''.join(f'def value{i}():\n    return [' + '1,' * 100 + ']\n' for i in range(20))
+        source = ('from rq import Queue\n' + ordinary
+                  + 'def factory():\n    return Queue()\n'
+                  + 'alias = factory\ndef indirectly():\n    return alias()\n')
+        tree = ast.parse(source)
+        with mock.patch.object(fitness, 'MAX_QUEUE_ANALYSIS_WORK', 100):
+            budget = fitness._QueueBudget('head')
+            found = fitness._queue_return_exports_scoped(tree, frozenset(), None, 0, budget)
+        self.assertEqual(found, {'factory', 'indirectly'})
+        self.assertGreater(budget.summary_work, 22)
+
+    def test_indexed_return_projection_matches_full_slicing(self) -> None:
+        from getzilla.python_source_proof import queue_declaration_candidates
+        tree = ast.parse(
+            'from rq import Queue as Q\n'
+            'def make():\n    return Q()\n'
+            'alias = make\n'
+            'def make():\n    return alias()\n'
+            'class Container:\n    build = alias\n'
+            'def outer(arg=Container.build):\n'
+            '    def inner():\n        return arg()\n'
+            '    if unrelated:\n        return inner()\n'
+            'def ordinary():\n    return 5\n'
+        )
+        scalar = fitness._queue_scalar_projection(tree)
+        candidates = queue_declaration_candidates(scalar)
+        for name in ('outer', 'make', 'ordinary'):
+            with self.subTest(name=name):
+                candidate, size = candidates(name)
+                self.assertEqual(size, sum(1 for _ in ast.walk(candidate)))
+                demand = frozenset({name})
+                self.assertEqual(ast.dump(fitness._queue_export_slice_prepared(candidate, demand)),
+                                 ast.dump(fitness._queue_export_slice(tree, demand)))
+        for statement in ('from extra import *', 'alias.member = make', 'update(alias)',
+                          'if flag: alias = other', 'value = (alias := other)',
+                          '__getzilla_unknown_predicate__ = other'):
+            with self.subTest(statement=statement):
+                self.assertIsNone(queue_declaration_candidates(ast.Module(
+                    body=[*scalar.body, *ast.parse(statement).body], type_ignores=[])))
