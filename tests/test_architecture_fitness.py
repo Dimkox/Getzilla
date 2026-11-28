@@ -5872,6 +5872,22 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 policy = next(node for node in model.system['nodes'] if node['id'] == 'NODE-LOCAL-ROUTE-POLICY')
                 self.assertEqual(policy['runtime']['network'], 'none')
 
+    def test_network_analysis_separates_diagnostic_types_from_clients(self) -> None:
+        source = ("from socket import gaierror as DnsError\n"
+                  "from urllib.error import HTTPError, URLError\n"
+                  "def diagnose(error):\n    return isinstance(error, (DnsError, HTTPError, URLError))\n")
+        for extra, expected in (
+            ("", set()),
+            ("from socket import create_connection as connect\n", {"tcp"}),
+            ("from urllib.request import urlopen as fetch\n", {"https"}),
+            ("import urllib.error\n", {"https"}),
+            ("import socket\n", {"tcp"}),
+        ):
+            with self.subTest(extra=extra):
+                imports = FIT._import_targets(ast.parse(source + extra))
+                self.assertEqual({protocol for name in imports if (protocol := FIT._network_protocol(name))},
+                                 expected)
+
     def test_network_analysis_ignores_pure_urllib_parse(self) -> None:
         system = _system()
         system["nodes"][0]["type"] = "service"

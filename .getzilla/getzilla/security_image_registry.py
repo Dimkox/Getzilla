@@ -9,7 +9,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
-import socket
+from socket import gaierror
 import ssl
 import sys
 import time
@@ -75,7 +75,7 @@ def _exception_fault(request, error, phase):
             pass
     status = error.code if isinstance(error, urllib.error.HTTPError) else None
     cause = error.reason if isinstance(error, urllib.error.URLError) and not isinstance(error, urllib.error.HTTPError) else error
-    category = ('http' if status is not None else 'dns' if isinstance(cause, socket.gaierror) else
+    category = ('http' if status is not None else 'dns' if isinstance(cause, gaierror) else
                 'tls' if isinstance(cause, ssl.SSLError) else 'timeout' if isinstance(cause, TimeoutError) else
                 'os' if isinstance(cause, OSError) else error.category if isinstance(error, RegistryError) else 'protocol')
     if status is not None:

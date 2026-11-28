@@ -13,7 +13,7 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
-import urllib.error
+from urllib.error import HTTPError, URLError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
@@ -74,10 +74,10 @@ class RegistryBoundaryControls(unittest.TestCase):
 
     def test_dns_tls_http_and_os_errors_keep_safe_typed_cause(self):
         cases = [
-            (urllib.error.URLError(socket.gaierror(-3, "PRIVATE_REASON_MARKER")), "dns", -3, None),
-            (urllib.error.URLError(ssl.SSLCertVerificationError(1, "PRIVATE_CERT_MARKER")), "tls", 1, None),
+            (URLError(socket.gaierror(-3, "PRIVATE_REASON_MARKER")), "dns", -3, None),
+            (URLError(ssl.SSLCertVerificationError(1, "PRIVATE_CERT_MARKER")), "tls", 1, None),
             (
-                urllib.error.HTTPError(
+                HTTPError(
                     "https://auth.docker.io/token?PRIVATE_QUERY_MARKER", 429, "PRIVATE_BODY_MARKER", {}, None
                 ),
                 "http",

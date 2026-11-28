@@ -1161,6 +1161,9 @@ def _boundary_imports(python: _PythonInventory, path: str) -> tuple[tuple[str, t
 
 
 def _network_protocol(imported: str) -> str | None:
+    # Importing these exception types does not import a client binding into the caller.
+    if imported in {"socket.gaierror", "urllib.error.HTTPError", "urllib.error.URLError"}:
+        return None
     if imported == "urllib.parse" or imported.startswith("urllib.parse."):
         return None
     matches = [
