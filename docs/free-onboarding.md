@@ -92,3 +92,14 @@ Stage A is the real local coding workflow. Stage B separately qualifies authoriz
 On claw, 2026-11-19, the installed Qwen package metadata reports 0.24.7. No Ollama executable was found. An anonymous, proxy-disabled, two-second loopback `/api/tags` read was unavailable; it made no generation request. No model, tools, context or network-isolation qualification is claimed. Install and pin an explicitly selected local model within an approved resource/download budget before qualification. This source change neither installs it nor invents that budget.
 
 Official documentation checked on 2026-11-19: [OpenRouter limits](https://openrouter.ai/docs/api_reference/limits), [model fallback routing](https://openrouter.ai/docs/guides/routing/model-fallbacks), [data processing](https://openrouter.ai/docs/guides/privacy/data-collection), [Ollama FAQ](https://docs.ollama.com/faq), and [Qwen model providers](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/). Refresh those facts for the exact selected versions before a run. Source references do not qualify this host or a client.
+
+### Offline OpenRouter request rehearsal
+
+In a project with an enabled OpenRouter free continuation policy, run
+`getzilla setup-agent openrouter-free rehearse vendor/model:free < steps.json`.
+Supply a JSON array of mock requests, each with `role` (writer, helper, reviewer or
+fallback), `observation` (the complete current OpenRouter admission object), and
+`outcome` (`ok`, `429`, `quota_exhausted`, or `cancelled`). Every request uses the
+selected model and requires fresh zero rates, including add-ons. The result gives
+the count of completed steps as the fixture checkpoint. A refusal stops the
+sequence there. Live dispatch remains disabled and qualification stays `NOT_TESTED`.

@@ -96,6 +96,44 @@ class FreePolicyTests(unittest.TestCase):
                 self.parse(value)
 
 
+class OpenRouterRehearsalTests(unittest.TestCase):
+    def run_fixture(self, steps):
+        from tempfile import TemporaryDirectory
+        from getzilla.free_onboarding import rehearse_openrouter
+        policy = free_policy()
+        with TemporaryDirectory() as directory, patch('time.time', return_value=1000):
+            config = Path(directory) / '.getzilla/config/model-continuation.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(policy))
+            return rehearse_openrouter(Path(directory), 'vendor/writer:free', steps)
+
+    def step(self, role='writer', outcome='ok'):
+        return {'role': role, 'observation': free_policy()['admission'], 'outcome': outcome}
+
+    def test_all_roles_require_zero_prices_again_before_each_request(self):
+        for role in ('writer', 'reviewer', 'helper', 'fallback'):
+            changed = self.step(role)
+            changed['observation']['models'][0]['pricing']['tool'] = '0.1'
+            result = self.run_fixture([self.step(), changed])
+            self.assertEqual(result['reason'], 'admission_price_unknown_or_paid')
+            self.assertEqual((result['checkpoint'], result['requests']), (1, 1))
+            self.assertFalse(result['dispatch_permitted'])
+            self.assertEqual(result['qualification'], 'NOT_TESTED')
+
+    def test_rate_or_quota_stops_at_last_completed_checkpoint(self):
+        for outcome in ('429', 'quota_exhausted'):
+            result = self.run_fixture([self.step(), self.step('helper', outcome), self.step('fallback')])
+            self.assertEqual(result['reason'], outcome)
+            self.assertEqual((result['checkpoint'], result['requests']), (1, 2))
+
+    def test_stale_observation_and_fallback_substitution_refuse_without_send(self):
+        stale = self.step()
+        stale['observation']['expires_epoch'] = 1000
+        changed_model = dict(self.step('fallback'), model='vendor/paid')
+        for step in (stale, changed_model):
+            self.assertEqual(self.run_fixture([step])['requests'], 0)
+
+
 def local_policy():
     value = free_policy()
     value['candidates'] = [{'provider': 'ollama', 'account_ref': 'local', 'model': 'local-code:q4'}]

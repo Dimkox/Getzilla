@@ -140,3 +140,51 @@ def onboarding_status(root) -> dict:
             'resources': dict(admission.resources),
             'models': [dict(facts) for _, facts in admission.models]}
     return result
+
+
+class OpenRouterFixtureTransport:
+    """Supply the selected model's scripted price observation and reply without I/O."""
+
+    def price_observation(self, model, step):
+        return step['observation']
+
+    def request(self, model, step):
+        return step['outcome']
+
+
+def rehearse_openrouter(root, model: str, steps: list, *, transport=None) -> dict:
+    """Replay fixture replies for one selected model. Checkpoints count completed steps."""
+    from .model_continuation import load_policy
+    policy = load_policy(root).policy
+    if (policy is None or not isinstance(policy.admission, Admission)
+            or model not in {candidate.model for candidate in policy.candidates}):
+        raise ValueError('openrouter_free_model_not_configured')
+    if type(steps) is not list or not steps:
+        raise ValueError('fixture_steps_required')
+    result = {'model': model, 'checkpoint': 0, 'requests': 0, 'qualification': 'NOT_TESTED',
+              'dispatch_permitted': False, 'reason': 'complete'}
+    transport = OpenRouterFixtureTransport() if transport is None else transport
+    deadline = time.monotonic() + policy.bounds.deadline_seconds
+    for step in steps:
+        if result['requests'] >= policy.bounds.max_requests or time.monotonic() >= deadline:
+            result['reason'] = 'request_budget_exhausted'
+            break
+        if (not isinstance(step, dict) or set(step) != {'role', 'observation', 'outcome'}
+                or step['role'] not in ('writer', 'helper', 'reviewer', 'fallback')
+                or step['outcome'] not in ('ok', '429', 'quota_exhausted', 'cancelled')):
+            result['reason'] = 'fixture_request_invalid'
+            break
+        try:
+            facts = parse_admission(transport.price_observation(model, step), policy.candidates)
+            if not isinstance(facts, Admission):
+                raise ValueError('openrouter_price_required')
+        except ValueError as exc:
+            result['reason'] = str(exc)
+            break
+        result['requests'] += 1
+        outcome = transport.request(model, step)
+        if outcome != 'ok':
+            result['reason'] = outcome if outcome in ('429', 'quota_exhausted', 'cancelled') else 'invalid_reply'
+            break
+        result['checkpoint'] += 1
+    return result
