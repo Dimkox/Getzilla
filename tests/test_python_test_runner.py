@@ -1,5 +1,5 @@
+"""PYTEST_DONT_REWRITE: this module uses unittest assertions exclusively."""
 from __future__ import annotations
-
 import contextlib
 import io
 import inspect
