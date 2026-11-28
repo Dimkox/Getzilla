@@ -109,14 +109,41 @@ class NativeGitInputTests(fixtures._GuardFixture):
         finally:
             os.umask(before)
         os.chdir(linked)
-        real_run = diff._run_capped
-        def changed(command,**kwargs):
-            (self.parent/'sibling').mkdir(exist_ok=True)
-            return real_run(command,**kwargs)
-        with native_root(linked) as anchor,patch.object(diff,'_run_capped',side_effect=changed):
-            with self.assertRaisesRegex(ValueError,'native_trace_source_unavailable') as refused:
-                anchor.git_source()
-        self.assertTrue((self.parent/'sibling').is_dir())
+        sibling = self.parent/'sibling'
+        real_check = diff.NativeGitGraph.check
+        real_fstat = os.fstat
+
+        def check(guard):
+            parent = guard._directories.get(self.parent)
+            if parent is None or sibling.exists():
+                return real_check(guard)
+
+            injected = False
+
+            def change_before_observation(descriptor):
+                nonlocal injected
+                self.assertFalse(injected, 'guard advanced beyond the changed parent')
+                if descriptor == parent.descriptor:
+                    sibling.mkdir()
+                    injected = True
+                return real_fstat(descriptor)
+
+            # Change the owned external directory at its actual observation,
+            # while the guard still has the original descriptor and identity.
+            with patch.object(os, 'fstat', change_before_observation):
+                return real_check(guard)
+
+        with native_root(linked) as anchor, patch.object(diff.NativeGitGraph, 'check', check):
+            # Competing fixtures can invalidate a shared ancestor during setup.
+            # Retry only that refusal, before our mutation has occurred.
+            for _ in range(5):
+                with self.assertRaisesRegex(ValueError,'native_trace_source_unavailable') as refused:
+                    anchor.git_source()
+                cause = refused.exception.__context__
+                if (sibling.exists() or not isinstance(cause, diff.ArchitectureError)
+                        or str(cause) != 'Git directory binding changed'):
+                    break
+        self.assertTrue(sibling.is_dir())
         self.assertIn('binding changed',str(refused.exception.__context__))
 
     def test_native_source_uses_original_git_graph_admission(self):
