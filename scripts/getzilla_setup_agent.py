@@ -32,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:2] == ['openrouter-free', 'rehearse']:
         from getzilla.free_onboarding import rehearse_openrouter
+        from getzilla.model_continuation import _object
         parser = argparse.ArgumentParser(prog='getzilla setup-agent openrouter-free rehearse')
         parser.add_argument('model', help='exact configured :free model')
         args = parser.parse_args(argv[2:])
@@ -39,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
             raw = sys.stdin.buffer.read(65537)
             if len(raw) > 65536:
                 raise ValueError('fixture_too_large')
-            result = rehearse_openrouter(Path.cwd(), args.model, json.loads(raw))
+            result = rehearse_openrouter(Path.cwd(), args.model, json.loads(raw, object_pairs_hook=_object))
         except (OSError, ValueError, RecursionError) as exc:
             print(f'OpenRouter rehearsal refused: {exc}', file=sys.stderr)
             return 2

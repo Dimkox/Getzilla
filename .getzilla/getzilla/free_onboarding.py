@@ -156,7 +156,7 @@ def rehearse_openrouter(root, model: str, steps: list, *, transport=None) -> dic
     """Replay fixture replies for one selected model. Checkpoints count completed steps."""
     from .model_continuation import load_policy
     policy = load_policy(root).policy
-    if (policy is None or not isinstance(policy.admission, Admission)
+    if (policy is None or not policy.enabled or not isinstance(policy.admission, Admission)
             or model not in {candidate.model for candidate in policy.candidates}):
         raise ValueError('openrouter_free_model_not_configured')
     if type(steps) is not list or not steps:
@@ -180,6 +180,9 @@ def rehearse_openrouter(root, model: str, steps: list, *, transport=None) -> dic
                 raise ValueError('openrouter_price_required')
         except ValueError as exc:
             result['reason'] = str(exc)
+            break
+        if time.monotonic() >= deadline:
+            result['reason'] = 'request_budget_exhausted'
             break
         result['requests'] += 1
         outcome = transport.request(model, step)

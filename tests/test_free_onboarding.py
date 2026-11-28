@@ -97,7 +97,7 @@ class FreePolicyTests(unittest.TestCase):
 
 
 class OpenRouterRehearsalTests(unittest.TestCase):
-    def run_fixture(self, steps):
+    def run_fixture(self, steps, transport=None):
         from tempfile import TemporaryDirectory
         from getzilla.free_onboarding import rehearse_openrouter
         policy = free_policy()
@@ -105,7 +105,7 @@ class OpenRouterRehearsalTests(unittest.TestCase):
             config = Path(directory) / '.getzilla/config/model-continuation.json'
             config.parent.mkdir(parents=True)
             config.write_text(json.dumps(policy))
-            return rehearse_openrouter(Path(directory), 'vendor/writer:free', steps)
+            return rehearse_openrouter(Path(directory), 'vendor/writer:free', steps, transport=transport)
 
     def step(self, role='writer', outcome='ok'):
         return {'role': role, 'observation': free_policy()['admission'], 'outcome': outcome}
@@ -119,6 +119,24 @@ class OpenRouterRehearsalTests(unittest.TestCase):
             self.assertEqual((result['checkpoint'], result['requests']), (1, 1))
             self.assertFalse(result['dispatch_permitted'])
             self.assertEqual(result['qualification'], 'NOT_TESTED')
+
+    def test_price_observation_cannot_outlive_deadline(self):
+        from unittest.mock import Mock
+        transport = Mock()
+        transport.price_observation.return_value = free_policy()['admission']
+        with patch('time.monotonic', side_effect=[0, 1, 61]):
+            result = self.run_fixture([self.step()], transport)
+        transport.price_observation.assert_called_once()
+        transport.request.assert_not_called()
+        self.assertEqual(result['reason'], 'request_budget_exhausted')
+
+    def test_cli_refuses_duplicate_pricing_components(self):
+        import io
+        from scripts import getzilla_setup_agent
+        raw = io.TextIOWrapper(io.BytesIO(b'[{"pricing":{"prompt":"1","prompt":"0"}}]'))
+        with patch('sys.stdin', raw), patch('sys.stderr', new_callable=io.StringIO) as error:
+            self.assertEqual(getzilla_setup_agent.main(['openrouter-free', 'rehearse', 'vendor/writer:free']), 2)
+        self.assertIn('duplicate', error.getvalue())
 
     def test_rate_or_quota_stops_at_last_completed_checkpoint(self):
         for outcome in ('429', 'quota_exhausted'):
