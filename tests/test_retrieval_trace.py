@@ -175,6 +175,35 @@ class RetrievalTraceTests(unittest.TestCase):
         self.assertFalse(result['trace_observation_delivered'])
         self.assertIn('def answer', packet['text'])
 
+    def test_pending_ack_can_be_retried_without_repeating_the_source_query(self):
+        import time
+        self.enroll()
+        acknowledge = sprint_lifecycle.ack_delivery
+
+        def late_ack(*args, **kwargs):
+            time.sleep(0.060)
+            return acknowledge(*args, **kwargs)
+
+        with patch.object(sprint_lifecycle, 'ack_delivery', side_effect=late_ack):
+            result, packet = self.query()
+        self.assertEqual(result['status'], 'issued')
+        self.assertFalse(result['trace_observation_delivered'])
+        operation = packet['trace_operation_id']
+
+        def outcome():
+            return reconstruct(load_local(self.root)['events'], operation, '2099-01-01T00:00:00Z')['outcome']
+
+        self.assertEqual(outcome(), 'unknown')
+        command = [sys.executable, str(ROOT / 'scripts/getzilla_route.py'),
+                   '--trace-deliver', self.route['route_id'], '--json']
+        denied = subprocess.run(command + ['--session', 'foreign'], cwd=self.root, capture_output=True)
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertEqual(outcome(), 'unknown')
+        recovered = subprocess.run(command + ['--session', SESSION], cwd=self.root, capture_output=True)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertTrue(json.loads(recovered.stdout)['batch_acknowledged'])
+        self.assertEqual(outcome(), 'succeeded')
+
     def test_actual_report_cli_reads_source_bound_retrieval_operation(self):
         self.enroll()
         result, packet = self.query()
