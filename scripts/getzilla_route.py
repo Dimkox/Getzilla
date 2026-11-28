@@ -32,6 +32,7 @@ actions.add_argument('--complete', action='store_true')
 actions.add_argument('--cancel', action='store_true')
 actions.add_argument('--sprint-select', metavar='UTC_START', help='Explicit current-task 14-day sprint selection')
 actions.add_argument('--trace-enroll', action='store_true', help='Enroll closed local observations for the current owned task')
+actions.add_argument('--trace-deliver', metavar='ROUTE_ID', help='Retry acknowledgment of stored observations once')
 parser.add_argument('--event-id', help='Trusted stable input event ID (not a session ID)')
 parser.add_argument('--request-id', help='Idempotent cross-session handoff request ID')
 parser.add_argument('--expected-epoch', type=int)
@@ -41,7 +42,7 @@ args = parser.parse_args()
 root = find_root()
 bind_session(args.session)
 if args.task is not None and any((args.show, args.new_task is not None, args.continue_route, args.ack_scope, args.intent,
-                                  args.reconcile, args.complete, args.cancel, args.sprint_select, args.trace_enroll)):
+                                  args.reconcile, args.complete, args.cancel, args.sprint_select, args.trace_enroll, args.trace_deliver)):
     parser.error('positional task cannot be combined with an explicit route action')
 if args.add_reviewer and not args.reconcile:
     parser.error('--add-reviewer requires --reconcile')
@@ -52,6 +53,12 @@ if any(value is not None for value in (args.expected_epoch, args.expected_revisi
 if (args.sprint_select or args.trace_enroll) and (args.expected_epoch is None or args.expected_revision is None):
     parser.error('sprint selection requires exact owner epoch and state revision')
 try:
+    if args.trace_deliver is not None:
+        from getzilla.sprint_lifecycle import deliver
+        if not deliver(root, args.trace_deliver):
+            raise ValueError('observation batch acknowledgment unavailable')
+        print(json.dumps({'batch_acknowledged': True}) if args.json else 'Observation batch acknowledged.')
+        raise SystemExit(0)
     if args.trace_enroll:
         from getzilla.sprint_lifecycle import enroll_trace
         data = enroll_trace(root, expected_epoch=args.expected_epoch, expected_revision=args.expected_revision)
