@@ -51,6 +51,34 @@ class PreparationFaultControls(unittest.TestCase):
         self.assertEqual(cli._preparation_fault(error), detail)
         self.assertNotIn('PRIVATE_MARKER', json.dumps(detail))
 
+    def test_tag_provider_import_failure_is_distinct_from_unqualified_tags(self):
+        from getzilla.security_python_target import observe_target
+
+        tags = 'pip._vendor.packaging.tags'
+        markers = 'pip._vendor.packaging.markers'
+        for provider, code in ((None, 'artifact-tag-provider-unavailable'),
+                               (SimpleNamespace(sys_tags=lambda: ()), 'artifact-target-unknown')):
+            with self.subTest(code=code), mock.patch.dict(sys.modules, {
+                    tags: provider, markers: SimpleNamespace(default_environment=dict)}):
+                with self.assertRaises(ArtifactError) as caught, cli._preparation_step('package-target'):
+                    observe_target()
+                self.assertEqual(cli._preparation_fault(caught.exception), {
+                    'stage': 'package-target', 'error_kind': 'artifact', 'error_code': code, 'errno': None})
+
+    def test_malformed_tag_module_initialization_keeps_unknown_refusal(self):
+        from getzilla.security_python_target import observe_target
+        original = __import__
+
+        def malformed(name, *args, **kwargs):
+            if name == 'pip._vendor.packaging.tags':
+                raise ValueError('PRIVATE_MARKER')
+            return original(name, *args, **kwargs)
+
+        with mock.patch('builtins.__import__', malformed):
+            with self.assertRaises(ArtifactError) as caught, cli._preparation_step('package-target'):
+                observe_target()
+        self.assertEqual(cli._preparation_fault(caught.exception)['error_code'], 'artifact-target-unknown')
+
     def test_unsealed_unknown_or_malformed_facts_never_enter_fault(self):
         self.marked()
         forged = ArtifactError('artifact-size', 'PRIVATE_MARKER')
