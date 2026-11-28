@@ -730,17 +730,11 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         self.assertEqual(linux['if'], 'always()')
         self.assertIn('linux-core', linux['needs'])
         core = document['jobs']['linux-core']
-        self.assertEqual(core['needs'], 'platform-install-results')
+        self.assertNotIn('needs', core)
+        self.assertIn('platform-install-results', linux['needs'])
         aggregate = next(step for step in linux['steps'] if 'GETZILLA_NEEDS' in step.get('env', {}))
         self.assertEqual(aggregate['env']['GETZILLA_NEEDS'], '${{ toJSON(needs) }}')
         self.assertIn('getzilla_ci_admission.py', aggregate['run'])
-        guard = next(step for step in core['steps'] if 'GETZILLA_PLATFORM_RESULT' in step.get('env', {}))
-        self.assertEqual(guard['env']['GETZILLA_PLATFORM_RESULT'], '${{ needs.platform-install-results.result }}')
-        for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
-            process = subprocess.run(['bash', '-c', guard['run']],
-                                     env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},
-                                     capture_output=True, timeout=5)
-            self.assertEqual(process.returncode, expected, result)
 
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_smoke_environment_preserves_hook_owner_for_cli_package_start(self) -> None:
