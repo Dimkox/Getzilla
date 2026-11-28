@@ -236,8 +236,8 @@ class PassiveAnnotationTests(unittest.TestCase):
         expected = {
             '_stop': '26e086aac4d0bf9306e881058529b4254401347f35215f1f339d5d76bd498354',
             'execute': '0c0ad3051b7cd529ac8863ab0ccba44e911a9a254b7cf346f272c8ca0099ab7a',
-            # Includes the terminal observation after the 100th sleep (#366).
-            'assert_descendant_stopped': '83af2a812fbc50c601934516b36bde44410203214a5fd897ceedd15ca3f5784e',
+            # Includes the terminal observation and procfs ESRCH on disappearance (#366).
+            'assert_descendant_stopped': '1eb4a62e9dd99dad199049ed085b7e50c4a3d18232be4965969aa243000ac49a',
             'test_term_resistant_grandchild_is_killed_on_every_stop_path': 'ebda8d4500995da02cfb2d08c0a3f9ca82d482cd5ed8670c0110fab7d5f7872c',
         }
         def diagnostic(call, name):
