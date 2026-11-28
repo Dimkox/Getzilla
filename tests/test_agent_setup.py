@@ -297,6 +297,15 @@ class AgentSetupTests(unittest.TestCase):
                 configure('codex', 'openrouter', self.home, key=KEY)
 
 
+class SetupFixtureCostTests(unittest.TestCase):
+    def test_local_url_comparisons_do_not_request_a_paid_call(self):
+        from getzilla.cost_guard import python_findings
+        fixture = Path(__file__)
+        comparisons = {'self.assertEqual', 'self.assertIn'}
+        findings = python_findings(fixture.name, fixture.read_bytes())
+        self.assertEqual([item for item in findings if item.detail in comparisons], [])
+
+
 class ProjectSetupOrderingTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
