@@ -110,7 +110,7 @@ class CiAdmissionTests(unittest.TestCase):
         self.assertIn("linux-core", jobs)
         self.assertIn("live-acceptance", jobs)
         self.assertIn("security-expanded", jobs)
-        self.assertIn("needs: [linux-core, linux-core-tests, live-acceptance, security-expanded]", jobs["linux"])
+        self.assertIn("needs: [linux-core, linux-core-tests, live-acceptance, security-expanded, platform-install-results]", jobs["linux"])
         self.assertIn("if: always()", jobs["linux"])
         self.assertIn("getzilla_ci_admission.py", jobs["linux"])
         self.assertIn("fail-fast: false", jobs["live-acceptance"])
@@ -153,11 +153,11 @@ class CiAdmissionTests(unittest.TestCase):
 
     def evaluate(self, records=None, needs=None):
         module = self.module()
-        return module.evaluate(needs or {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")},
+        return module.evaluate(needs or {name: "success" for name in ("linux-core", "linux-core-tests", "platform-install-results", "live-acceptance", "security-expanded")},
             records or self.records(), head=HEAD, tree=TREE, run_id="123", attempt="2")
 
     def test_linux_admission_ignores_expanded_outcome_and_absent_artifact(self):
-        needs = dict.fromkeys(("linux-core", "linux-core-tests", "live-acceptance"), "success")
+        needs = dict.fromkeys(("linux-core", "linux-core-tests", "platform-install-results", "live-acceptance"), "success")
         records = self.records()
         del records["security-expanded"]
         for state in ("failure", "success", "skipped", "cancelled"):
@@ -169,7 +169,7 @@ class CiAdmissionTests(unittest.TestCase):
     def test_changed_file_secrets_gate(self):
         module = self.module()
         fixture = Path("tests/test_execution_public_certificate.py")
-        needs = dict.fromkeys(("linux-core", "linux-core-tests", "live-acceptance"), "success")
+        needs = dict.fromkeys(("linux-core", "linux-core-tests", "platform-install-results", "live-acceptance"), "success")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
@@ -231,16 +231,24 @@ class CiAdmissionTests(unittest.TestCase):
 
     def test_missing_skipped_cancelled_or_failed_job_cannot_admit(self):
         for state in ("skipped", "cancelled", "failure", None):
-            needs = {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")}
+            needs = {name: "success" for name in ("linux-core", "linux-core-tests", "platform-install-results", "live-acceptance", "security-expanded")}
             needs["live-acceptance"] = state
             self.assertTrue(self.evaluate(needs=needs), state)
 
     def test_missing_skipped_cancelled_or_failed_core_test_shards_cannot_admit(self):
         self.assertFalse(self.evaluate())
         for state in ("skipped", "cancelled", "failure", None):
-            needs = {name: "success" for name in ("linux-core", "linux-core-tests", "live-acceptance", "security-expanded")}
+            needs = {name: "success" for name in ("linux-core", "linux-core-tests", "platform-install-results", "live-acceptance", "security-expanded")}
             needs["linux-core-tests"] = state
             self.assertIn("required job linux-core-tests did not succeed", self.evaluate(needs=needs), state)
+
+    def test_installer_result_must_succeed(self):
+        needs = dict.fromkeys(("linux-core", "linux-core-tests", "live-acceptance"), "success")
+        refusal = "required job platform-install-results did not succeed"
+        self.assertIn(refusal, self.evaluate(needs=needs))
+        for state in ("skipped", "cancelled", "failure"):
+            with self.subTest(state=state):
+                self.assertIn(refusal, self.evaluate(needs={**needs, "platform-install-results": state}))
 
     def test_wrong_source_or_attempt_or_missing_cell_is_rejected(self):
         for key, value in (("source", {"head": "f" * 40, "tree": TREE}), ("attempt", "1")):

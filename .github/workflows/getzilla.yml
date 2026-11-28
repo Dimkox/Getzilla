@@ -183,15 +183,9 @@ jobs:
 
   linux-core:
     if: always()
-    needs: platform-install-results
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: Require both declared Linux native installer cells
-        shell: bash
-        env:
-          GETZILLA_PLATFORM_RESULT: ${{ needs.platform-install-results.result }}
-        run: test "$GETZILLA_PLATFORM_RESULT" = success
       - name: Check out the exact commit with full history
         id: source_checkout
         if: always()
@@ -777,7 +771,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: [linux-core, linux-core-tests, live-acceptance, security-expanded]
+    needs: [linux-core, linux-core-tests, live-acceptance, security-expanded, platform-install-results]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
