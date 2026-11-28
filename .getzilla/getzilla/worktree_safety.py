@@ -111,7 +111,7 @@ def _valuable_ignored(worktree: Path, ignored: list[str]) -> list[str]:
 
 
 def _status(worktree: Path) -> tuple[int, int, list[str]]:
-    raw = _git(worktree, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching')
+    raw = _git(worktree, '--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching')
     fields = raw.split(b'\0')
     changed = untracked = 0
     ignored: list[str] = []

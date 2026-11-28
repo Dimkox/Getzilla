@@ -72,6 +72,18 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertEqual(git(self.root, 'branch', '--list', 'clean'), 'clean')
         self.assertEqual(remove(self.root, str(path))['result'], 'absent')
 
+    def test_plan_preserves_linked_index_when_tracked_stat_is_stale(self) -> None:
+        worktree = self.add('observed', '-b', 'observed')
+        tracked = worktree / 'app.py'
+        old = int(tracked.stat().st_mtime) - 60
+        os.utime(tracked, (old, old))
+        index = Path(git(worktree, 'rev-parse', '--absolute-git-dir')) / 'index'
+        before = index.read_bytes()
+
+        report = self.report(worktree)
+        self.assertEqual(report['changed'], 0)
+        self.assertEqual(index.read_bytes(), before)
+
     def test_changes_untracked_files_and_local_commits_keep_the_worktree(self) -> None:
         tracked = self.add('tracked', '-b', 'tracked')
         (tracked / 'app.py').write_text('value = 2\n')
