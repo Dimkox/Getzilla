@@ -4498,36 +4498,49 @@ class ArchitectureFitnessTests(unittest.TestCase):
         ]
         for label, value, queued in cases:
             for queue_first in (False, True):
-                for style in ('alias', 'reexport', 'member'):
-                    with self.subTest(case=label, queue_first=queue_first, style=style):
-                        repo = GitArchitectureRepo(self)
-                        repo.model(system, _rules())
-                        repo.write_text('.stack/runtime/__init__.py', 'from .values import value as exported\n')
-                        repo.write_text('.stack/runtime/values.py', 'ordinary = 1\n' + value)
+                with self.subTest(case=label, queue_first=queue_first):
+                    repo = GitArchitectureRepo(self)
+                    repo.model(system, _rules())
+                    consumers = {}
+                    # Each style gets its own provider module and cold export cache.
+                    # Lexically paired consumers exercise the chosen order per provider.
+                    for style in ('alias', 'reexport', 'member'):
+                        package = f'runtime.{style}'
+                        directory = f'.stack/runtime/{style}'
+                        repo.write_text(f'{directory}/__init__.py', 'from .values import value as exported\n')
+                        repo.write_text(f'{directory}/values.py', 'ordinary = 1\n' + value)
                         imported, receiver = {
-                            'alias': ('from runtime.values import value as chosen\n', 'chosen'),
-                            'reexport': ('from runtime import exported as chosen\n', 'chosen'),
-                            'member': ('import runtime.values as chosen\n', 'chosen.value'),
+                            'alias': (f'from {package}.values import value as chosen\n', 'chosen'),
+                            'reexport': (f'from {package} import exported as chosen\n', 'chosen'),
+                            'member': (f'import {package}.values as chosen\n', 'chosen.value'),
                         }[style]
-                        paths = ('src/a.py', 'src/z.py') if queue_first else ('src/z.py', 'src/a.py')
-                        repo.write_text(paths[0], imported)
-                        repo.write_text(paths[1], 'from runtime.values import ordinary\n')
-                        base = repo.commit('paired exports')
-                        operation = f'{receiver}().enqueue(task)\n' if label in {'factory', 'else factory', 'shadowed scalar', 'internal queue scalar', 'scalar mutation'} else f'{receiver}.delay(task)\n'
-                        if label == 'attribute mutation':
+                        first, last = f'src/{style}/a.py', f'src/{style}/z.py'
+                        selected, ordinary = (first, last) if queue_first else (last, first)
+                        repo.write_text(selected, imported)
+                        plain_import = f'from {package}.values import ordinary\n'
+                        repo.write_text(ordinary, plain_import)
+                        operation = f'{receiver}.delay(task)\n'
+                        if label in {'factory', 'else factory', 'shadowed scalar', 'internal queue scalar'}:
+                            operation = f'{receiver}().enqueue(task)\n'
+                        elif label == 'attribute mutation':
                             operation = f'{receiver}.queue.enqueue(task)\n'
-                        if label == 'scalar mutation':
+                        elif label == 'scalar mutation':
                             operation = f'{receiver}()[0].enqueue(task)\n'
-                        repo.write_text(paths[0], imported + operation)
-                        repo.write_text(paths[1], 'from runtime.values import ordinary\nordinary.delay(task)\n')
-                        head = repo.commit('paired consumers')
-                        report = self._evaluate(repo, base, head, pre_risk='yellow')
-                        self.assertEqual('new_queue' in report.triggers, queued, report)
-                        result = self._results(report)['background_job']
-                        self.assertEqual(result.status == 'not_applicable', not queued, result)
+                        consumers[selected, ordinary] = (imported + operation, plain_import + 'ordinary.delay(task)\n')
+                    base = repo.commit('paired exports')
+                    for (selected, ordinary), (selected_code, ordinary_code) in consumers.items():
+                        repo.write_text(selected, selected_code)
+                        repo.write_text(ordinary, ordinary_code)
+                    head = repo.commit('paired consumers')
+                    report = self._evaluate(repo, base, head, pre_risk='yellow')
+                    self.assertEqual('new_queue' in report.triggers, queued, report)
+                    result = self._results(report)['background_job']
+                    self.assertEqual(result.status == 'not_applicable', not queued, result)
+                    self.assertNotEqual(result.applicability.reason_code, 'analysis_limit_exceeded', result)
+                    for selected, ordinary in consumers:
                         if queued:
-                            self.assertIn(paths[0], result.applicability.scanned_scope)
-                        self.assertNotIn(paths[1], result.applicability.scanned_scope)
+                            self.assertIn(selected, result.applicability.scanned_scope)
+                        self.assertNotIn(ordinary, result.applicability.scanned_scope)
 
     def test_imported_callable_effects_and_nested_factory_returns_are_distinct(self) -> None:
         cases = (
