@@ -124,7 +124,7 @@ class ManagedReleaseDeadlineTests(unittest.TestCase):
 @unittest.skipUnless(hasattr(os, 'pidfd_open'), 'Linux owned pidfd launch is required')
 class ManagedExecutionTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(dir='/tmp')
+        temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         session = '01a1a6ba-10e8-7bc1-81b1-684978be3580'
