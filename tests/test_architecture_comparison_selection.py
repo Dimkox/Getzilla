@@ -240,10 +240,12 @@ class DerivedComparisonTests(unittest.TestCase):
             descendant = self.git('commit-tree', self.head + '^{tree}', '-p', self.head,
                                   '-m', 'new owned accepted cross-mode descendant')
             self.git('update-ref', 'refs/remotes/origin/main', descendant)
-            self.assertEqual(verification_plan.report_gaps(self.root, hydrated), [])
-            self.assertEqual(receipts.validate_evidence(self.root,
-                {**self.route, 'required_evidence': ['verification']}), [],
-                'the public receipt consumer must retain the proved publication provenance')
+            # The public consumer validates the hydrated report at this new target.
+            with patch.object(verification_plan, 'report_gaps', wraps=verification_plan.report_gaps) as checked:
+                self.assertEqual(receipts.validate_evidence(self.root,
+                    {**self.route, 'required_evidence': ['verification']}), [],
+                    'the public receipt consumer must retain the proved publication provenance')
+            checked.assert_called_once_with(self.root, hydrated)
 
     def test_historical_and_current_provenance_tampering_cannot_supply_a_selection(self):
         from dataclasses import replace
