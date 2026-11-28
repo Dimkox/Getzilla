@@ -141,7 +141,10 @@ def submit(root: Path, text: str, session_id: str | None = None, *, new_task: bo
         if continuity._passive(text):
             return route
         if (not new_task and route is not None and route.get('status') in continuity.TERMINAL
-                and re.match(r'\s*(?:continue|resume|продолжай(?:те)?|продолжи(?:те)?)\s+', text, re.IGNORECASE)):
+                and re.match(r'\s*(?:continue|resume|продолжай(?:те)?|продолжи(?:те)?)\s+(?:with\s+)?'
+                             r'(?:(?:the|this|that|current|previous|last|prior|same|our|my|'
+                             r'текущ\w*|эт\w*|прежн\w*|предыдущ\w*|прошл\w*|наш\w*|мо\w*)\s+){0,2}'
+                             r'(?:task|work|задач\w*|работ\w*|тз)\b', text, re.IGNORECASE)):
             raise ValueError('the selected task is closed; use --new-task with the full scope')
         continuity._ensure_idle(root)
         binding = continuity.state.open_change_binding(root)
