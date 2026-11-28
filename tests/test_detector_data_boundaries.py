@@ -114,13 +114,14 @@ class CompleteSourceProofTests(unittest.TestCase):
             ('ordinary', 'class Ordinary:\n    def enqueue(self, work): pass\n    def put(self, work): pass\ndef helper(): return Ordinary()\n'),
         )
         for provider_name, provider in providers:
+            repo = GitArchitectureRepo(self)
+            repo.model(_system(), _rules())
+            repo.write_text('provider.py', provider)
+            repo.write_text('bridge.py', 'from provider import helper\n')
+            base = repo.commit('queue-returning or ordinary source')
             for label, operation in operations.items():
                 with self.subTest(provider=provider_name, operation=label):
-                    repo = GitArchitectureRepo(self)
-                    repo.model(_system(), _rules())
-                    repo.write_text('provider.py', provider)
-                    repo.write_text('bridge.py', 'from provider import helper\n')
-                    base = repo.commit('queue-returning or ordinary source')
+                    repo.git('switch', '--quiet', '--detach', base)
                     # With/for are source-policy contrasts, not a claim that real
                     # queue classes implement context/iteration protocols.
                     if provider_name == 'stdlib':
