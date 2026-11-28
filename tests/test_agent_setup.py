@@ -45,8 +45,8 @@ def _exported(home: Path) -> dict[str, str]:
             if line.split('=', 1)[0] in names}
 
 
-@unittest.skipIf(os.name == 'nt', 'POSIX file modes and shell profiles')
 class AgentSetupTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'POSIX file modes and shell profiles')
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name)
@@ -295,6 +295,15 @@ class AgentSetupTests(unittest.TestCase):
         with mock.patch.object(agent_setup, 'AGENTS', ('qwen',)):
             with self.assertRaises(ValueError):
                 configure('codex', 'openrouter', self.home, key=KEY)
+
+
+class SetupFixtureCostTests(unittest.TestCase):
+    def test_local_url_comparisons_do_not_request_a_paid_call(self):
+        from getzilla.cost_guard import python_findings
+        fixture = Path(__file__)
+        comparisons = {'self.assertEqual', 'self.assertIn'}
+        findings = python_findings(fixture.name, fixture.read_bytes())
+        self.assertEqual([item for item in findings if item.detail in comparisons], [])
 
 
 class ProjectSetupOrderingTests(unittest.TestCase):
