@@ -1123,7 +1123,7 @@ class CoverageLayout(unittest.TestCase):
                 if 'Z (zombie)' in status.read_text():
                     diagnostics.ownership_mark('descendant-check', status='returned', descendant='zombie')
                     return
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 diagnostics.ownership_mark('descendant-check', status='returned', descendant='absent')
                 return
             if attempt < 100:
@@ -1133,7 +1133,7 @@ class CoverageLayout(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux procfs descendant observation')
     def test_descendant_wait_observes_its_last_interval(self):
-        for final_state in ('absent', 'zombie', 'running'):
+        for final_state in ('absent', 'reaped', 'zombie', 'running'):
             with self.subTest(final_state=final_state), tempfile.TemporaryDirectory() as directory:
                 marker = Path(directory) / 'grandchild.pid'
                 marker.write_text('42')
@@ -1146,6 +1146,8 @@ class CoverageLayout(unittest.TestCase):
                     if len(sleeps) == 100:
                         if final_state == 'absent':
                             raise FileNotFoundError
+                        if final_state == 'reaped':
+                            raise ProcessLookupError
                         if final_state == 'zombie':
                             return 'State:\tZ (zombie)\n'
                     return 'State:\tS (sleeping)\n'
