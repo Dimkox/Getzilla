@@ -193,3 +193,27 @@ class RegistryBoundaryControls(unittest.TestCase):
         )
         with mock.patch("getzilla.architecture_diff._run_capped", return_value=(1, b"", stderr.getvalue().encode())):
             registry.BoundedHTTP(deadline=registry.time.monotonic() + 1).bootstrap()
+
+
+class ParentRegistryDeadlineTests(unittest.TestCase):
+    def local_worker(self, program, *, seconds=5, maximum=64):
+        # Replace only the isolated child program. The parent exercises real
+        # process capture, limits and cleanup; no request leaves the machine.
+        with mock.patch.object(registry, "_BOOTSTRAP", program), self.assertRaises(registry.RegistryError) as caught:
+            registry.BoundedHTTP(deadline=time.monotonic() + seconds).get("invalid://local", {}, maximum)
+        return caught.exception.detail
+
+    def test_deadline_reports_framed_stdout_read_by_parent(self):
+        fault = self.local_worker("import os,time; os.write(1,b'header\\nabc'); time.sleep(60)", seconds=1)
+        self.assertEqual(fault["category"], "timeout")
+        self.assertGreater(fault["timeout_ms"], 0)
+        self.assertLessEqual(fault["timeout_ms"], 1000)
+        self.assertEqual(fault["framed_stdout_bytes_read"], 10)
+        self.assertIsNone(fault["exit_code"])
+
+    def test_output_limit_and_nonzero_worker_exit_stay_distinct(self):
+        overflow = self.local_worker("import os;os.write(1,b'x'*8192)", maximum=1)
+        self.assertEqual(overflow["category"], "bound")
+        self.assertGreater(overflow["framed_stdout_bytes_read"], 1025)
+        failed = self.local_worker("raise SystemExit(7)")
+        self.assertEqual((failed["category"], failed["exit_code"]), ("worker", 7))

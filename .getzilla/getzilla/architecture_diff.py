@@ -195,6 +195,15 @@ class _ThreadedPipes:
             thread.join(timeout=5.0)
 
 
+class CappedProcessError(ArchitectureError):
+    """A parent-enforced capture bound; stdout includes framing bytes."""
+
+    def __init__(self, code: str, stdout_bytes: int):
+        bound = "timeout" if code == "timeout" else "output limit"
+        super().__init__(f"bounded process {bound} exceeded", code=code)
+        self.stdout_bytes = stdout_bytes
+
+
 def _collect_threaded(
     process: subprocess.Popen[bytes],
     *,
@@ -223,7 +232,7 @@ def _collect_threaded(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _stop_process(process)
-                raise ArchitectureError("bounded process timeout exceeded", code="timeout")
+                raise CappedProcessError("timeout", len(streams[process.stdout][0]))
             event = pipes.next(remaining)
             if event is None:
                 continue
@@ -238,16 +247,16 @@ def _collect_threaded(
             buffer.extend(chunk)
             if len(buffer) > limit:
                 _stop_process(process)
-                raise ArchitectureError("bounded process output limit exceeded", code="limit")
+                raise CappedProcessError("limit", len(streams[process.stdout][0]))
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _stop_process(process)
-            raise ArchitectureError("bounded process timeout exceeded", code="timeout")
+            raise CappedProcessError("timeout", len(streams[process.stdout][0]))
         try:
             returncode = process.wait(timeout=remaining)
         except subprocess.TimeoutExpired as exc:
             _stop_process(process)
-            raise ArchitectureError("bounded process timeout exceeded", code="timeout") from exc
+            raise CappedProcessError("timeout", len(streams[process.stdout][0])) from exc
         return returncode, bytes(streams[process.stdout][0]), bytes(streams[process.stderr][0])
     finally:
         if process.poll() is None:
@@ -338,11 +347,11 @@ def _run_capped(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _stop_process(process)
-                raise ArchitectureError("bounded process timeout exceeded", code="timeout")
+                raise CappedProcessError("timeout", len(streams[process.stdout][0]))
             events = selector.select(remaining)
             if not events and time.monotonic() >= deadline:
                 _stop_process(process)
-                raise ArchitectureError("bounded process timeout exceeded", code="timeout")
+                raise CappedProcessError("timeout", len(streams[process.stdout][0]))
             for key, _mask in events:
                 stream = key.fileobj
                 if pipe_input and stream is process.stdin:
@@ -366,16 +375,16 @@ def _run_capped(
                 buffer.extend(chunk)
                 if len(buffer) > limit:
                     _stop_process(process)
-                    raise ArchitectureError("bounded process output limit exceeded", code="limit")
+                    raise CappedProcessError("limit", len(streams[process.stdout][0]))
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _stop_process(process)
-            raise ArchitectureError("bounded process timeout exceeded", code="timeout")
+            raise CappedProcessError("timeout", len(streams[process.stdout][0]))
         try:
             returncode = process.wait(timeout=remaining)
         except subprocess.TimeoutExpired as exc:
             _stop_process(process)
-            raise ArchitectureError("bounded process timeout exceeded", code="timeout") from exc
+            raise CappedProcessError("timeout", len(streams[process.stdout][0])) from exc
         return returncode, bytes(streams[process.stdout][0]), bytes(streams[process.stderr][0])
     finally:
         if selector is not None:

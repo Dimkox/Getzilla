@@ -198,7 +198,7 @@ class BoundedHTTP:
         raise RegistryError('registry bootstrap protocol refused')
 
     def get(self, url, headers, maximum):
-        from .architecture_diff import _run_capped, ArchitectureError
+        from .architecture_diff import _run_capped, ArchitectureError, CappedProcessError
         remaining = min(30, self.deadline - time.monotonic())
         if remaining <= 0:
             raise RegistryError('registry aggregate deadline exceeded')
@@ -212,6 +212,11 @@ class BoundedHTTP:
                 stdin_data=payload, stdout_limit=maximum + 1024, stderr_limit=2048, timeout=remaining)
         except (OSError, ArchitectureError) as error:
             detail = _request_fault(url, 'worker', 'registry-worker', errno=getattr(error, 'errno', None))
+            if isinstance(error, CappedProcessError):
+                detail.update(category='timeout' if error.code == 'timeout' else 'bound',
+                              framed_stdout_bytes_read=error.stdout_bytes)
+                if error.code == 'timeout':
+                    detail['timeout_ms'] = round(remaining * 1000)
             detail.update(exit_code=None, command_id='registry-worker')
             raise RegistryError('bounded registry worker incomplete', detail=detail) from None
         header, separator, body = raw.partition(b'\n')
