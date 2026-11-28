@@ -58,6 +58,9 @@ class RetrievalTraceTests(unittest.TestCase):
         result, packet = self.query()
         operation = result.get('trace_operation_id')
         self.assertIsInstance(operation, str, 'actual retrieval must publish its own observed read operation')
+        if not result['trace_observation_delivered']:
+            self.assertTrue(sprint_lifecycle.deliver(self.root, self.route['route_id']),
+                            'The owner could not acknowledge the stored observations in a fresh delivery window')
         source = load_local(self.root)
         report = reconstruct(source['events'], operation, '2099-01-01T00:00:00Z')
         self.assertEqual(report['outcome'], 'succeeded')
