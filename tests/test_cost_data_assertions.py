@@ -38,6 +38,12 @@ class AssertionCostBoundaryTests(unittest.TestCase):
                     'def test_endpoint(self):\n    self.assertEqual(preview.endpoint, "https://api.openai.com/v1/responses")\n', '    ')
                 self.assertEqual(self.findings(source), [])
 
+    def test_local_setup_url_comparisons_do_not_request_a_paid_call(self):
+        fixture = 'tests/test_agent_setup.py'
+        comparisons = {'self.assertEqual', 'self.assertIn'}
+        findings = python_findings(fixture, (ROOT / fixture).read_bytes())
+        self.assertEqual([item for item in findings if item.detail in comparisons], [])
+
     def test_nested_provider_call_is_still_found_inside_a_proven_assertion(self):
         found = self.findings('''
             import unittest

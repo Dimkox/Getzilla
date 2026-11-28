@@ -45,8 +45,8 @@ def _exported(home: Path) -> dict[str, str]:
             if line.split('=', 1)[0] in names}
 
 
-@unittest.skipIf(os.name == 'nt', 'POSIX file modes and shell profiles')
 class AgentSetupTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'POSIX file modes and shell profiles')
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name)
