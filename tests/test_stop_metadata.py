@@ -383,10 +383,12 @@ class StopMetadataTests(unittest.TestCase):
         self.assertIs(caught.exception, error)
         self.assertEqual([c.details[0]['stop'] for c in error.checks], [self.details(result)] * 2)
         with patch.object(verify, 'git_head', return_value='a'*40), \
-                patch.object(verify, 'run', return_value=SimpleNamespace(returncode=0, stdout='')), \
+                patch.object(verify, 'run', return_value=SimpleNamespace(returncode=0, stdout='')) as status, \
                 patch.object(verify, 'tree_fingerprint', return_value='b'*64), \
                 patch.object(verify, 'run_named_tests', return_value=result):
             report = verify.verify_named_tests(Path('owned'), ['tests.test_owned'])
+        status.assert_called_once_with(['git', '--no-optional-locks', 'status', '--porcelain=v1',
+                                        '--untracked-files=all'], cwd=Path('owned'), timeout=30)
         self.assertEqual(report['checks'][0]['details'][0]['stop'], self.details(result))
         self.assertEqual(report['status'], 'fail')
         with tempfile.TemporaryDirectory() as directory:
