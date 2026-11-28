@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -197,6 +198,30 @@ class StateMachineTests(_Case):
         self.assertEqual(sorted(path.name for path in self.target.iterdir()), ['foreign.txt'])
 
     def test_crash_after_each_transition_can_resume_or_abort(self) -> None:
+        # Exercise the real installer and both ordinary files and owned baseline blobs
+        # at every transition with one shipped asset set instead of the full distribution.
+        from getzilla.baseline_assets import BLOB_PREFIX
+        from getzilla.source_managed_layer import load_installer
+        installer = load_installer()
+        home = self.base / 'installer-input'
+        config_path = '.getzilla/config/toolchain.json'
+        config = json.loads((ROOT / config_path).read_bytes())
+        component = next(row for row in config['workflow_sources']['components'] if row['id'] == 'spec-kit')
+        asset = component['generated_assets']['codex-sh']
+        component['generated_assets'] = {'codex-sh': asset}
+        config['workflow_sources']['components'] = [component]
+        write_tree(home, {config_path: json.dumps(config)})
+        manifest = json.loads((ROOT / asset['path']).read_bytes())
+        files = (set(installer.MANAGED_FILES) - set(installer.ROOT_HOOK_SHIMS)) | {
+            installer.ROOT_HOOK_SHIM_TEMPLATE, installer.CONSUMER_AGENTS_TEMPLATE,
+            installer.CONSUMER_FACTORY_README_TEMPLATE, asset['path'],
+            *(BLOB_PREFIX + entry['sha256'] + '.txt' for entry in manifest['files']),
+        }
+        for relative in sorted(files):
+            path = home / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(ROOT / relative, path)
+
         stages = ['SNAPSHOT_VERIFIED', 'SHADOW_MATERIALIZED', 'GIT_INITIALIZED', 'SOURCE_BASELINE_COMMITTED',
                   'GETZILLA_PLANNED', 'MANAGED_LAYER_COMMITTED', 'INTEGRITY_VERIFIED']
         for index, stage in enumerate(stages):
@@ -212,7 +237,7 @@ class StateMachineTests(_Case):
                         raise KeyboardInterrupt('simulated crash')
 
                 with mock.patch.object(Journal, 'advance', crash), self.assertRaises(KeyboardInterrupt):
-                    run_adoption(plan, plan.plan_id, quiesced=True, home=ROOT, state_root=state_root)
+                    run_adoption(plan, plan.plan_id, quiesced=True, home=home, state_root=state_root)
                 self.assertFalse(target.exists())
                 operation = operation_id_for(plan.plan_id)
                 if index % 2:
@@ -220,7 +245,7 @@ class StateMachineTests(_Case):
                     self.assertFalse(target.exists())
                     self.assertTrue((state_root / 'store').exists())  # shared snapshot store kept
                 else:
-                    receipt = resume_adoption(operation, quiesced=True, home=ROOT, state_root=state_root)
+                    receipt = resume_adoption(operation, quiesced=True, home=home, state_root=state_root)
                     self.assertEqual(receipt['state'], 'PUBLISHED_LOCAL')
                     self.assertEqual(receipt['integrity_status'], 'verified')
 
