@@ -130,6 +130,20 @@ class OpenRouterRehearsalTests(unittest.TestCase):
         transport.request.assert_not_called()
         self.assertEqual(result['reason'], 'request_budget_exhausted')
 
+    def test_late_successful_reply_keeps_previous_checkpoint(self):
+        from unittest.mock import Mock
+        transport = Mock()
+        transport.price_observation.return_value = free_policy()['admission']
+        with patch('time.monotonic', return_value=0) as clock:
+            def reply(model, step):
+                if step['role'] == 'helper':
+                    clock.return_value = 61
+                return 'ok'
+            transport.request.side_effect = reply
+            result = self.run_fixture([self.step(), self.step('helper')], transport)
+        self.assertEqual((result['reason'], result['checkpoint'], result['requests']),
+                         ('request_budget_exhausted', 1, 2))
+
     def test_cli_refuses_duplicate_pricing_components(self):
         import io
         from scripts import getzilla_setup_agent

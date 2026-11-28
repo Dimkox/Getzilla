@@ -189,5 +189,8 @@ def rehearse_openrouter(root, model: str, steps: list, *, transport=None) -> dic
         if outcome != 'ok':
             result['reason'] = outcome if outcome in ('429', 'quota_exhausted', 'cancelled') else 'invalid_reply'
             break
+        if time.monotonic() >= deadline:
+            result['reason'] = 'request_budget_exhausted'
+            break
         result['checkpoint'] += 1
     return result
