@@ -1897,7 +1897,7 @@ def _verify_focused_static_seo_landing(
 def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> dict[str, object]:
     """Observe explicit tests on a clean committed HEAD; never publish a receipt."""
     head_before = git_head(root)
-    status = run(['git', 'status', '--porcelain=v1', '--untracked-files=all'], cwd=root, timeout=30)
+    status = run(['git', '--no-optional-locks', 'status', '--porcelain=v1', '--untracked-files=all'], cwd=root, timeout=30)
     if not head_before or status.returncode != 0 or status.stdout:
         raise RunnerError('named smoke requires a clean committed HEAD')
     fingerprint = tree_fingerprint(root)
