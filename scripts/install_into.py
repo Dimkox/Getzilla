@@ -601,9 +601,13 @@ def _check_directory_binding(binding: _DirectoryBinding) -> None:
 
 
 class _SourceTree:
-    def __init__(self, source: Path) -> None:
+    def __init__(self, source: Path, *, adoption_copy: bool = False) -> None:
+        self.adoption_copy = adoption_copy and os.name == "posix"
         self.binding = _open_directory_binding(source)
         try:
+            if self.adoption_copy:
+                for _, identity in self.binding.components:
+                    self._check_copy_directory(identity[2], ". (installer directory or ancestor)")
             self.managed_roots = {
                 relative: self._snapshot_directory(relative)
                 for relative in MANAGED_DIRS
@@ -620,6 +624,12 @@ class _SourceTree:
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
+
+    @staticmethod
+    def _check_copy_directory(mode: int, relative: str) -> None:
+        if mode & stat.S_IWOTH and not mode & stat.S_ISVTX:
+            raise UnsafeInstallTarget(f"{relative}: directory mode {stat.S_IMODE(mode):04o}; "
+                                      "expected no world write or a sticky directory")
 
     def _snapshot_directory(
         self,
@@ -818,10 +828,12 @@ class _SourceTree:
         parts = _path_parts(relative)
         parent = _dup_directory(self.binding.descriptor)
         try:
-            for component in parts[:-1]:
-                child, _identity_value = _open_child_directory(parent, component)
+            for index, component in enumerate(parts[:-1], start=1):
+                child, identity = _open_child_directory(parent, component)
                 fsx.close_dir(parent)
                 parent = child
+                if self.adoption_copy:
+                    self._check_copy_directory(identity[2], "/".join(parts[:index]))
             before = fsx.lstat_at(parent, parts[-1])
             if not stat.S_ISREG(before.st_mode) or fsx.is_link(before):
                 raise UnsafeInstallTarget(
@@ -850,7 +862,20 @@ class _SourceTree:
                     f"managed source changed while reading: {relative}"
                 )
             _check_directory_binding(self.binding)
-            return content, stat.S_IMODE(opened.st_mode)
+            mode = stat.S_IMODE(opened.st_mode)
+            blob = relative.startswith(BLOB_PREFIX)
+            if self.adoption_copy and opened.st_uid != os.geteuid():
+                expected = "; expected mode 0644" if blob else ""
+                raise UnsafeInstallTarget(f"{relative}: foreign owner, mode {mode:04o}{expected}; expected current user")
+            if self.adoption_copy and blob:
+                if relative != BLOB_PREFIX + hashlib.sha256(content).hexdigest() + ".txt":
+                    raise UnsafeInstallTarget(f"{relative}: digest mismatch (mode {mode:04o}; expected 0644)")
+                if mode == 0o664:
+                    # Only the payload copy gets this mode. The declared manifest is verified before publication.
+                    mode = 0o644
+            if blob and not _mode_matches(mode, 0o644):
+                raise UnsafeInstallTarget(f"{relative}: mode {mode:04o}; expected 0644")
+            return content, mode
         except UnsafeInstallTarget:
             raise
         except FileNotFoundError as exc:
@@ -939,10 +964,11 @@ def build_payload(
     *,
     profile_kind: str = "generic",
     selection: "PayloadSelection | None" = None,
+    adoption_copy: bool = False,
 ) -> tuple[InstallEntry, ...]:
     # A projects sync record is that projects state, never payload (an installed project stays
     # a complete source for the same payload).
-    payload = tuple(entry for entry in _build_full_payload(source, profile_kind=profile_kind)
+    payload = tuple(entry for entry in _build_full_payload(source, profile_kind=profile_kind, adoption_copy=adoption_copy)
                     if entry.path not in {STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD, COMPONENT_MANIFEST})
     if selection is not None and selection.search_gateway:
         with _SourceTree(source) as tree:
@@ -972,10 +998,11 @@ def _build_full_payload(
     source: Path,
     *,
     profile_kind: str = "generic",
+    adoption_copy: bool = False,
 ) -> tuple[InstallEntry, ...]:
     if profile_kind not in {"generic", "bitrix"}:
         raise UnsafeInstallTarget(f"unsupported explicit profile kind: {profile_kind}")
-    with _SourceTree(source) as tree:
+    with _SourceTree(source, adoption_copy=adoption_copy) as tree:
         inventory = tree.inventory()
         # A Core installation is a source for its installed components, not for
         # absent Factory files. Its inventoried manifest declares that boundary.

@@ -17,6 +17,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Sequence
 
+from .baseline_assets import BLOB_PREFIX
+from .component_state import BoundRoot
+from .fsx import fstat_dir
 from .source_git import GitEntry, IsolatedGit, commit, expect_tree, tree_entries, write_tree
 from .source_models import domain_digest
 from .source_provenance import PROVENANCE_PATH, provenance_bytes
@@ -37,7 +40,10 @@ class ManagedLayerReceipt:
                 'payload_digest': self.payload_digest, 'files': self.files}
 
 
-def load_installer(home: Path) -> ModuleType:
+def load_installer() -> ModuleType:
+    # GETZILLA_HOME selects input data. Use the installer shipped with this executing engine.
+    archive = getattr(__loader__, 'archive', None)
+    home = Path(archive).resolve().parents[1] if archive else Path(__file__).resolve().parents[2]
     name = '_getzilla_install_into_for_adoption'
     if name in sys.modules:
         return sys.modules[name]
@@ -51,9 +57,9 @@ def load_installer(home: Path) -> ModuleType:
 
 
 def payload_entries(home: Path) -> tuple[GitEntry, ...]:
-    installer = load_installer(home)
+    installer = load_installer()
     try:
-        payload = installer.build_payload(home)
+        payload = installer.build_payload(home, adoption_copy=True)
     except installer.UnsafeInstallTarget as exc:
         raise AdoptionError('TOOL_ERROR', f'Getzilla payload is not safely readable: {exc}') from exc
     return tuple(GitEntry(entry.path, '100755' if entry.mode & 0o111 else '100644', entry.content) for entry in payload)
@@ -93,14 +99,23 @@ def plan_managed_layer(shadow: Path, home: Path, source_paths: set[str]) -> tupl
 
 
 def apply_managed_layer(shadow: Path, home: Path, provenance: dict, source_paths: set[str], source_commit: str,
-                        *, timestamp: str) -> ManagedLayerReceipt:
+                        *, timestamp: str, shadow_identity: tuple[int, int]) -> ManagedLayerReceipt:
     entries, collisions = plan_managed_layer(shadow, home, source_paths)
     if collisions:
         raise AdoptionError('TARGET_CONFLICT', 'source-owned files collide with the Getzilla layer: '
                             + ', '.join(collisions[:20]))
     new_entries = [entry for entry in entries if entry.path not in source_paths]
-    for entry in new_entries:
-        _write(shadow.joinpath(*entry.path.split('/')), entry.content, entry.mode == '100755')
+    with BoundRoot(shadow) as owned:
+        info = fstat_dir(owned.handle)
+        if (info.st_dev, info.st_ino) != shadow_identity:
+            raise AdoptionError('TARGET_CONFLICT', 'staging directory changed before managed file publication')
+        for entry in new_entries:
+            if os.name == 'posix' and entry.path.startswith(BLOB_PREFIX):
+                if info.st_uid != os.geteuid():
+                    raise AdoptionError('TOOL_ERROR', f'{entry.path}: installer staging directory has foreign owner')
+                owned.write(entry.path, entry.content, 0o644, expected=None, before_publish=owned.check)
+            else:
+                _write(shadow.joinpath(*entry.path.split('/')), entry.content, entry.mode == '100755')
     record = GitEntry(PROVENANCE_PATH, '100644', provenance_bytes(provenance))
     _write(shadow.joinpath(*PROVENANCE_PATH.split('/')), record.content, False)
     with IsolatedGit(shadow, timestamp=timestamp) as git:

@@ -466,7 +466,12 @@ def _present(root, path, anchor=None):
     return anchor.exists(path.relative_to(root)) if anchor is not None else path.exists() or path.is_symlink()
 
 
-def discovered_route(root: Path, *, anchor=None) -> dict[str, Any] | None:
+def _torn_route_read(error: BaseException) -> bool:
+    from .package_status import InspectionError
+    return isinstance(error, InspectionError) and error.code == 'file_changed'
+
+
+def discovered_route(root: Path, *, anchor=None, raise_on_torn_read: bool = False) -> dict[str, Any] | None:
     """Read-only global discovery never changes session or grants mutation authority."""
     from .continuity import has_task_context, validate_route
     path = _runtime(root) / 'active-route.json'
@@ -483,7 +488,9 @@ def discovered_route(root: Path, *, anchor=None) -> dict[str, Any] | None:
         if not has_task_context(locator):
             validate_route(root, locator, anchor=anchor)
             return locator
-    except (OSError, ValueError):
+    except (OSError, ValueError) as error:
+        if raise_on_torn_read and _torn_route_read(error):
+            raise
         return None
     return None
 
@@ -498,7 +505,8 @@ def route_authority_present(root: Path, *, anchor=None) -> bool:
 
 def require_route_owner(root: Path, route: dict[str, Any] | None = None, *, anchor=None) -> dict[str, Any]:
     from .continuity import has_task_context
-    route = get_active_route(root, anchor=anchor) if route is None else route
+    # Strict ownership checks retain a torn-read refusal for callers with a bounded retry.
+    route = get_active_route(root, anchor=anchor, raise_on_torn_read=True) if route is None else route
     if not route:
         raise ValueError('task authority unavailable; use explicit --session with --continue or --new-task')
     if has_task_context(route) and current_session() != route.get('session_id'):
@@ -512,7 +520,7 @@ def _session_pointer(root: Path, session_id: str) -> Path:
     return _runtime(root) / 'sessions' / f'{session_id}.json'
 
 
-def get_active_route(root: Path, *, anchor=None) -> dict[str, Any] | None:
+def get_active_route(root: Path, *, anchor=None, raise_on_torn_read: bool = False) -> dict[str, Any] | None:
     from .continuity import has_task_context
     session = current_session()
     if session:
@@ -531,9 +539,11 @@ def get_active_route(root: Path, *, anchor=None) -> dict[str, Any] | None:
                 ):
                     return None
                 return route
-            except (OSError, ValueError, TypeError):
+            except (OSError, ValueError, TypeError) as error:
+                if raise_on_torn_read and _torn_route_read(error):
+                    raise
                 return None
-    route = discovered_route(root, anchor=anchor)
+    route = discovered_route(root, anchor=anchor, raise_on_torn_read=raise_on_torn_read)
     if route and session and route.get('session_id') != session:
         legacy_owner = route.get('session_id')
         if has_task_context(route) or (isinstance(legacy_owner, str) and legacy_owner != 'manual' and _SESSION_ID.fullmatch(legacy_owner)):

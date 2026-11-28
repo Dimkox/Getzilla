@@ -1321,9 +1321,9 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                 real_init = MODULE._SourceTree.__init__
                 swapped = False
 
-                def bind_then_relocate(tree, source_path):
+                def bind_then_relocate(tree, source_path, **options):
                     nonlocal swapped
-                    real_init(tree, source_path)
+                    real_init(tree, source_path, **options)
                     if swapped:
                         return
                     swapped = True

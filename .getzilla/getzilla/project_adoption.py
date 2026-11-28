@@ -132,7 +132,7 @@ def _run_stages(journal: Journal, state: OperationState, plan: AdmissionPlan, ho
     journal.advance(state, 'GETZILLA_PLANNED')
     provenance = build_source_provenance(plan, snapshot, baseline)
     managed = apply_managed_layer(staging, home, provenance, source_paths, baseline.identity.commit_oid or '',
-                                  timestamp=state.timestamp)
+                                  timestamp=state.timestamp, shadow_identity=shadow.identity)
     journal.advance(state, 'MANAGED_LAYER_COMMITTED', managed_commit=managed.managed_commit,
                     managed_tree=managed.managed_tree, payload_digest=managed.payload_digest)
     verification = verify_adoption(staging, plan, source_commit=baseline.identity.commit_oid or '',

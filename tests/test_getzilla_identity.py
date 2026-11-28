@@ -28,6 +28,7 @@ HISTORICAL_PREFIXES = (
 )
 HISTORICAL_FILES = frozenset(
     {
+        ".getzilla/config/retire-baseline-v2.1.1.txt",  # exact paths from the verified predecessor ZIP
         "CHANGELOG.md",
         "mistakes.md",
         "decisions.md",

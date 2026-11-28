@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.known_vulns import ECOSYSTEMS, VulnerabilityError, download_database, recheck_report, scan  # noqa: E402
+from getzilla.known_vulns import ECOSYSTEMS, VulnerabilityError, download_database, lockfile_gate, recheck_report, scan  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
 from getzilla.security_data import osv_alias_text  # noqa: E402
 
@@ -49,6 +49,7 @@ try:
             raise VulnerabilityError(result['reason'])
     report = scan(root, environ=environ)
     recheck_report(root, report, environ=environ)
+    report = lockfile_gate(report)
 except VulnerabilityError as exc:
     print(f'getzilla_vulns: {exc}', file=sys.stderr)
     raise SystemExit(2) from exc
@@ -73,7 +74,8 @@ else:
             fixes = '; '.join(
                 f"{item['id']}: fixed in {', '.join(item['fixed'])}" if item['fixed']
                 else f"{item['id']}: no fixed version published" for item in items)
-            print(f"::error file={manifest},title={ecosystem} {package} {version}: {len(items)} known vulnerabilities::{fixes}. Review the advisory release ranges before selecting an upgrade.")
+            level = 'error' if any(item['fixed'] for item in items) else 'notice'
+            print(f"::{level} file={manifest},title={ecosystem} {package} {version}: {len(items)} known vulnerabilities::{fixes}. Review the advisory release ranges before selecting an upgrade.")
     for item in report['accepted']:
         print(f"  accepted until {item['accepted_until']}: {item['package']} {item['version']} {item['id']}")
 status = report['status']

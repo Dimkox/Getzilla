@@ -19,6 +19,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 
 from . import continuity, execution, execution_store, fsx, policy, state
 from .execution_output import PREVIEW_BYTES
@@ -38,6 +39,7 @@ _LAUNCHER = (
     "os.execve(fd,sys.argv[3:],{'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'})\n"
 )
 _MAX_BINARY = 64 * 1024 * 1024
+_STOP_GRACE_SECONDS = 1.0
 
 
 def supported():
@@ -216,6 +218,18 @@ def _done(pidfd):
     return os.waitid(os.P_PIDFD, pidfd, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
 
 
+def _request_group_stop(process, drain):
+    # Keep the leader unreaped for the entire grace period, even if a
+    # descendant takes longer than its leader to finish its TERM handler.
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except OSError:
+        return  # The finally block still forces and verifies cleanup.
+    deadline = time.monotonic() + _STOP_GRACE_SECONDS
+    while (remaining := deadline - time.monotonic()) > 0:
+        drain(remaining)
+
+
 def _cleanup(process):
     # Do not poll()/reap before killpg: the unreaped owned leader prevents PGID reuse.
     try:
@@ -326,6 +340,7 @@ class Backend:
                 if watcher != 'running':
                     status, reason = ('timed_out', 'managed_deadline') if watcher == 'deadline' else (
                         'cancelled', 'managed_stop')
+                    _request_group_stop(process, drain)
                     break
                 if _done(pidfd):
                     status, reason = 'succeeded', 'managed_exit'

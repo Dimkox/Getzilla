@@ -64,6 +64,34 @@ class ExpandedSecurityTests(unittest.TestCase):
         obligations = security_obligations(self.root, now=NOW)
         self.assertTrue(all(item['applicability'] == 'required' for item in obligations))
 
+    def test_standalone_pr_osv_requires_lockfile_evidence_independently_of_images(self):
+        from getzilla.expanded_security import lockfile_check, lockfile_obligation
+
+        config = self.root / '.getzilla/config'
+        config.mkdir(parents=True)
+        (config / 'ci-images.json').write_text(json.dumps({
+            'schema_version': 1, 'platform': 'linux/amd64', 'postgres': {'reference': 'postgres:latest'}}))
+        req = self.root / 'requirements.txt'
+        self.assertEqual(lockfile_check(self.root)['status'], 'skip')
+        req.write_text('sample==1.0.0\n')
+        self.assertEqual(lockfile_obligation(self.root)['applicability'], 'required')
+        self.assertEqual(lockfile_check(self.root)['status'], 'fail')
+        with mock.patch(__name__ + '.NOW', datetime.now(timezone.utc)):
+            self.osv()
+        result = lockfile_check(self.root)
+        self.assertEqual(result['status'], 'pass')
+        self.assertEqual(result['details'][0]['outcome'], 'pass')
+        self.assertEqual([hit['id'] for hit in result['details'][0]['findings']], ['GHSA-fixture'])
+        req.write_text('sample==2.0.0\n')
+        plan = lockfile_obligation(self.root)
+        result = lockfile_check(self.root)
+        self.assertEqual(result['status'], 'pass', result['summary'])
+        detail = result['details'][0]
+        self.assertEqual(detail['inventory_sha256'], plan['evidence']['inventory_sha256'])
+        self.assertEqual(detail['data_sources'], plan['data_sources'])
+        self.assertTrue(validate_data_source(plan['data_sources'][0], root=self.root))
+        self.assertEqual(known_vulnerability_check(self.root)['status'], 'fail')
+
     def test_fresh_acquisition_does_not_hide_old_epss_prediction_or_bad_kev_count(self):
         (self.root / 'requirements.txt').write_text('sample==1.0.0\n')
         self.osv()

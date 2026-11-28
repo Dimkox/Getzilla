@@ -127,11 +127,37 @@ class NativeOsvRangeTests(unittest.TestCase):
                                  '--json', '--db', directory], cwd=root,
                                 env={**os.environ, 'GETZILLA_OSV_ONLINE': '0'},
                                 capture_output=True, text=True, timeout=10)
-                        self.assertEqual(result.returncode, 1 if expected else 0, result.stderr)
+                        self.assertEqual(result.returncode, 0, result.stderr)
                         report = json.loads(result.stdout)
-                        self.assertEqual(report['status'], 'fail' if expected else 'pass')
+                        self.assertEqual(report['status'], 'pass')
                         self.assertEqual([row['id'] for row in report['findings']],
                                          ['OSV-SYNTHETIC-LITERAL'] if expected else [])
+
+    def test_lockfile_gate_uses_only_fixed_versions_for_the_matched_package(self) -> None:
+        for severity, fixed, expected in [('LOW', '3.1.3', 'fail'), ('', '3.1.3', 'fail'),
+                                          ('CRITICAL', None, 'pass'), ('', None, 'pass')]:
+            with self.subTest(severity=severity, fixed=fixed):
+                tmp, root = fixtures._repo({'requirements.txt': 'jinja2==2.11.0\n'})
+                scope = {'package': {'ecosystem': 'PyPI', 'name': 'jinja2'}, 'versions': ['2.11.0']}
+                if fixed:
+                    scope['ranges'] = fixtures.JINJA['affected'][0]['ranges']
+                other = {**fixtures.JINJA['affected'][0], 'package': {'ecosystem': 'PyPI', 'name': 'other'}}
+                record = {**fixtures.JINJA, 'database_specific': {'severity': severity}, 'affected': [other, scope]}
+                with tmp, tempfile.TemporaryDirectory() as db:
+                    fixtures._mirror(Path(db), 'PyPI', [record])
+                    report = KV.lockfile_gate(KV.scan(root, environ={'GETZILLA_OSV_DB': db}))
+                self.assertEqual(report['status'], expected)
+                self.assertEqual([row['id'] for row in report['findings']], [fixtures.JINJA['id']])
+
+    def test_lockfile_gate_preserves_failures_without_source_evidence(self):
+        report = {'status': 'fail', 'source_mode': 'query', 'source_evidence': [], 'findings': [{'fixed': []}]}
+        self.assertEqual(KV.lockfile_gate(report)['status'], 'fail')
+
+    def test_git_commit_does_not_qualify_as_a_package_fix(self) -> None:
+        scope = {**fixtures.JINJA['affected'][0], 'ranges': [
+            {'type': 'GIT', 'events': [{'introduced': '0'}, {'fixed': 'a' * 40}]}]}
+        dependency = KV.Dependency('PyPI', 'jinja2', '2.11.0', 'requirements.txt')
+        self.assertEqual(KV._describe({**fixtures.JINJA, 'affected': [scope]}, dependency).fixed, [])
 
     @staticmethod
     def _enumeration_record():

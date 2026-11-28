@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -264,7 +265,12 @@ class ManagedExecutionTests(unittest.TestCase):
         self.assertEqual(results[0]['cleanup_status'], 'confirmed')
 
     def test_stop_interrupts_owned_running_group_and_confirms_cleanup(self):
-        self.configure('/usr/bin/sleep', ['20'])
+        script = self.root / 'owned-job.sh'
+        script.write_text("trap 'rm -f .getzilla/runtime/owned-resource; exit 0' TERM\n"
+                          ": > .getzilla/runtime/owned-resource\nwhile :; do sleep 1; done\n")
+        script.chmod(0o644)
+        marker = self.root / '.getzilla/runtime/owned-resource'
+        self.configure('/bin/sh', [str(script)])
         results, failures = [], []
         def runner():
             try:
@@ -278,7 +284,8 @@ class ManagedExecutionTests(unittest.TestCase):
             while time.monotonic() < deadline:
                 with state.task_transition(self.root):
                     records = store.load_registry(self.root)['records'].values()
-                if any((item.get('launch') or {}).get('phase') == 'released' for item in records):
+                if marker.exists() and any((item.get('launch') or {}).get('phase') == 'released'
+                                           for item in records):
                     break
                 time.sleep(.01)
             else:
@@ -293,12 +300,20 @@ class ManagedExecutionTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(failures, [])
         self.assertEqual(results[0]['execution_status'], 'cancelled')
+        self.assertFalse(marker.exists(), 'the cancelled job could not release its owned resource')
         self.assertEqual(results[0]['cleanup_status'], 'confirmed')
         self.assertEqual(execution.control_status(self.root, self.caller)['unconfirmed_attempts'], 0)
 
-    def test_deadline_terminates_and_records_actual_cleanup(self):
-        self.configure('/usr/bin/sleep', ['20'])
-        result = self.run_tool(timeout=1)
+    def test_deadline_forces_cleanup_when_owned_process_ignores_term(self):
+        script = self.root / 'stubborn-job.sh'
+        script.write_text("trap '' TERM\n: > .getzilla/runtime/ignoring-term\nexec sleep 30\n")
+        script.chmod(0o644)
+        self.configure('/bin/sh', [str(script)])
+        from getzilla import managed_execution
+        with patch.object(managed_execution, '_cleanup', wraps=managed_execution._cleanup) as cleanup:
+            result = self.run_tool(timeout=2)
+        self.assertTrue((self.root / '.getzilla/runtime/ignoring-term').exists())
+        self.assertEqual(cleanup.call_args.args[0].returncode, -signal.SIGKILL)
         self.assertEqual(result['execution_status'], 'timed_out')
         self.assertEqual(result['cleanup_status'], 'confirmed')
 

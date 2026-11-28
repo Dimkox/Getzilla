@@ -1019,6 +1019,9 @@ def _pypi_key(version: str) -> tuple[Any, ...]:
 
 
 def _range_key(version: str, *, kind: str, ecosystem: str) -> tuple[Any, ...]:
+    if kind == 'ECOSYSTEM' and ecosystem == 'Packagist':
+        from .security_artifacts import composer_release_key
+        return composer_release_key(version, VulnerabilityError)
     if kind == 'SEMVER':
         return _semver_key(version)
     if kind == 'ECOSYSTEM' and ecosystem == 'PyPI':
@@ -1089,6 +1092,10 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
     # Validate ALL coverage before matching: a positive or accepted finding
     # must not erase an unsupported range in the same affected entry.
     matches = [_range_contains(version, item, ecosystem=ecosystem) for item in ranges]
+    if versions and ecosystem == 'Packagist':
+        target = _range_key(version, kind='ECOSYSTEM', ecosystem=ecosystem)
+        matches.extend(target == _range_key(value, kind='ECOSYSTEM', ecosystem=ecosystem) for value in versions)
+        return any(matches)
     if version in versions:
         return True
     if versions:
@@ -1142,8 +1149,13 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
         severity = severity or str(specific.get('severity') or '')
         for item in affected.get('ranges') or []:
             for event in item.get('events') or []:
-                if 'fixed' in event and str(event['fixed']) not in fixed:
-                    fixed.append(str(event['fixed']))
+                if 'fixed' not in event or item.get('type') == 'GIT':
+                    continue
+                version = event['fixed']
+                if item.get('type') not in {'SEMVER', 'ECOSYSTEM'} or not isinstance(version, str) or not version.strip():
+                    raise VulnerabilityError('malformed OSV fixed version')
+                if version not in fixed:
+                    fixed.append(version)
     specific = record.get('database_specific') or {}
     severity = str(specific.get('severity') or severity or '')
     if not severity:
@@ -1362,6 +1374,17 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
         except SecurityDataError as error:
             raise VulnerabilityError(str(error)) from error
     return report
+
+
+def lockfile_gate(report: dict[str, Any]) -> dict[str, Any]:
+    """Apply lockfile admission to the native scan, retaining every observed advisory."""
+    if (report['status'] != 'fail' or not report['findings']
+            or report.get('source_mode') not in {'offline', 'query'} or not report.get('source_evidence')):
+        return report
+    blocking = sum(bool(item['fixed']) for item in report['findings'])
+    reported = len(report['findings']) - blocking
+    return {**report, 'status': 'fail' if blocking else 'pass',
+            'summary': f"{report['summary']}: {blocking} with a fixed version, {reported} report only"}
 
 
 def recheck_report(root: Path, report: dict[str, Any], *, environ: dict[str, str] | None = None,

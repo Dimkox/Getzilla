@@ -133,6 +133,8 @@ be `pass`. The aggregate requires the correct baseline mode and old bootstrap
 outcomes for each platform. Candidate clean installation always uses the stock
 candidate installer on every required native pair.
 
+For projects with the v2.1.1 predecessor installed, run `getzilla update project --preview-legacy` inside the clean project. Review the paths marked RETIRE or PRESERVE, then apply with `getzilla update project --retire-legacy`. Retirement requires the cataloged bytes and mode, a tracked file, and the verified current replacement. Runtime state, local edits and unrecognized files stay in place. Before merging, switch back to the original branch to roll back. After merging, revert the update commit on a new branch and review any conflicts.
+
 The [fa8c2cc native run](https://github.com/Dimkox/Getzilla/actions/runs/41882805843)
 observed a Windows x64 clean/upgrade pass. Linux clean installs passed but both
 upgrades stopped at unresolved legacy selection. macOS ARM64 clean passed;

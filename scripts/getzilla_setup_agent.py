@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 import sys
 sys.dont_write_bytecode = True
@@ -19,6 +20,7 @@ from getzilla.agent_setup import (
     NATIVE_ONLY,
     PROVIDERS,
     configure,
+    ollama_project_profile,
     forget_key,
     read_key,
 )
@@ -27,7 +29,22 @@ from getzilla.on_demand import ensure_components, find_installed_project
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ['ollama']:
+        local = argparse.ArgumentParser(prog='getzilla setup-agent ollama')
+        local.add_argument('action', choices=('preview', 'apply', 'rollback'))
+        local.add_argument('token', nargs='?', help='exact token from preview')
+        args = local.parse_args(argv[1:])
+        try:
+            result = ollama_project_profile(Path.cwd(), args.action, args.token)
+        except (ValueError, OSError, RecursionError, OverflowError) as exc:
+            print(f'Local profile refused: {exc}', file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
+
     parser = argparse.ArgumentParser(
+        epilog='Local Qwen Code profile: getzilla setup-agent ollama preview',
         description=(
             'Configure a coding agent and its models. Inside an installed project, validate and add its '
             'adapter before changing user settings. Model keys stay in user configuration, never in the project.'

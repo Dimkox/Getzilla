@@ -467,6 +467,9 @@ from .security_artifacts import _pypi_key as _pypi_key
 
 
 def _range_key(version: str, *, kind: str, ecosystem: str) -> tuple[Any, ...]:
+    if kind == 'ECOSYSTEM' and ecosystem == 'Packagist':
+        from .security_artifacts import composer_release_key
+        return composer_release_key(version, VulnerabilityError)
     if kind == 'SEMVER':
         return _semver_key(version)
     if kind == 'ECOSYSTEM' and ecosystem == 'PyPI':
@@ -522,8 +525,6 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
     versions = affected.get('versions', [])
     if not isinstance(versions, list) or not all(isinstance(value, str) and value for value in versions):
         raise VulnerabilityError('malformed OSV enumerated versions')
-    if version in versions:
-        return True
     package = affected.get('package', {})
     if not isinstance(package, dict):
         raise VulnerabilityError('malformed OSV package')
@@ -531,8 +532,16 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
     ranges = affected.get('ranges', [])
     if not isinstance(ranges, list):
         raise VulnerabilityError('malformed OSV ranges')
+    if ecosystem != 'Packagist' and version in versions:
+        return True
     if not ranges and not versions:
         raise VulnerabilityError('OSV affected version coverage is unknown for matched package')
+    if ecosystem == 'Packagist':
+        matches = [_range_contains(version, item, ecosystem=ecosystem) for item in ranges]
+        if versions:
+            target = _range_key(version, kind='ECOSYSTEM', ecosystem=ecosystem)
+            matches.extend(target == _range_key(value, kind='ECOSYSTEM', ecosystem=ecosystem) for value in versions)
+        return any(matches)
     errors = []
     if versions:
         try:

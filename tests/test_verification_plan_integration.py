@@ -412,6 +412,20 @@ class NativePlanIntegrationTests(unittest.TestCase):
             later = verification_plan.current_required_plan(root, mode='pr')
             self.assertNotEqual(plan['binding']['context'], later['binding']['context'])
 
+    def test_full_pr_dispatch_and_receipt_use_the_standalone_lockfile_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.legacy_project(root)
+            with mock.patch.object(verification_plan, 'standalone_pr_security', return_value=True), \
+                 mock.patch.object(verification, 'expanded_security_checks', side_effect=AssertionError):
+                report = verification.verify(root, mode='pr', record=False)
+                names = {row['name'] for row in report['checks']}
+                self.assertEqual(names & verification_plan.SECURITY_IDS, {'known-vulnerabilities'})
+                self.assertTrue({'secret-scan', 'opengrep'} <= names)
+                self.assertEqual(report['advisory']['security-expanded']['executed'], False)
+                self.assertEqual(verification_plan.report_gaps(root, report), [])
+            self.assertFalse(verification_plan.standalone_pr_security(root, 'pr'))
+
     def test_legacy_native_verify_executes_exact_criterion_and_rejects_stale_proof(self):
         from getzilla.verification import verify
         with tempfile.TemporaryDirectory(prefix='verify-legacy-') as directory:

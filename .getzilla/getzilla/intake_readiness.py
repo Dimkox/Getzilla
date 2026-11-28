@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 
 from .requirements_intake import digest, normalized, project_requirements
-from .workflow_storage import PLACEHOLDER
+from .spec import definition_text_present
 
 
 def question_limits(policy):
@@ -24,22 +24,35 @@ def assess_readiness(spec: dict, provenance: dict, policy: dict) -> dict:
              any(policy.get(key) != data['policy'][key] for key in data['policy']))
     missing = []
 
-    def require(ok, field, reason):
+    def require(ok, field, reason, locator=None):
         if not ok:
-            missing.append({'field': field, 'reason': reason})
+            finding = {'field': field, 'reason': reason}
+            if locator is not None:
+                finding['locator'] = locator
+            missing.append(finding)
 
     objective = spec['objective']
     for key in ('statement', 'success_metric', 'target'):
-        require(bool(objective[key].strip()) and not PLACEHOLDER.search(objective[key]),
+        require(definition_text_present(objective[key]),
                 f'objective.{key}', 'objective_unmeasurable')
     require(bool(data['scope']), 'scope', 'scope_unbounded')
     require(bool(spec['acceptance_criteria']), 'acceptance_criteria', 'criteria_missing')
-    mapped = {identifier for row in data['requirements'] for identifier in row['criterion_ids']}
-    for criterion in spec['acceptance_criteria']:
-        field = 'acceptance_criteria.' + criterion['id']
-        require(bool(criterion['evidence']), field + '.evidence', 'criterion_unmeasurable')
-        require(not PLACEHOLDER.search(criterion['statement']), field + '.statement', 'criterion_unmeasurable')
-        require(criterion['id'] in mapped, field + '.source', 'criterion_unmapped')
+    locators = {source['id']: source['locator'] for source in data['sources']}
+    mapped = {}
+    for row in data['requirements']:
+        locator = locators[row['source_id']]
+        require(row['criterion_ids'], f"requirements.{row['id']}.criterion_ids", 'requirement_unmapped', locator)
+        for identifier in row['criterion_ids']:
+            mapped.setdefault(identifier, locator)
+    for collection, reason in (('acceptance_criteria', 'criterion_unmeasurable'), ('invariants', 'invariant_unmeasurable'),
+                               ('forbidden_outcomes', 'forbidden_outcome_unmeasurable')):
+        for item in spec[collection]:
+            field = f"{collection}.{item['id']}"
+            locator = mapped.get(item['id'])
+            require(bool(item['evidence']), field + '.evidence', reason, locator)
+            require(definition_text_present(item['statement']), field + '.statement', reason, locator)
+            if collection == 'acceptance_criteria':
+                require(item['id'] in mapped, field + '.source', 'criterion_unmapped')
     for dependency in data['dependencies']:
         require(dependency['status'] == 'satisfied', 'dependencies.' + dependency['id'], 'dependency_unresolved')
     require(bool(data['permissions']), 'permissions', 'permission_missing')
@@ -61,7 +74,7 @@ def assess_readiness(spec: dict, provenance: dict, policy: dict) -> dict:
     exhausted = bool(rows) and limits is not None and rounds >= limits['max_question_rounds']
     questions = [] if limits is None or exhausted else [
         {'id': digest([current['draft_digest'], row], 'intake-question-v1'),
-         'field': row['field'], 'reason': row['reason']}
+         **row}
         for row in rows[:limits['max_questions_per_round']]]
     required = 'unsupported_decision_ingress' if data['policy']['decision_required'] else False
     status = ('stale' if stale else 'conflicted' if current['conflicts'] else 'missing' if missing else

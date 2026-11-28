@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 from .architecture_diff import ArchitectureDiff
+from .python_source_proof import queue_declaration_candidates
 
 
 
@@ -20,16 +21,34 @@ def _queue_return_exports_scoped(tree: ast.Module, adapters: frozenset[str],
            for node in _fitness_owner.ast.walk(tree)):
         raise _fitness_owner.ArchitectureError('return projection name collision', code='fitness')
     projections = {}
-    preparation_cost = max(1, (sum(1 for _ in _fitness_owner.ast.walk(tree)) + _fitness_owner.QUEUE_PROJECTION_WORK_NODES - 1)
-                           // _fitness_owner.QUEUE_PROJECTION_WORK_NODES) if isinstance(budget, _fitness_owner._QueueBudget) else 0
-    for node in tree.body:
-        if (isinstance(node, (_fitness_owner.ast.FunctionDef, _fitness_owner.ast.AsyncFunctionDef))
-                and (requested is None or node.name in requested) and node.name not in projections):
-            if isinstance(budget, _fitness_owner._QueueBudget):
+
+    def units(nodes: int) -> int:
+        return (nodes + _fitness_owner.QUEUE_PROJECTION_WORK_NODES - 1) // _fitness_owner.QUEUE_PROJECTION_WORK_NODES
+
+    functions = dict.fromkeys(node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                              and (requested is None or node.name in requested))
+    shared = scalar = None
+    bounded = isinstance(budget, _fitness_owner._QueueBudget)
+    if functions and bounded:
+        preparation_cost = units(sum(1 for _ in ast.walk(tree)))
+        budget.step(cost=preparation_cost)
+        if (preparation_cost > 1 and len(functions) > 1 and _fitness_owner.namespace_is_closed(
+                tree, allow_instrumentation=True, static_import_reads=True, forbidden_imports=_fitness_owner._QUEUE_IMPORTS)):
+            scalar = _fitness_owner._queue_scalar_projection(tree)
+            shared = queue_declaration_candidates(scalar)
+    for name in functions:
+        demand = frozenset({name})
+        if shared is not None:
+            candidate, nodes = shared(name)
+            budget.step(cost=units(nodes))
+            projection = _fitness_owner._queue_export_slice_prepared(candidate, demand)
+        else:
+            if bounded and projections:
                 budget.step(cost=preparation_cost)
-            projection = _fitness_owner._queue_export_slice(tree, frozenset({node.name}))
-            selected = next(item for item in projection.body if isinstance(item, (_fitness_owner.ast.FunctionDef, _fitness_owner.ast.AsyncFunctionDef)) and item.name == node.name)
-            projections[node.name] = (selected, [item for item in projection.body if item is not selected])
+            projection = (_fitness_owner._queue_export_slice_prepared(scalar, demand) if scalar is not None
+                          else _fitness_owner._queue_export_slice(tree, demand))
+        selected = next(item for item in projection.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == name)
+        projections[name] = (selected, [item for item in projection.body if item is not selected])
     dependencies = {}
     for name, (selected, prefix) in projections.items():
         names = {item.id for item in _fitness_owner.ast.walk(selected) if isinstance(item, _fitness_owner.ast.Name)}
