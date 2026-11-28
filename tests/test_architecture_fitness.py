@@ -4952,10 +4952,13 @@ class ArchitectureFitnessTests(unittest.TestCase):
                                      (expected_bytes, expected_nodes, 4))
 
     def test_fixed64_policy_preserves_independent_real_byte_and_ast_refusals(self) -> None:
+        def padded_module(elements):
+            return 'value = 1\npadding = [' + '0,' * elements + ']\n'
+
         cases = (
             ('source bytes', 63, '#' + 'x' * 34000 + '\nvalue = 1\n', 'aggregate source byte'),
-            ('aggregate nodes', 63, 'value = 1\npadding = [' + '0,' * 7000 + ']\n', 'aggregate AST node'),
-            ('individual nodes', 1, 'value = 1\npadding = [' + '0,' * 200000 + ']\n', 'AST node limit'),
+            ('aggregate nodes', 63, padded_module(3_300), 'aggregate AST node'),
+            ('individual nodes', 1, padded_module(200_000), 'Python AST node limit'),
         )
         for label, count, body, reason in cases:
             with self.subTest(limit=label):
@@ -4964,7 +4967,12 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 system['nodes'][0]['repository_paths'] = ['src']
                 repo.model(system, _rules())
                 for index in range(count):
-                    repo.write_text(f'src/part{index:02d}.py', body)
+                    module = body
+                    if label == 'aggregate nodes' and index == count - 1:
+                        # 62 × 3,300 plus 198,000 exceeds 400,000 nodes while every
+                        # module fits under 200,000. This leaves less padding to analyze before refusal.
+                        module = padded_module(198_000)
+                    repo.write_text(f'src/part{index:02d}.py', module)
                 repo.write_text('src/use.py', '')
                 base = repo.commit('independent resource baseline')
                 source = ''.join(f'from part{i:02d} import value as v{i}\n' for i in range(count))
@@ -4979,6 +4987,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
                         FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots,
                             source_path='src/use.py', source=source.encode())
                     self.assertEqual(caught.exception.code, 'limit')
+                    if label == 'aggregate nodes':
+                        refusal = caught.exception.queue_refusal
+                        self.assertEqual((refusal['category'], refusal['limit']), ('nodes', 400_000))
+                        self.assertGreater(refusal['observed'], refusal['limit'])
 
     def test_fixed64_policy_keeps_all_other_constants_and_actual_work_boundary(self) -> None:
         self.assertEqual((FIT.MAX_QUEUE_ANALYSIS_BYTES, FIT.MAX_QUEUE_ANALYSIS_AST_NODES,
