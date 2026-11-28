@@ -1455,20 +1455,23 @@ class VerificationTests(unittest.TestCase):
         with project_copy(git=True) as root:
             self._adopt_architecture(root)
             self._adopt_governance(root)
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'adopt governance'], cwd=root, check=True)
+            # The reviewed change corrupts one rule index in an already governed project.
             route = build_route(root, 'Review governed architecture', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
-            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
-            subprocess.run(['git', 'commit', '-qm', 'adopt governance'], cwd=root, check=True)
             (root / 'governance/rules/index.json').write_text('{', encoding='utf-8')
 
             report = verify(root, mode='fast', record=True)
+            self.assertEqual(report['changed_files'], ['governance/rules/index.json'])
             names = [item['name'] for item in report['checks']]
             self.assertLess(names.index('change-spec'), names.index('architecture'))
             self.assertLess(names.index('architecture'), names.index('governance'))
             governance = _check(report, 'governance')
             self.assertIsNotNone(governance)
             self.assertEqual(governance['status'], 'fail')
+            self.assertIn('governance/rules/index.json: invalid canonical JSON', governance['summary'])
             self.assertEqual(report['governance']['status'], 'fail')
             receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertFalse(receipt.exists())
