@@ -27,6 +27,11 @@ def _facts():
     try:
         from pip._vendor.packaging.tags import sys_tags
         from pip._vendor.packaging.markers import default_environment
+    except ImportError:
+        raise ArtifactError('artifact-tag-provider-unavailable', 'Python tag provider unavailable') from None
+    except (AttributeError, TypeError, ValueError):
+        _refuse()
+    try:
         tags = tuple(str(tag) for tag in sys_tags())
         if not 1 <= len(tags) <= 4096 or len(set(tags)) != len(tags):
             _refuse()
